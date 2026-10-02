@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Protocol
+
+
+@dataclass(frozen=True)
+class AudioChunk:
+    """Raw audio buffer with sample format metadata."""
+
+    data: bytes
+    sample_rate: int = 16000
+    channels: int = 1
+    sample_width: int = 2  # 16-bit PCM
+
+
+class SpeechToText(Protocol):
+    """Protocol for transcribing speech audio bytes to text."""
+
+    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
+        """Transcribes raw PCM audio data and returns recognized text string."""
+        ...
+
+
+class TextToSpeech(Protocol):
+    """Protocol for synthesizing speech audio bytes from text."""
+
+    def synthesize(self, text: str) -> AsyncIterator[bytes]:
+        """Synthesizes text into chunks of raw audio bytes (PCM/WAV)."""
+        ...
+
+
+class AudioSink(Protocol):
+    """Protocol for hardware or subprocess audio playback output."""
+
+    async def play(self, audio_data: bytes) -> bool:
+        """Plays raw audio data. Returns True if played to completion, False if interrupted."""
+        ...
+
+    def stop(self) -> None:
+        """Immediately halts any current audio playback."""
+        ...
+
+
+class MockSpeechToText:
+    """Mock STT for testing and headless environments."""
+
+    def __init__(self, predefined_transcriptions: list[str] | None = None) -> None:
+        self.transcriptions = list(predefined_transcriptions or [])
+        self.recorded_audios: list[bytes] = []
+
+    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
+        self.recorded_audios.append(audio_data)
+        if self.transcriptions:
+            return self.transcriptions.pop(0)
+        return "mock transcription"
+
+
+class MockTextToSpeech:
+    """Mock TTS for testing and headless environments."""
+
+    def __init__(self) -> None:
+        self.synthesized_texts: list[str] = []
+
+    async def synthesize(self, text: str) -> AsyncIterator[bytes]:
+        self.synthesized_texts.append(text)
+        # Yield simulated 100ms chunks of silence/tone
+        chunk = b"\x00\x00" * 800  # 800 samples = 50ms at 16kHz 16-bit mono
+        yield chunk
+        yield chunk
+
+
+class MockAudioSink:
+    """Mock audio playback sink for testing."""
+
+    def __init__(self, playback_delay: float = 0.05) -> None:
+        self.playback_delay = playback_delay
+        self.played_chunks: list[bytes] = []
+        self._stopped = False
+
+    async def play(self, audio_data: bytes) -> bool:
+        self._stopped = False
+        self.played_chunks.append(audio_data)
+        # Simulate playback over time
+        elapsed = 0.0
+        step = 0.01
+        while elapsed < self.playback_delay:
+            if self._stopped:
+                return False
+            await asyncio.sleep(step)
+            elapsed += step
+        return not self._stopped
+
+    def stop(self) -> None:
+        self._stopped = True

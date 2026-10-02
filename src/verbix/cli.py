@@ -4,10 +4,12 @@ import argparse
 import asyncio
 import os
 import sys
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 from verbix.core.agent import AgentSession
 from verbix.core.events import (
+    AgentEvent,
     TextDelta,
     ThoughtDelta,
     ToolCallFinished,
@@ -15,6 +17,7 @@ from verbix.core.events import (
     TurnComplete,
 )
 from verbix.provider.client import ProviderClient
+from verbix.runtime.tasks import TaskRuntime
 from verbix.tools.bash import BashTool
 from verbix.tools.filesystem import FileEditTool, FileReadTool, FileWriteTool
 
@@ -88,16 +91,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=int(os.environ.get("VERBIX_MAX_TOKENS", "2048")),
         help="Maximum completion tokens per turn (default: 2048)",
     )
+    parser.add_argument(
+        "--direct",
+        action="store_true",
+        help="Run direct foreground coding agent instead of background receptionist runtime.",
+    )
     return parser
 
 
-async def run_turn(session: AgentSession, user_input: str) -> str:
-    """Runs a single conversation turn, streaming output directly to stdout."""
+async def run_stream(stream: AsyncIterator[AgentEvent]) -> str:
+    """Consumes an AgentEvent stream and renders thought, text, and tools to stdout."""
     in_thought = False
     final_output = ""
 
     try:
-        async for event in session.step(user_input=user_input):
+        async for event in stream:
             if isinstance(event, ThoughtDelta):
                 if not in_thought:
                     sys.stdout.write("\n[thought] ")
@@ -138,6 +146,11 @@ async def run_turn(session: AgentSession, user_input: str) -> str:
     return final_output
 
 
+async def run_turn(session: AgentSession, user_input: str) -> str:
+    """Runs a single conversation turn on an AgentSession, streaming output to stdout."""
+    return await run_stream(session.step(user_input=user_input))
+
+
 async def async_main(args: argparse.Namespace) -> int:
     api_key = (
         args.api_key
@@ -163,39 +176,89 @@ async def async_main(args: argparse.Namespace) -> int:
         max_tokens=args.max_tokens,
     )
 
-    tools = [
-        FileReadTool(),
-        FileWriteTool(),
-        FileEditTool(),
-        BashTool(),
-    ]
+    if args.direct:
+        tools = [
+            FileReadTool(),
+            FileWriteTool(),
+            FileEditTool(),
+            BashTool(),
+        ]
+        session = AgentSession(
+            session_id="cli-direct",
+            system_prompt=(
+                "You are Verbix, an expert voice and coding assistant. "
+                "You have access to filesystem and bash tools to inspect, edit, and run code. "
+                "Be direct, accurate, and concise."
+            ),
+            provider=provider,
+            workspace=workspace,
+            tools=tools,
+        )
 
-    session = AgentSession(
-        session_id="cli-session",
-        system_prompt=(
-            "You are Verbix, an expert voice and coding assistant. "
-            "You have access to filesystem and bash tools to inspect, edit, and run code. "
-            "Be direct, accurate, and concise."
-        ),
-        provider=provider,
-        workspace=workspace,
-        tools=tools,
-    )
+        if args.prompt:
+            try:
+                await run_turn(session, args.prompt)
+                return 0
+            except asyncio.CancelledError:
+                return 130
+
+        sys.stdout.write(f"Verbix Direct Agent (model: {args.model}, workspace: {workspace})\n")
+        sys.stdout.write("Type 'exit' or 'quit' to end session.\n\n")
+        sys.stdout.flush()
+
+        while True:
+            try:
+                sys.stdout.write("verbix> ")
+                sys.stdout.flush()
+                loop = asyncio.get_running_loop()
+                line = await loop.run_in_executor(None, sys.stdin.readline)
+                if not line:
+                    break
+                prompt = line.strip()
+                if not prompt:
+                    continue
+                if prompt.lower() in ("exit", "quit"):
+                    break
+
+                await run_turn(session, prompt)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                sys.stdout.write("\n")
+                continue
+            except EOFError:
+                break
+
+        return 0
+
+    # Default: TaskRuntime Receptionist orchestration
+    runtime = TaskRuntime(workspace=workspace, provider=provider)
+    runtime.create_receptionist()
+
+    def print_announcements() -> None:
+        while not runtime.announcement_q.empty():
+            task_id, res = runtime.announcement_q.get_nowait()
+            outcome = "succeeded" if res.success else "failed"
+            sys.stdout.write(f"\n[Task {task_id} {outcome}]: {res.speech_summary}\n")
+            sys.stdout.flush()
 
     if args.prompt:
         try:
-            await run_turn(session, args.prompt)
+            await run_stream(runtime.step_receptionist(args.prompt))
+            while runtime.list_active_tasks():
+                print_announcements()
+                await asyncio.sleep(0.2)
+            print_announcements()
             return 0
         except asyncio.CancelledError:
             return 130
 
     # Interactive REPL mode
-    sys.stdout.write(f"Verbix CLI (model: {args.model}, workspace: {workspace})\n")
+    sys.stdout.write(f"Verbix Receptionist (model: {args.model}, workspace: {workspace})\n")
     sys.stdout.write("Type 'exit' or 'quit' to end session.\n\n")
     sys.stdout.flush()
 
     while True:
         try:
+            print_announcements()
             sys.stdout.write("verbix> ")
             sys.stdout.flush()
             loop = asyncio.get_running_loop()
@@ -208,7 +271,8 @@ async def async_main(args: argparse.Namespace) -> int:
             if prompt.lower() in ("exit", "quit"):
                 break
 
-            await run_turn(session, prompt)
+            await run_stream(runtime.step_receptionist(prompt))
+            print_announcements()
         except (KeyboardInterrupt, asyncio.CancelledError):
             sys.stdout.write("\n")
             continue

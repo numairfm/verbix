@@ -45,3 +45,15 @@ def test_load_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import os
 
     assert os.environ.get("TEST_KEY_FOO") == "bar_value"
+
+
+def test_cli_parser_serve_and_direct():
+    parser = build_parser()
+    args_serve = parser.parse_args(["--serve", "--socket-path", "/tmp/test.sock"])
+    assert args_serve.serve is True
+    assert str(args_serve.socket_path) == "/tmp/test.sock"
+
+    args_direct = parser.parse_args(["--direct", "direct prompt"])
+    assert args_direct.direct is True
+    assert args_direct.prompt == "direct prompt"
+

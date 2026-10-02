@@ -16,6 +16,7 @@ from verbix.core.events import (
     ToolCallStarted,
     TurnComplete,
 )
+from verbix.ipc.server import VerbixServer
 from verbix.provider.client import ProviderClient
 from verbix.runtime.tasks import TaskRuntime
 from verbix.tools.bash import BashTool
@@ -96,6 +97,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run direct foreground coding agent instead of background receptionist runtime.",
     )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Run as a headless background IPC daemon listening on Unix Domain Socket.",
+    )
+    parser.add_argument(
+        "--socket-path",
+        type=Path,
+        default=None,
+        help="Path for Unix Domain Socket (default: ~/.local/share/verbix/verbix.sock).",
+    )
     return parser
 
 
@@ -175,6 +187,23 @@ async def async_main(args: argparse.Namespace) -> int:
         api_key=api_key,
         max_tokens=args.max_tokens,
     )
+
+    if args.serve:
+        socket_path = args.socket_path or (
+            Path.home() / ".local" / "share" / "verbix" / "verbix.sock"
+        )
+        runtime = TaskRuntime(workspace=workspace, provider=provider)
+        runtime.create_receptionist()
+        server = VerbixServer(runtime=runtime, socket_path=socket_path)
+        await server.start()
+        sys.stdout.write(f"Verbix daemon listening on {socket_path}\nPress Ctrl+C to terminate.\n")
+        sys.stdout.flush()
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+        finally:
+            await server.stop()
+        return 0
 
     if args.direct:
         tools = [

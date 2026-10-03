@@ -59,7 +59,9 @@ class ConversationHistory:
         never confused with human dialogue or assistant speech.
         """
         outcome = "Succeeded" if result.success else "Failed"
-        formatted = f"[Task completed: '{title}' ({task_id}) -> {outcome}: {result.speech_summary}]"
+        summary = result.speech_summary.rstrip(".")
+        details_str = f" Details: {result.details}" if result.details else ""
+        formatted = f"[Task completed: '{title}' ({task_id}) -> {outcome}: {summary}.{details_str}]"
         self.append(CanonicalMessage(role="system", content=formatted))
 
     def prune_foreground_barge_in(self, played_text: str) -> None:

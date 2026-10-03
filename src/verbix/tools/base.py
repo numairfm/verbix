@@ -11,6 +11,7 @@ from typing import Any, Protocol
 class ToolResult:
     observation: str
     is_error: bool = False
+    is_terminal: bool = False
 
 
 @dataclass(frozen=True)

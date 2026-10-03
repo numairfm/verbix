@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -82,7 +82,7 @@ class AgentSession:
     async def step(
         self,
         user_input: str | None = None,
-        running_tasks: list[TaskState] | None = None,
+        running_tasks: list[TaskState] | Callable[[], list[TaskState]] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Runs the agent loop until the model yields a final text response,
 
@@ -110,8 +110,11 @@ class AgentSession:
         while turn_count < self.max_turns:
             turn_count += 1
 
-            # Prepare turn messages
-            raw_rendered = self.history.render_turn_prompt(running_tasks)
+            # Prepare turn messages (resolving dynamic running tasks callable if provided)
+            active_tasks = (
+                running_tasks() if callable(running_tasks) else running_tasks
+            )
+            raw_rendered = self.history.render_turn_prompt(active_tasks)
             messages = [
                 CanonicalMessage(role="system", content=self.system_prompt),
                 *raw_rendered,
@@ -179,6 +182,8 @@ class AgentSession:
 
                 # Execute tool calls
                 ctx = ToolContext(workspace=self.workspace)
+                terminal_requested = False
+                terminal_observation = ""
                 for tc in canonical_calls:
                     parsed_args = parse_lenient_json(tc.arguments)
                     yield ToolCallStarted(
@@ -196,6 +201,9 @@ class AgentSession:
                             result = await tool.execute(parsed_args, ctx)
                             obs = result.observation
                             is_error = result.is_error
+                            if getattr(result, "is_terminal", False):
+                                terminal_requested = True
+                                terminal_observation = obs
                         except (RuntimeError, OSError, ValueError) as e:
                             obs = f"error: tool execution failed: {e}"
                             is_error = True
@@ -206,6 +214,10 @@ class AgentSession:
                     self.history.append(
                         CanonicalMessage(role="tool", content=obs, tool_call_id=tc.id)
                     )
+
+                if terminal_requested:
+                    yield TurnComplete(final_text=terminal_observation)
+                    return
 
                 # Continue loop to next turn step so model can observe tool results
                 continue

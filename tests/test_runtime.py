@@ -96,7 +96,8 @@ async def test_task_runtime_spawn_and_finish(tmp_path: Path, mock_provider: Prov
     # Immediate turn-boundary injection into idle receptionist history
     assert len(receptionist.history.messages) == 1
     assert receptionist.history.messages[0].role == "system"
-    assert "[Task completed: 'Build Project' (task-1) -> Succeeded: Build succeeded.]" in receptionist.history.messages[0].content
+    assert "[Task completed: 'Build Project' (task-1) -> Succeeded: Build succeeded." in receptionist.history.messages[0].content
+    assert "Compiled 12 files without errors." in receptionist.history.messages[0].content
 
 
 @pytest.mark.asyncio
@@ -227,3 +228,96 @@ async def test_orchestration_tools(tmp_path: Path, mock_provider: ProviderClient
     res_cancel = await cancel_tool.execute({"task_id": "task-1"}, ctx)
     assert not res_cancel.is_error
     assert "cancelled" in res_cancel.observation.lower()
+
+
+@pytest.mark.asyncio
+async def test_task_completion_sync_before_foreground_turn(
+    tmp_path: Path, mock_provider: ProviderClient
+):
+    """Regression test for task completion synchronization:
+    1. Main agent spawns a background task.
+    2. Task completes.
+    3. Runtime emits task completion.
+    4. A new user turn arrives immediately afterward.
+    Invariant:
+    - The new foreground turn must observe the terminal state.
+    - Completed task must NEVER appear in transient running-task prompt annotation.
+    - Completed task result (summary + details) is available in history for receptionist.
+    """
+    runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
+    receptionist = runtime.create_receptionist()
+
+    # 1. Spawn background task
+    task_id = await runtime.spawn_task(title="Analyze repo", prompt="Analyze workspace")
+    task = runtime.get_task(task_id)
+    assert task is not None
+    assert task.is_running is True
+
+    # 2. Task completes
+    worker_res = WorkerResult(
+        success=True,
+        speech_summary="Analyzed repository successfully.",
+        details="Found pyproject.toml and src/verbix.",
+    )
+
+    # 3. Simulate completion occurring while turn state is transitioning or buffered
+    # If a completion arrived in _pending_completions:
+    runtime._pending_completions.append((task_id, task.title, worker_res))
+    task.status = "completed"
+    task.result = worker_res
+
+    # 4. A new user turn arrives immediately afterward
+    runtime.on_main_turn_start()
+
+    # INVARIANT 1: Pending completions MUST be drained at turn start
+    assert len(runtime._pending_completions) == 0
+    assert len(receptionist.history.messages) == 1
+    assert "Analyzed repository successfully." in receptionist.history.messages[0].content
+    assert "Found pyproject.toml and src/verbix." in receptionist.history.messages[0].content
+
+    # INVARIANT 2: render_turn_prompt must NEVER include the completed task
+    active_tasks = runtime.list_active_tasks()
+    assert len(active_tasks) == 0
+    receptionist.history.append_user("what did it find?")
+    prompt_msgs = receptionist.history.render_turn_prompt(active_tasks)
+    user_msg = prompt_msgs[-1]
+    assert "[Running:" not in user_msg.content
+    assert user_msg.content == "what did it find?"
+
+
+@pytest.mark.asyncio
+async def test_worker_finish_tool_immediate_state_transition(
+    tmp_path: Path, mock_provider: ProviderClient
+):
+    """Verifies that invoking WorkerFinishTool immediately transitions TaskState
+    to terminal 'completed' status and signals is_terminal to stop agent loop.
+    """
+    runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
+    runtime.create_receptionist()
+    task_id = await runtime.spawn_task(title="Build", prompt="Build core")
+    task = runtime.get_task(task_id)
+    assert task is not None
+    assert task.is_running is True
+
+    finish_tool = WorkerFinishTool(
+        on_finish=lambda res: runtime._finish_task(task_id, res, status="completed")
+    )
+    ctx = ToolContext(workspace=tmp_path)
+    res = await finish_tool.execute(
+        {
+            "success": True,
+            "speech_summary": "Build succeeded.",
+            "details": "Compiled without warnings.",
+        },
+        ctx,
+    )
+    assert res.is_terminal is True
+    # Immediate state transition before any further turns
+    assert task.status == "completed"
+    assert task.is_running is False
+    assert not runtime.announcement_q.empty()
+
+    # Dynamic running tasks evaluated in receptionist must be empty
+    assert len(runtime.list_active_tasks()) == 0
+
+

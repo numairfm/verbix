@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from verbix.core.models import WorkerResult
@@ -19,8 +20,12 @@ class WorkerFinishTool:
         "and complete technical details."
     )
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        on_finish: Callable[[WorkerResult], None] | None = None,
+    ) -> None:
         self.captured_result: WorkerResult | None = None
+        self.on_finish = on_finish
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
@@ -55,7 +60,12 @@ class WorkerFinishTool:
             speech_summary=speech_summary,
             details=details,
         )
-        return ToolResult(observation="Task finish reported and recorded successfully.")
+        if self.on_finish:
+            self.on_finish(self.captured_result)
+        return ToolResult(
+            observation="Task finish reported and recorded successfully.",
+            is_terminal=True,
+        )
 
 
 class TaskSpawnTool:

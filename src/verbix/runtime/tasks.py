@@ -108,7 +108,9 @@ class TaskRuntime:
             "Your role is to converse with the user and orchestrate background tasks using "
             "task_spawn, task_cancel, task_steer, and task_status.\n"
             "When the user asks for background coding, building, searching, or execution, "
-            "spawn a task immediately with a clear title and instructions. "
+            "spawn a task immediately with a clear title and instructions.\n"
+            "When background tasks complete, their status and results appear as system notifications in the conversation history. "
+            "Use these completed task results directly to inform the user when they ask about progress or results, without needing to call task_status.\n"
             "Keep your spoken responses concise, natural, and conversational."
         )
         tools = self.get_receptionist_tools()
@@ -137,10 +139,9 @@ class TaskRuntime:
 
         self.on_main_turn_start()
         try:
-            active_tasks = self.list_active_tasks()
             async for event in self.main_session.step(
                 user_input=user_input,
-                running_tasks=active_tasks,
+                running_tasks=self.list_active_tasks,
             ):
                 yield event
         finally:
@@ -261,7 +262,8 @@ class TaskRuntime:
         return False
 
     def on_main_turn_start(self) -> None:
-        """Marks that the main receptionist session has started an active turn."""
+        """Marks that the main receptionist session has started an active turn and drains any pending completions."""
+        self.drain_pending_completions()
         self.is_main_turn_active = True
 
     def on_main_turn_end(self) -> None:
@@ -287,6 +289,10 @@ class TaskRuntime:
         """Records task completion, enqueues spoken announcement, and performs turn-boundary injection."""
         task = self.tasks.get(task_id)
         if not task:
+            return
+
+        # Idempotency guard: avoid duplicate announcements or duplicate history entries
+        if not task.is_running and task.status == status:
             return
 
         task.status = status  # type: ignore
@@ -335,7 +341,9 @@ class TaskRuntime:
                 )
                 worker_dir = self.workspace
 
-        finish_tool = WorkerFinishTool()
+        finish_tool = WorkerFinishTool(
+            on_finish=lambda res: self._finish_task(task_id, res, status="completed")
+        )
         worker_tools: list[Tool] = [
             FileReadTool(),
             FileWriteTool(),
@@ -402,11 +410,12 @@ class TaskRuntime:
                             },
                         )
 
-                # Check if worker called worker_finish
+                # Check if worker called worker_finish (if not already handled via on_finish callback)
                 if finish_tool.captured_result is not None:
-                    self._finish_task(
-                        task_id, finish_tool.captured_result, status="completed"
-                    )
+                    if task.is_running:
+                        self._finish_task(
+                            task_id, finish_tool.captured_result, status="completed"
+                        )
                     return
 
                 # If no tools were called and model produced a final text without calling worker_finish

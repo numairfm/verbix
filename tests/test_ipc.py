@@ -35,7 +35,7 @@ async def test_ipc_server_and_client_uds(tmp_path: Path):
     # 3. Spawn a task on runtime and cancel via IPC
     task_id = await runtime.spawn_task(title="Build Task", prompt="build")
     status_with_task = await client.get_status(task_id=task_id)
-    assert "task-1" in status_with_task
+    assert task_id in status_with_task
 
     cancelled = await client.cancel_task(task_id)
     assert cancelled is True
@@ -43,15 +43,9 @@ async def test_ipc_server_and_client_uds(tmp_path: Path):
     assert cancelled_task is not None
     assert cancelled_task.status == "cancelled"
 
-    # 4. Toggle, confirm, deny via IPC
+    # 4. Toggle via IPC
     toggle_res = await client.toggle()
     assert isinstance(toggle_res, dict)
-
-    confirmed = await client.confirm()
-    assert confirmed is False  # No pending confirmation
-
-    denied = await client.deny()
-    assert denied is False  # No pending confirmation
 
     await client.close()
     await server.stop()

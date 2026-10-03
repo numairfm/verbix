@@ -1,5 +1,4 @@
 from verbix.voice.base import (
-    AudioChunk,
     AudioSink,
     MockAudioSink,
     MockSpeechToText,
@@ -15,7 +14,6 @@ from verbix.voice.sinks import SubprocessAudioSink
 from verbix.voice.stt import FasterWhisperSTT
 
 __all__ = [
-    "AudioChunk",
     "AudioPlayer",
     "AudioSink",
     "FasterWhisperSTT",

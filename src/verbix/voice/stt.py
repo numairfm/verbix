@@ -28,7 +28,6 @@ class FasterWhisperSTT:
         self.compute_type = compute_type
         self.threads = threads
         self._model: WhisperModel | None = None
-        self._lock = asyncio.Lock()
 
     @property
     def is_loaded(self) -> bool:

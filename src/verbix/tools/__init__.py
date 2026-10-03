@@ -4,7 +4,7 @@ from verbix.tools.base import (
     ToolResult,
     parse_lenient_json,
 )
-from verbix.tools.bash import BashTool, SafeCommandChecker
+from verbix.tools.bash import BashTool
 from verbix.tools.filesystem import (
     FileEditTool,
     FileReadTool,
@@ -18,7 +18,6 @@ __all__ = [
     "FileEditTool",
     "FileReadTool",
     "FileWriteTool",
-    "SafeCommandChecker",
     "SandboxConfig",
     "SandboxResult",
     "Tool",

@@ -42,76 +42,88 @@ class ConversationHistory:
             )
         )
 
-    def append_runtime_turn(self, user_input: str, runtime_reply: str) -> None:
-        """Appends both user input and runtime reply together, preserving dialogue parity
-
-        when the runtime answers a turn deterministically without calling the model.
-        """
-        self.append_user(user_input)
-        self.append_assistant(content=runtime_reply)
-
     def inject_task_completion(
         self, task_id: str, title: str, result: WorkerResult
     ) -> None:
         """Injects an immutable, runtime-authored task completion record into history.
 
-        Zero LLM calls are made to format this message. Uses role='system' so it is
-        never confused with human dialogue or assistant speech.
+        Uses role='user' with runtime notice attribution so it works across providers
+        and allows a wake turn to respond naturally.
         """
         outcome = "Succeeded" if result.success else "Failed"
         summary = result.speech_summary.rstrip(".")
-        details_str = f" Details: {result.details}" if result.details else ""
-        formatted = f"[Task completed: '{title}' ({task_id}) -> {outcome}: {summary}.{details_str}]"
-        self.append(CanonicalMessage(role="system", content=formatted))
+        details = result.details.strip()
+        if len(details) > 600:
+            details_str = (
+                f" Details: {details[:600]}... (call task_status for full details)"
+            )
+        elif details:
+            details_str = f" Details: {details}"
+        else:
+            details_str = ""
+        formatted = (
+            "[Verbix runtime notice — not said by the user]\n"
+            f"[Task completed: '{title}' ({task_id}) -> {outcome}: {summary}.{details_str}]"
+        )
+        self.append(CanonicalMessage(role="user", content=formatted))
 
-    def prune_foreground_barge_in(self, played_text: str) -> None:
-        """Prunes strictly the last assistant message to match the text physically played
+    def close_aborted_turn(self, delivered: str) -> None:
+        """Closes an aborted turn cleanly so history remains structurally valid.
 
-        before the user barged in. Background task records are never pruned.
+        1. If an assistant message with tool_calls has unanswered IDs, append
+           synthetic tool results so the tool calls are not left dangling.
+        2. Else, if the last message is an assistant message without tool_calls:
+           if delivered is non-empty, update its content to delivered;
+           if delivered is empty, pop that assistant message.
+        3. Else, if delivered is non-empty, append an assistant message with delivered text.
         """
         if not self._messages:
-            raise ValueError("History is empty, cannot prune barge-in")
+            if delivered:
+                self.append_assistant(content=delivered)
+            return
 
         last = self._messages[-1]
-        if last.role != "assistant":
-            raise ValueError(f"Cannot prune non-assistant message (role={last.role})")
+        if last.role == "assistant" and last.tool_calls:
+            for tc in last.tool_calls:
+                self.append(
+                    CanonicalMessage(
+                        role="tool",
+                        content="error: not executed (turn aborted)",
+                        tool_call_id=tc.id,
+                    )
+                )
+            return
 
-        last.content = played_text
+        # Check if an earlier assistant message has unanswered tool calls
+        for i in range(len(self._messages) - 1, -1, -1):
+            msg = self._messages[i]
+            if msg.role == "assistant" and msg.tool_calls:
+                expected_ids = [tc.id for tc in msg.tool_calls]
+                provided_ids = {
+                    m.tool_call_id
+                    for m in self._messages[i + 1 :]
+                    if m.role == "tool" and m.tool_call_id is not None
+                }
+                missing_ids = [cid for cid in expected_ids if cid not in provided_ids]
+                for cid in missing_ids:
+                    self.append(
+                        CanonicalMessage(
+                            role="tool",
+                            content="error: not executed (turn aborted)",
+                            tool_call_id=cid,
+                        )
+                    )
+                return
+            if msg.role == "user":
+                break
 
-    def is_turn_boundary(self) -> bool:
-        """Reports whether history is currently at a settled turn boundary.
-
-        Returns False if a user message is waiting for a reply, or if an assistant
-        tool call is still waiting for its matching tool result.
-        """
-        if not self._messages:
-            return True
-
-        last = self._messages[-1]
-        if last.role == "user":
-            return False
-
-        if last.role == "assistant":
-            # If the assistant made tool calls, it is waiting for tool observations
-            return not bool(last.tool_calls)
-
-        if last.role == "tool":
-            # Find the preceding assistant message with tool calls
-            for msg in reversed(self._messages[:-1]):
-                if msg.role == "assistant" and msg.tool_calls:
-                    expected_ids = {tc.id for tc in msg.tool_calls}
-                    # Gather provided tool results following that assistant message
-                    provided_ids = {
-                        m.tool_call_id
-                        for m in self._messages
-                        if m.role == "tool" and m.tool_call_id is not None
-                    }
-                    return expected_ids.issubset(provided_ids)
-                if msg.role == "user":
-                    break
-            return True
-
-        return True
+        if last.role == "assistant" and not last.tool_calls:
+            if delivered:
+                last.content = delivered
+            else:
+                self._messages.pop()
+        elif delivered:
+            self.append_assistant(content=delivered)
 
     def render_turn_prompt(
         self, running_tasks: list[TaskState] | None = None
@@ -131,7 +143,9 @@ class ConversationHistory:
         if not active:
             return msgs
 
-        lines = [f"[Running: {t.id} '{t.title}' (step {t.step_count})]" for t in active]
+        lines = [
+            f"[Running: {t.id} '{t.title}' ({t.step_count} tool calls)]" for t in active
+        ]
         prefix = "\n".join(lines) + "\n\n"
 
         # Attach prefix to the last user message

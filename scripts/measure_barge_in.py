@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
 
 from verbix.provider.client import ProviderClient
 from verbix.runtime.tasks import TaskRuntime
@@ -44,6 +45,20 @@ class MockSink(AudioSink):
 
         self._playing = False
         return True
+
+    async def play_stream(self, chunks: AsyncIterator[bytes]) -> bool:
+        self._playing = True
+        try:
+            async for chunk in chunks:
+                if self._stop_requested:
+                    self._playing = False
+                    return False
+                ok = await self.play(chunk)
+                if not ok:
+                    return False
+            return not self._stop_requested
+        finally:
+            self._playing = False
 
     def stop(self) -> None:
         self._stop_requested = True
@@ -96,7 +111,7 @@ async def main() -> None:
     from pathlib import Path
 
     runtime = TaskRuntime(workspace=Path("."), provider=dummy_provider)
-    player = AudioPlayer(tts=tts, sink=sink, runtime=runtime)
+    player = AudioPlayer(tts=tts, sink=sink)
     pipeline = VoicePipeline(runtime=runtime, stt=stt, player=player)
 
     long_sentence = (
@@ -115,9 +130,7 @@ async def main() -> None:
         lag_task = asyncio.create_task(measure_loop_lag(0.6))
 
         # 2. Begin playback in background task
-        play_task = asyncio.create_task(
-            player.speak_foreground_sentences([long_sentence])
-        )
+        play_task = asyncio.create_task(player.speak(long_sentence))
 
         # Wait until playback actively begins and at least 2 chunks have arrived
         while sink.chunks_received < 2:

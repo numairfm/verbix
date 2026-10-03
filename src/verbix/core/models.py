@@ -51,8 +51,8 @@ class TaskState(BaseModel):
     id: str
     title: str
     status: TaskStatus = "pending"
-    progress: list[str] = Field(default_factory=list)
     step_count: int = 0
+    recorded: bool = False
     announced: bool = False
     result: WorkerResult | None = None
     workspace: Any = None

@@ -2,18 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
-
-
-@dataclass(frozen=True)
-class AudioChunk:
-    """Raw audio buffer with sample format metadata."""
-
-    data: bytes
-    sample_rate: int = 16000
-    channels: int = 1
-    sample_width: int = 2  # 16-bit PCM
 
 
 @runtime_checkable
@@ -39,7 +28,11 @@ class AudioSink(Protocol):
     """Protocol for hardware or subprocess audio playback output."""
 
     async def play(self, audio_data: bytes) -> bool:
-        """Plays raw audio data. Returns True if played to completion, False if interrupted."""
+        """Plays a single chunk of raw audio data."""
+        ...
+
+    async def play_stream(self, chunks: AsyncIterator[bytes]) -> bool:
+        """Plays a stream of raw audio chunks to completion."""
         ...
 
     def stop(self) -> None:
@@ -84,17 +77,29 @@ class MockAudioSink:
         self._stopped = False
 
     async def play(self, audio_data: bytes) -> bool:
+        async def _iter():
+            yield audio_data
+
+        return await self.play_stream(_iter())
+
+    async def play_stream(self, chunks: AsyncIterator[bytes]) -> bool:
         self._stopped = False
-        self.played_chunks.append(audio_data)
-        # Simulate playback over time
-        elapsed = 0.0
-        step = 0.01
-        while elapsed < self.playback_delay:
-            if self._stopped:
-                return False
-            await asyncio.sleep(step)
-            elapsed += step
-        return not self._stopped
+        try:
+            async for chunk in chunks:
+                if self._stopped:
+                    return False
+                self.played_chunks.append(chunk)
+                elapsed = 0.0
+                step = 0.01
+                while elapsed < self.playback_delay:
+                    if self._stopped:
+                        return False
+                    await asyncio.sleep(step)
+                    elapsed += step
+            return not self._stopped
+        except asyncio.CancelledError:
+            self.stop()
+            raise
 
     def stop(self) -> None:
         self._stopped = True

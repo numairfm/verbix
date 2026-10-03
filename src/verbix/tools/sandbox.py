@@ -13,6 +13,7 @@ class SandboxConfig:
     workspace: Path
     allow_network: bool = False
     timeout_seconds: float = 60.0
+    extra_binds: tuple[tuple[Path, Path, bool], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -23,59 +24,71 @@ class SandboxResult:
 
 
 async def execute_sandboxed(command: str, config: SandboxConfig) -> SandboxResult:
-    """Executes a command inside a default-deny bubblewrap sandbox if bwrap is present,
+    """Executes a command inside a default-deny bubblewrap sandbox.
 
-    or standard process-group isolated subshell as fallback.
+    Fails closed if bwrap is not available.
     """
     workspace_path = config.workspace.resolve()
     bwrap_path = shutil.which("bwrap")
+    if not bwrap_path:
+        raise RuntimeError(
+            "bwrap executable not found; sandboxed execution is required"
+        )
 
-    if bwrap_path:
-        cmd_args = [
-            bwrap_path,
-            "--ro-bind",
-            "/usr",
-            "/usr",
-            "--ro-bind-try",
-            "/lib",
-            "/lib",
-            "--ro-bind-try",
-            "/lib64",
-            "/lib64",
-            "--ro-bind-try",
-            "/bin",
-            "/bin",
-            "--ro-bind-try",
-            "/sbin",
-            "/sbin",
-            "--ro-bind-try",
-            "/etc/alternatives",
-            "/etc/alternatives",
-            "--ro-bind-try",
-            "/etc/ssl",
-            "/etc/ssl",
-            "--ro-bind-try",
-            "/etc/pki",
-            "/etc/pki",
-            "--proc",
-            "/proc",
-            "--dev",
-            "/dev",
-            "--tmpfs",
-            "/tmp",
-            "--bind",
-            str(workspace_path),
-            str(workspace_path),
+    cmd_args = [
+        bwrap_path,
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--ro-bind-try",
+        "/lib",
+        "/lib",
+        "--ro-bind-try",
+        "/lib64",
+        "/lib64",
+        "--ro-bind-try",
+        "/bin",
+        "/bin",
+        "--ro-bind-try",
+        "/sbin",
+        "/sbin",
+        "--ro-bind-try",
+        "/etc/alternatives",
+        "/etc/alternatives",
+        "--ro-bind-try",
+        "/etc/ssl",
+        "/etc/ssl",
+        "--ro-bind-try",
+        "/etc/pki",
+        "/etc/pki",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        "--bind",
+        str(workspace_path),
+        str(workspace_path),
+    ]
+
+    for src_path, dst_path, is_rw in config.extra_binds:
+        src_res = src_path.resolve()
+        if src_res.exists():
+            flag = "--bind" if is_rw else "--ro-bind"
+            cmd_args.extend([flag, str(src_res), str(dst_path)])
+
+    cmd_args.extend(
+        [
             "--chdir",
             str(workspace_path),
             "--die-with-parent",
         ]
-        if not config.allow_network:
-            cmd_args.append("--unshare-net")
+    )
+    if not config.allow_network:
+        cmd_args.append("--unshare-net")
 
-        cmd_args.extend(["--", "bash", "-c", command])
-    else:
-        cmd_args = ["bash", "-c", command]
+    cmd_args.extend(["--", "bash", "-c", command])
 
     proc = await asyncio.create_subprocess_exec(
         *cmd_args,

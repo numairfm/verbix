@@ -37,11 +37,14 @@ async def measure_endpoint_rtt(
 ) -> tuple[float, float]:
     """Measures raw network round-trip time (RTT) to the endpoint in milliseconds."""
     client = ProviderClient(base_url=base_url, model="probe", api_key=api_key)
-    # Warm up first
     await client.warm()
+    http_client = client._get_client()
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     rtts: list[float] = []
     for _ in range(runs):
-        rtt = await client.measure_network_rtt()
+        t0 = time.perf_counter()
+        await http_client.get(f"{base_url}/models", headers=headers)
+        rtt = (time.perf_counter() - t0) * 1000.0
         rtts.append(rtt)
         await asyncio.sleep(0.05)
     await client.aclose()

@@ -99,18 +99,6 @@ class VerbixClient:
         resp = await self._send_request(req)
         return resp.data
 
-    async def confirm(self) -> bool:
-        """Confirms a pending action prompt."""
-        req = IPCRequest(id="confirm-1", action="confirm")
-        resp = await self._send_request(req)
-        return bool(resp.data.get("confirmed", False))
-
-    async def deny(self) -> bool:
-        """Denies a pending action prompt."""
-        req = IPCRequest(id="deny-1", action="deny")
-        resp = await self._send_request(req)
-        return bool(resp.data.get("denied", False))
-
     async def _send_request(self, req: IPCRequest) -> IPCResponse:
         """Sends a single request and awaits the matching response."""
         if not self._writer or not self._reader:

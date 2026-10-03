@@ -103,11 +103,6 @@ class TaskSpawnTool:
                     "type": "string",
                     "description": "Detailed instructions and requirements for the worker agent.",
                 },
-                "isolate_worktree": {
-                    "type": "boolean",
-                    "description": "Whether to isolate worker in a dedicated git worktree branch (recommended for mutating code tasks).",
-                    "default": False,
-                },
             },
             "required": ["title", "prompt"],
         }
@@ -115,7 +110,6 @@ class TaskSpawnTool:
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         title = str(args.get("title", "")).strip()
         prompt = str(args.get("prompt", "")).strip()
-        isolate = bool(args.get("isolate_worktree", False))
 
         if not title or not prompt:
             return ToolResult(
@@ -126,7 +120,6 @@ class TaskSpawnTool:
         await self.runtime.spawn_task(
             title=title,
             prompt=prompt,
-            isolate_worktree=isolate,
         )
         spoken_title = title if len(title) <= 45 else title[:42].rstrip() + "..."
         ack_text = f"Starting task: {spoken_title}."

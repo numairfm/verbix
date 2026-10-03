@@ -63,16 +63,6 @@ class ProviderClient:
         except (httpx2.HTTPError, OSError, RuntimeError):
             pass
 
-    async def measure_network_rtt(self) -> float:
-        """Measures raw network RTT to endpoint in milliseconds."""
-        client = self._get_client()
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        import time
-
-        t0 = time.perf_counter()
-        await client.get(f"{self.base_url}/models", headers=headers)
-        return (time.perf_counter() - t0) * 1000.0
-
     async def aclose(self) -> None:
         """Closes the underlying persistent HTTP client."""
         if self._client is not None and self._external_client is None:

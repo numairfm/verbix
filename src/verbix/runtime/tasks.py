@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from verbix.core.agent import AgentSession
 from verbix.core.events import (
     AgentEvent,
+    TextDelta,
     ToolCallFinished,
     TurnComplete,
 )
@@ -32,10 +34,37 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class TaskRuntime:
-    """Manages the background execution of autonomous worker sessions, structured concurrency,
+class TurnOutput(Protocol):
+    """Protocol for receiving events and reporting delivered text for an active turn."""
 
-    announcement serialization, and turn-boundary completion injection.
+    async def emit(self, event: AgentEvent) -> None: ...
+    def delivered_text(self) -> str: ...
+    def reset_delivered(self) -> None: ...
+
+
+class DefaultTurnOutput:
+    """Standard in-memory turn output tracking events and delivered text."""
+
+    def __init__(self) -> None:
+        self.events: list[AgentEvent] = []
+        self._delivered: list[str] = []
+
+    async def emit(self, event: AgentEvent) -> None:
+        self.events.append(event)
+        if isinstance(event, TextDelta):
+            self._delivered.append(event.text)
+
+    def delivered_text(self) -> str:
+        return "".join(self._delivered)
+
+    def reset_delivered(self) -> None:
+        self._delivered.clear()
+
+
+class TaskRuntime:
+    """Manages foreground conversational turns, background worker tasks,
+
+    structured concurrency, wake-up turns, and worktree/sandbox isolation.
     """
 
     def __init__(
@@ -46,6 +75,8 @@ class TaskRuntime:
         receptionist_model: str | None = None,
         worker_model: str | None = None,
         receptionist_reasoning_effort: str | None = None,
+        isolate_worktrees: bool = False,
+        allow_network: bool = False,
     ) -> None:
         self.workspace = workspace.resolve()
         self.provider = provider
@@ -53,29 +84,33 @@ class TaskRuntime:
         self.receptionist_model = receptionist_model or provider.model
         self.worker_model = worker_model or provider.model
         self.receptionist_reasoning_effort = receptionist_reasoning_effort
+        self.isolate_worktrees = isolate_worktrees
+        self.allow_network = allow_network
         self.worktree_manager = WorktreeManager(self.workspace)
 
-        # In-memory task registry (plain dict)
+        # In-memory task registry
         self.tasks: dict[str, TaskState] = {}
-        self._task_counter: int = 0
 
         # Concurrency and steering queues
         self._worker_tasks: dict[str, asyncio.Task[None]] = {}
         self._steer_queues: dict[str, asyncio.Queue[str]] = {}
 
-        # Announcement queue for spoken completions: (task_id, WorkerResult)
-        self.announcement_q: asyncio.Queue[tuple[str, WorkerResult]] = asyncio.Queue()
-
         # Subscriber queues for broadcasting events to interfaces/frontends
         self.subscribers: list[asyncio.Queue[dict[str, Any]]] = []
 
-        # Turn boundary synchronization with main session
+        # Foreground turn serialization
         self.main_session: AgentSession | None = None
-        self.is_main_turn_active: bool = False
-        self._pending_completions: list[tuple[str, str, WorkerResult]] = []
+        self._turn_task: asyncio.Task[str | None] | None = None
+        self._wake_chain: int = 0
+        self.user_active: bool = False
+        self.wake_output: TurnOutput | None = None
 
-        # Optional audio player for runtime-spoken acknowledgements
-        self.player: Any = None
+    @property
+    def is_idle(self) -> bool:
+        """Returns True if no foreground turn is running and user is not recording."""
+        return (
+            self._turn_task is None or self._turn_task.done()
+        ) and not self.user_active
 
     def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
         """Registers a subscriber queue to receive runtime events."""
@@ -98,7 +133,7 @@ class TaskRuntime:
                 pass
 
     def get_receptionist_tools(self) -> list[Tool]:
-        """Returns the strictly orchestration-only tools for the main receptionist agent."""
+        """Returns orchestration-only tools for the main receptionist agent."""
         return [
             TaskSpawnTool(self),
             TaskCancelTool(self),
@@ -132,7 +167,7 @@ class TaskRuntime:
             "task_spawn, task_cancel, task_steer, and task_status.\n"
             "When the user asks for background coding, building, searching, or execution, "
             "spawn a task immediately with a clear title and instructions.\n"
-            "When background tasks complete, their status and results appear as system notifications in the conversation history. "
+            "When background tasks complete, their status and results appear as notices in the conversation history. "
             "Use these completed task results directly to inform the user when they ask about progress or results, without needing to call task_status.\n"
             "Keep your spoken responses concise, natural, and conversational."
         )
@@ -153,27 +188,222 @@ class TaskRuntime:
         self.main_session = session
         return session
 
-    async def step_receptionist(
+    def start_turn(
         self,
-        user_input: str | None = None,
-    ) -> AsyncIterator[AgentEvent]:
-        """Runs one conversational turn on the main receptionist agent with automatic
+        user_input: str | None,
+        output: TurnOutput,
+        kind: str = "user",
+    ) -> asyncio.Task[str | None]:
+        """Initiates a foreground turn. User input cancels active turn; wake turns queue behind it."""
+        prev_task = self._turn_task
+        if prev_task is not None and not prev_task.done() and kind == "user":
+            prev_task.cancel()
 
-        ephemeral running-task annotations and turn-boundary completion synchronization.
-        """
+        task = asyncio.create_task(
+            self._run_turn(user_input, output, kind=kind, after=prev_task),
+            name=f"turn-{kind}",
+        )
+        self._turn_task = task
+        return task
+
+    async def submit(self, user_input: str, output: TurnOutput) -> str | None:
+        """Submits user input and waits for the turn to complete."""
+        task = self.start_turn(user_input, output, kind="user")
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+
+    async def cancel_turn(self) -> bool:
+        """Cancels the currently active foreground turn and awaits its clean termination."""
+        if self._turn_task is not None and not self._turn_task.done():
+            self._turn_task.cancel()
+            try:
+                await self._turn_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Prior turn cancelled with exception: %s", e)
+            return True
+        return False
+
+    async def _run_turn(
+        self,
+        user_input: str | None,
+        output: TurnOutput,
+        kind: str,
+        after: asyncio.Task[Any] | None = None,
+    ) -> str | None:
+        """Internal execution loop for a foreground turn."""
+        if after is not None:
+            await asyncio.wait({after})
+
+        if kind == "wake":
+            unannounced = [
+                t for t in self.tasks.values() if not t.is_running and not t.announced
+            ]
+            if not unannounced:
+                return None
+
         if self.main_session is None:
             self.create_receptionist()
         assert self.main_session is not None
 
-        self.on_main_turn_start()
+        # 1. Inject unrecorded terminal completions into history
+        unrecorded = [
+            t for t in self.tasks.values() if not t.is_running and not t.recorded
+        ]
+        for t in unrecorded:
+            if t.result is not None:
+                self.main_session.history.inject_task_completion(
+                    t.id, t.title, t.result
+                )
+            t.recorded = True
+
+        # Track which tasks are pending announcement
+        tasks_to_announce = [
+            t for t in self.tasks.values() if not t.is_running and not t.announced
+        ]
+
+        output.reset_delivered()
+        final_text: str | None = None
         try:
             async for event in self.main_session.step(
                 user_input=user_input,
                 running_tasks=self.list_active_tasks,
             ):
-                yield event
+                if isinstance(event, TurnComplete):
+                    final_text = event.final_text
+                await output.emit(event)
+        except asyncio.CancelledError:
+            self.main_session.history.close_aborted_turn(output.delivered_text())
+            raise
+        except Exception as e:
+            logger.exception("Error in receptionist turn")
+            self.main_session.history.close_aborted_turn(output.delivered_text())
+            if kind == "user":
+                err_str = str(e)
+                if "401" in err_str:
+                    err_msg = "Provider error: unauthorized (check API key)."
+                elif "429" in err_str:
+                    err_msg = "Provider error: rate limit exceeded."
+                elif "503" in err_str or "502" in err_str:
+                    err_msg = "Provider error: service unavailable."
+                elif (
+                    "ConnectError" in type(e).__name__ or "timed out" in err_str.lower()
+                ):
+                    err_msg = "Provider connection failed. Please check network."
+                else:
+                    err_msg = f"Sorry, request failed: {e}"
+                self.main_session.history.append_assistant(content=err_msg)
+                await output.emit(TurnComplete(final_text=err_msg))
+                final_text = err_msg
+            else:
+                # Wake turn fallback: speak summaries directly
+                summaries = [
+                    t.result.speech_summary for t in tasks_to_announce if t.result
+                ]
+                fallback = " ".join(summaries) if summaries else f"Task completed: {e}"
+                self.main_session.history.append_assistant(content=fallback)
+                await output.emit(TurnComplete(final_text=fallback))
+                final_text = fallback
+                for t in tasks_to_announce:
+                    t.announced = True
+        else:
+            # Normal completion
+            for t in tasks_to_announce:
+                t.announced = True
+            if kind == "user":
+                self._wake_chain = 0
+            else:
+                self._wake_chain += 1
         finally:
-            self.on_main_turn_end()
+            try:
+                loop = asyncio.get_running_loop()
+                loop.call_soon(self._maybe_wake)
+            except RuntimeError:
+                pass
+
+        return final_text
+
+    def _maybe_wake(self) -> None:
+        """Queues a foreground wake-up turn if runtime is idle and unannounced completions exist."""
+        if not self.is_idle or self.wake_output is None:
+            return
+
+        unannounced = [
+            t for t in self.tasks.values() if not t.is_running and not t.announced
+        ]
+        if not unannounced:
+            return
+
+        if self._wake_chain >= 3:
+            # Bound wake chains: deliver summaries directly
+            summaries = [t.result.speech_summary for t in unannounced if t.result]
+            msg = " ".join(summaries)
+            for t in unannounced:
+                t.announced = True
+            if msg and self.main_session:
+                self.main_session.history.append_assistant(content=msg)
+                asyncio.create_task(self.wake_output.emit(TurnComplete(final_text=msg)))
+            return
+
+        last_is_notice = False
+        if self.main_session and self.main_session.history.messages:
+            last_msg = self.main_session.history.messages[-1]
+            last_is_notice = last_msg.role == "user" and "[Task completed:" in (
+                last_msg.content or ""
+            )
+        prompt = (
+            None
+            if last_is_notice
+            else "[Verbix runtime notice — please inform the user about the completed task(s) above in a concise sentence.]"
+        )
+        self.start_turn(prompt, self.wake_output, kind="wake")
+
+    async def step_receptionist(
+        self,
+        user_input: str | None = None,
+    ) -> AsyncIterator[AgentEvent]:
+        """Compatibility wrapper: streams events from a submit call over an async iterator."""
+        q: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
+
+        class QueueOutput:
+            def __init__(self) -> None:
+                self._delivered: list[str] = []
+
+            async def emit(self, event: AgentEvent) -> None:
+                if isinstance(event, TextDelta):
+                    self._delivered.append(event.text)
+                await q.put(event)
+
+            def delivered_text(self) -> str:
+                return "".join(self._delivered)
+
+            def reset_delivered(self) -> None:
+                self._delivered.clear()
+
+        out = QueueOutput()
+        task = self.start_turn(user_input, out, kind="user")
+
+        async def _waiter():
+            try:
+                await task
+            finally:
+                await q.put(None)
+
+        waiter_task = asyncio.create_task(_waiter())
+        try:
+            while True:
+                ev = await q.get()
+                if ev is None:
+                    break
+                yield ev
+        finally:
+            if not task.done():
+                task.cancel()
+            waiter_task.cancel()
 
     def list_active_tasks(self) -> list[TaskState]:
         """Returns all currently running background tasks."""
@@ -219,7 +449,7 @@ class TaskRuntime:
             )
 
         active_lines = [
-            f"- {t.id} '{t.title}' (running, step {t.step_count})" for t in active
+            f"- {t.id} '{t.title}' (running, {t.step_count} tool calls)" for t in active
         ]
         return f"{len(active)} active background task(s):\n" + "\n".join(active_lines)
 
@@ -227,12 +457,10 @@ class TaskRuntime:
         self,
         title: str,
         prompt: str,
-        isolate_worktree: bool = False,
         workspace: Path | str | None = None,
     ) -> str:
         """Spawns an independent background worker session in structured concurrency."""
-        self._task_counter += 1
-        task_id = f"task-{self._task_counter}"
+        task_id = f"task-{secrets.token_hex(3)}"
         target_ws = Path(workspace).resolve() if workspace else self.workspace
 
         task = TaskState(
@@ -247,21 +475,10 @@ class TaskRuntime:
 
         self._broadcast("task_spawned", {"task_id": task_id, "title": title})
 
-        # Immediate runtime-spoken acknowledgement
-        if self.player is not None:
-            spoken_title = title if len(title) <= 45 else title[:42].rstrip() + "..."
-            asyncio.create_task(
-                self.player.speak_foreground_sentences(
-                    [f"Starting task: {spoken_title}."]
-                )
-            )
-
-        # Launch background worker task
         worker_coro = self._run_worker(
             task_id=task_id,
             title=title,
             prompt=prompt,
-            isolate_worktree=isolate_worktree,
             workspace=target_ws,
         )
         bg_task = asyncio.create_task(worker_coro, name=f"worker-{task_id}")
@@ -285,6 +502,8 @@ class TaskRuntime:
             details="Task cancelled mid-execution via task_cancel.",
         )
         self._finish_task(task_id, result, status="cancelled")
+        task.recorded = True
+        task.announced = True
         self._broadcast("task_cancelled", {"task_id": task_id, "title": task.title})
         return True
 
@@ -304,24 +523,18 @@ class TaskRuntime:
             return True
         return False
 
-    def on_main_turn_start(self) -> None:
-        """Marks that the main receptionist session has started an active turn and drains any pending completions."""
-        self.drain_pending_completions()
-        self.is_main_turn_active = True
-
-    def on_main_turn_end(self) -> None:
-        """Marks that the main receptionist turn has completed and drains any pending completions."""
-        self.is_main_turn_active = False
-        self.drain_pending_completions()
-
-    def drain_pending_completions(self) -> None:
-        """Flushes any buffered completions into main session history at the turn boundary."""
-        if not self.main_session:
-            return
-
-        while self._pending_completions:
-            task_id, title, result = self._pending_completions.pop(0)
-            self.main_session.history.inject_task_completion(task_id, title, result)
+    def _drain_steer(self, task_id: str) -> list[str]:
+        """Drains any queued steering instructions for the given worker."""
+        q = self._steer_queues.get(task_id)
+        if not q or q.empty():
+            return []
+        msgs: list[str] = []
+        while not q.empty():
+            try:
+                msgs.append(q.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        return msgs
 
     def _finish_task(
         self,
@@ -329,29 +542,22 @@ class TaskRuntime:
         result: WorkerResult,
         status: str = "completed",
     ) -> None:
-        """Records task completion, enqueues spoken announcement, and performs turn-boundary injection."""
+        """Records task completion and triggers wake turn processing."""
         task = self.tasks.get(task_id)
         if not task:
             return
 
-        # Idempotency guard: avoid duplicate announcements or duplicate history entries
         if not task.is_running and task.status == status:
             return
 
         task.status = status  # type: ignore
         task.result = result
 
-        # Enqueue for serialized audio speech playback
-        self.announcement_q.put_nowait((task_id, result))
-
-        # Turn boundary injection:
-        # If main session is idle, inject immediately; if turn is active, buffer until turn ends.
-        if not self.is_main_turn_active and self.main_session:
+        if self.main_session is not None and not task.recorded:
             self.main_session.history.inject_task_completion(
-                task_id, task.title, result
+                task.id, task.title, result
             )
-        else:
-            self._pending_completions.append((task_id, task.title, result))
+            task.recorded = True
 
         self._broadcast(
             "task_finished",
@@ -363,24 +569,32 @@ class TaskRuntime:
                 "details": result.details,
             },
         )
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon(self._maybe_wake)
+        except RuntimeError:
+            pass
 
     async def _run_worker(
         self,
         task_id: str,
         title: str,
         prompt: str,
-        isolate_worktree: bool,
         workspace: Path | None = None,
     ) -> None:
         """Executes the worker agent loop until finish or cancellation."""
         task = self.tasks[task_id]
         base_dir = workspace or self.workspace
         worker_dir = base_dir
+        extra_binds: tuple[tuple[Path, Path, bool], ...] = ()
 
-        if isolate_worktree:
+        if self.isolate_worktrees:
             try:
                 worker_dir = await self.worktree_manager.create_worktree(task_id)
-            except (OSError, RuntimeError) as e:
+                main_git = self.workspace / ".git"
+                if main_git.exists():
+                    extra_binds = ((main_git, main_git, True),)
+            except (OSError, RuntimeError, FileExistsError) as e:
                 logger.warning(
                     "Worktree creation failed for %s, falling back to root workspace: %s",
                     task_id,
@@ -395,7 +609,7 @@ class TaskRuntime:
             FileReadTool(),
             FileWriteTool(),
             FileEditTool(),
-            BashTool(),
+            BashTool(allow_network=self.allow_network, extra_binds=extra_binds),
             finish_tool,
         ]
 
@@ -418,85 +632,61 @@ class TaskRuntime:
             workspace=worker_dir,
             tools=worker_tools,
             max_turns=self.max_worker_turns,
+            steer_callback=lambda: self._drain_steer(task_id),
         )
 
         last_text: str = ""
-        current_user_input: str | None = prompt
-
         try:
-            while task.status == "running" and task.step_count < self.max_worker_turns:
-                # Check for incoming steering instructions
-                steer_q = self._steer_queues.get(task_id)
-                if steer_q and not steer_q.empty():
-                    steer_msgs = []
-                    while not steer_q.empty():
-                        steer_msgs.append(steer_q.get_nowait())
-                    steering_prompt = "\n".join(
-                        f"[Steering instruction from user: {m}]" for m in steer_msgs
+            async for event in session.step(user_input=prompt):
+                if isinstance(event, TurnComplete):
+                    last_text = event.final_text
+                elif isinstance(event, ToolCallFinished):
+                    task.step_count += 1
+                    self._broadcast(
+                        "worker_tool_call",
+                        {
+                            "task_id": task_id,
+                            "call_id": event.call_id,
+                            "observation": event.observation[:200],
+                            "is_error": event.is_error,
+                        },
                     )
-                    if current_user_input:
-                        current_user_input += "\n" + steering_prompt
-                    else:
-                        current_user_input = steering_prompt
 
-                task.step_count += 1
+            if finish_tool.captured_result is not None:
+                if task.is_running:
+                    self._finish_task(
+                        task_id, finish_tool.captured_result, status="completed"
+                    )
+                return
 
-                # Execute one step of the agent session
-                async for event in session.step(user_input=current_user_input):
-                    current_user_input = None  # Consumed by step
-
-                    if isinstance(event, TurnComplete):
-                        last_text = event.final_text
-                    elif isinstance(event, ToolCallFinished):
-                        self._broadcast(
-                            "worker_tool_call",
-                            {
-                                "task_id": task_id,
-                                "call_id": event.call_id,
-                                "observation": event.observation[:200],
-                                "is_error": event.is_error,
-                            },
-                        )
-
-                # Check if worker called worker_finish (if not already handled via on_finish callback)
-                if finish_tool.captured_result is not None:
-                    if task.is_running:
-                        self._finish_task(
-                            task_id, finish_tool.captured_result, status="completed"
-                        )
-                    return
-
-                # If no tools were called and model produced a final text without calling worker_finish
-                if (
-                    session.history.messages
-                    and session.history.messages[-1].role == "assistant"
-                ):
-                    last_msg = session.history.messages[-1]
-                    if not last_msg.tool_calls:
-                        # Model stopped speaking without calling worker_finish
-                        speech = (
-                            last_text[:180]
-                            if last_text
-                            else f"Task '{title}' completed."
-                        )
-                        fallback_result = WorkerResult(
-                            success=True,
-                            speech_summary=speech,
-                            details=last_text or "Task ended without tool calls.",
-                        )
-                        self._finish_task(task_id, fallback_result, status="completed")
-                        return
-
-            # If max turns reached without finish
-            timeout_result = WorkerResult(
-                success=False,
-                speech_summary=f"Task '{title}' stopped after reaching maximum turn limit.",
-                details=f"Worker reached step limit of {self.max_worker_turns} turns without calling worker_finish.",
+            # Model stopped without calling worker_finish: re-prompt once
+            reprompt = (
+                "You stopped without calling worker_finish. "
+                "You MUST call the 'worker_finish' tool now with success, speech_summary, and details."
             )
-            self._finish_task(task_id, timeout_result, status="failed")
+            session.max_turns = 3
+            async for event in session.step(user_input=reprompt):
+                if isinstance(event, TurnComplete):
+                    last_text = event.final_text
+                elif isinstance(event, ToolCallFinished):
+                    task.step_count += 1
+
+            if finish_tool.captured_result is not None:
+                if task.is_running:
+                    self._finish_task(
+                        task_id, finish_tool.captured_result, status="completed"
+                    )
+                return
+
+            # Still did not finish: mark failed! Never fabricate success
+            failed_res = WorkerResult(
+                success=False,
+                speech_summary=f"Task '{title}' failed: stopped without calling worker_finish.",
+                details=last_text or "Worker ended without calling worker_finish.",
+            )
+            self._finish_task(task_id, failed_res, status="failed")
 
         except asyncio.CancelledError:
-            # Cancellation was handled in cancel_task
             pass
         except Exception as e:
             logger.exception("Unexpected error in worker task %s", task_id)
@@ -506,3 +696,5 @@ class TaskRuntime:
                 details=f"Exception: {type(e).__name__}: {e}",
             )
             self._finish_task(task_id, err_result, status="failed")
+        finally:
+            self._steer_queues.pop(task_id, None)

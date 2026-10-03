@@ -1,63 +1,10 @@
 from __future__ import annotations
 
-import re
+from pathlib import Path
 from typing import Any
 
 from verbix.tools.base import ToolContext, ToolResult
 from verbix.tools.sandbox import SandboxConfig, execute_sandboxed
-
-
-class SafeCommandChecker:
-    """UX helper to identify read-only / safe commands that run without confirmation."""
-
-    SAFE_PREFIXES = (
-        "git status",
-        "git log",
-        "git diff",
-        "ls",
-        "dir",
-        "cat",
-        "head",
-        "tail",
-        "grep",
-        "rg",
-        "find",
-        "pwd",
-        "cargo check",
-        "pytest",
-        "uv run pytest",
-        "python -m unittest",
-        "go test",
-    )
-
-    DANGEROUS_PATTERNS = (
-        r"\brm\b",
-        r"\bkill\b",
-        r"\bsudo\b",
-        r"\breboot\b",
-        r"\bshutdown\b",
-        r"\bgit\s+reset\b",
-        r"\bgit\s+clean\b",
-        r"\bgit\s+checkout\s+\.",
-    )
-
-    def is_safe(self, command: str) -> bool:
-        trimmed = command.strip()
-        # Any dangerous pattern immediately disqualifies
-        for pattern in self.DANGEROUS_PATTERNS:
-            if re.search(pattern, trimmed):
-                return False
-
-        # Redirections or pipes can be dangerous if uninspected
-        if "|" in trimmed or ">" in trimmed or "<" in trimmed:
-            return False
-
-        # Must match a recognized safe prefix
-        for prefix in self.SAFE_PREFIXES:
-            if trimmed == prefix or trimmed.startswith(prefix + " "):
-                return True
-
-        return False
 
 
 class BashTool:
@@ -77,35 +24,35 @@ class BashTool:
                     "description": "Timeout in seconds",
                     "default": 60.0,
                 },
-                "allow_network": {
-                    "type": "boolean",
-                    "description": "Whether outbound network is permitted",
-                    "default": False,
-                },
             },
             "required": ["command"],
         }
 
     def __init__(
         self,
+        allow_network: bool = False,
+        extra_binds: tuple[tuple[Path, Path, bool], ...] | None = None,
         max_output_length: int = 50_000,
-        safe_checker: SafeCommandChecker | None = None,
     ) -> None:
+        self.allow_network = allow_network
+        self.extra_binds = extra_binds or ()
         self.max_output_length = max_output_length
-        self.safe_checker = safe_checker or SafeCommandChecker()
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
-        command = args.get("command", "").strip()
+        command = str(args.get("command", "")).strip()
         if not command:
             return ToolResult("error: empty command", is_error=True)
 
-        timeout = float(args.get("timeout_seconds", 60.0))
-        allow_network = bool(args.get("allow_network", False))
+        try:
+            timeout = float(args.get("timeout_seconds", 60.0))
+        except (ValueError, TypeError):
+            timeout = 60.0
 
         config = SandboxConfig(
             workspace=context.workspace,
-            allow_network=allow_network,
+            allow_network=self.allow_network,
             timeout_seconds=timeout,
+            extra_binds=self.extra_binds,
         )
 
         try:
@@ -118,7 +65,6 @@ class BashTool:
                     output = res.stderr
 
             if len(output) > self.max_output_length:
-                # Tail truncation
                 output = (
                     f"[Output truncated: showing last {self.max_output_length} chars]\n"
                     + output[-self.max_output_length :]

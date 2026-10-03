@@ -5,7 +5,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any
 
-from verbix.core.events import TextDelta, TurnComplete
+from verbix.core.events import AgentEvent, TextDelta, TurnComplete
 from verbix.voice.capture import PTTCapture
 from verbix.voice.player import AudioPlayer
 
@@ -18,14 +18,59 @@ logger = logging.getLogger(__name__)
 
 def split_sentences(text: str) -> list[str]:
     """Splits a stream of text into spoken sentences at punctuation or newline boundaries."""
-    parts = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
+    parts = re.split(r"(?<=[.!?])\s+|\n+", text)
     return [p.strip() for p in parts if p.strip()]
+
+
+class SpeechTurnOutput:
+    """TurnOutput implementation that feeds completed sentences to the AudioPlayer."""
+
+    def __init__(self, player: AudioPlayer) -> None:
+        self.player = player
+        self._buffer: str = ""
+        self._delivered_sentences: list[str] = []
+
+    async def emit(self, event: AgentEvent) -> None:
+        if isinstance(event, TextDelta):
+            self._buffer += event.text
+            if any(p in self._buffer for p in (". ", "! ", "? ", ".\n", "!\n", "?\n")):
+                parts = re.split(r"(?<=[.!?])(?:\s+|\n+)", self._buffer)
+                if len(parts) > 1:
+                    complete = [p.strip() for p in parts[:-1] if p.strip()]
+                    self._buffer = parts[-1]
+                    for s in complete:
+                        try:
+                            await self.player.speak(s)
+                            self._delivered_sentences.append(s)
+                        except asyncio.CancelledError:
+                            self._delivered_sentences.append(s)
+                            raise
+
+        elif isinstance(event, TurnComplete):
+            if self._buffer.strip():
+                parts = split_sentences(self._buffer)
+                self._buffer = ""
+                for s in parts:
+                    if s:
+                        await self.player.speak(s)
+                        self._delivered_sentences.append(s)
+            elif not self._delivered_sentences and event.final_text.strip():
+                txt = event.final_text.strip()
+                await self.player.speak(txt)
+                self._delivered_sentences.append(txt)
+
+    def delivered_text(self) -> str:
+        return " ".join(self._delivered_sentences).strip()
+
+    def reset_delivered(self) -> None:
+        self._buffer = ""
+        self._delivered_sentences.clear()
 
 
 class VoicePipeline:
     """End-to-end toggle voice interaction pipeline with live STT during recording,
 
-    instant audible cues, barge-in during playback, and gesture-less confirmation timeouts.
+    instant audible cues, barge-in during playback, and single foreground turn ownership.
     """
 
     def __init__(
@@ -39,50 +84,35 @@ class VoicePipeline:
         self.stt = stt
         self.player = player
         self.capture = capture or PTTCapture()
+
+        self._speech_output = SpeechTurnOutput(self.player)
         if self.runtime is not None:
-            self.runtime.player = self.player
+            self.runtime.wake_output = self._speech_output
 
-        self._is_active_turn = False
         self._live_stt: Any = None
-        self._pending_confirmation: asyncio.Future[bool] | None = None
-        self._confirmation_prompt: str | None = None
-
-    @property
-    def is_confirmation_pending(self) -> bool:
-        return (
-            self._pending_confirmation is not None
-            and not self._pending_confirmation.done()
-        )
-
-    @property
-    def confirmation_prompt(self) -> str | None:
-        return self._confirmation_prompt
+        self._active_voice_task: asyncio.Task[str | None] | None = None
 
     async def toggle(self) -> dict[str, Any]:
         """Toggles between listening and idle/processing.
 
-        - If audio playback is active: halts playback instantly and begins recording.
+        - If audio playback is active or a turn is running: halts playback, cancels turn, begins recording.
         - If recording is active: ends capture, plays audible cue, transcribes, and executes turn.
         - If idle: starts mic capture with progressive live STT.
         """
-        # 1. Playback barge-in
-        if self.player.is_playing:
-            played_text = self.player.interrupt()
-            if played_text and self.runtime.main_session:
-                try:
-                    self.runtime.main_session.history.prune_foreground_barge_in(
-                        played_text
-                    )
-                except ValueError:
-                    pass
-            await self.start_recording()
-            return {"action": "interrupted_and_recording"}
-
-        # 2. Recording active -> end capture and process
+        # 1. Recording active -> end capture and process
         if self.capture.is_recording:
             return await self.stop_recording_and_process()
 
+        # 2. Playback / turn barge-in
+        if self.player.is_playing or not self.runtime.is_idle:
+            self.player.stop()
+            await self.runtime.cancel_turn()
+            self.runtime.user_active = True
+            await self.start_recording()
+            return {"action": "interrupted_and_recording"}
+
         # 3. Idle -> begin recording
+        self.runtime.user_active = True
         await self.start_recording()
         return {"action": "recording"}
 
@@ -105,6 +135,7 @@ class VoicePipeline:
 
     async def stop_recording_and_process(self) -> dict[str, Any]:
         """Stops recording, plays instant audible cue, finalizes STT, and starts receptionist turn."""
+        self.runtime.user_active = False
         audio_bytes = await self.capture.stop_recording()
 
         # Instant audible cue on capture stop
@@ -119,87 +150,15 @@ class VoicePipeline:
 
         transcribed_text = transcribed_text.strip()
         if not transcribed_text:
+            self.runtime._maybe_wake()
             return {"action": "idle", "transcription": ""}
 
         # Launch turn execution in background so toggle command returns immediately
-        asyncio.create_task(self.execute_voice_turn(transcribed_text))
+        self._active_voice_task = asyncio.create_task(
+            self.execute_voice_turn(transcribed_text)
+        )
         return {"action": "processing", "transcription": transcribed_text}
 
-    async def request_confirmation(
-        self, prompt: str, timeout_seconds: float = 15.0
-    ) -> bool:
-        """Asks for confirmation (confirm/deny) without holding a key, denying automatically on timeout."""
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[bool] = loop.create_future()
-        self._pending_confirmation = fut
-        self._confirmation_prompt = prompt
-
-        try:
-            confirmed = await asyncio.wait_for(fut, timeout=timeout_seconds)
-            return confirmed
-        except TimeoutError:
-            logger.info(
-                "Confirmation timed out after %.1fs; defaulting to deny.",
-                timeout_seconds,
-            )
-            return False
-        finally:
-            self._pending_confirmation = None
-            self._confirmation_prompt = None
-
-    def confirm(self) -> bool:
-        """Resolves a pending confirmation with True."""
-        if self._pending_confirmation and not self._pending_confirmation.done():
-            self._pending_confirmation.set_result(True)
-            return True
-        return False
-
-    def deny(self) -> bool:
-        """Resolves a pending confirmation with False."""
-        if self._pending_confirmation and not self._pending_confirmation.done():
-            self._pending_confirmation.set_result(False)
-            return True
-        return False
-
-    async def execute_voice_turn(self, user_text: str) -> str:
+    async def execute_voice_turn(self, user_text: str) -> str | None:
         """Executes a complete receptionist turn from transcribed user text, streaming TTS audio."""
-        self._is_active_turn = True
-        accumulated_text = ""
-        current_buffer = ""
-        spoken_sentences: list[str] = []
-
-        try:
-            async for event in self.runtime.step_receptionist(user_input=user_text):
-                if isinstance(event, TextDelta):
-                    accumulated_text += event.text
-                    current_buffer += event.text
-
-                    # Check for sentence boundary to begin immediate TTS synthesis
-                    if any(
-                        p in current_buffer
-                        for p in (". ", "! ", "? ", ".\n", "!\n", "?\n")
-                    ):
-                        sentences = split_sentences(current_buffer)
-                        if len(sentences) > 1:
-                            complete = sentences[:-1]
-                            current_buffer = sentences[-1]
-                            spoken = await self.player.speak_foreground_sentences(
-                                complete
-                            )
-                            spoken_sentences.append(spoken)
-
-                elif isinstance(event, TurnComplete):
-                    if current_buffer.strip():
-                        remaining = split_sentences(current_buffer)
-                        spoken = await self.player.speak_foreground_sentences(remaining)
-                        spoken_sentences.append(spoken)
-
-            await self.player.drain_announcements()
-
-        except asyncio.CancelledError:
-            self.player.interrupt()
-            raise
-        finally:
-            self._is_active_turn = False
-
-        return accumulated_text
+        return await self.runtime.submit(user_text, self._speech_output)

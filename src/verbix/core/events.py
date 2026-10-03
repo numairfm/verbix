@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from verbix.core.models import WorkerResult
-
 
 @dataclass(frozen=True)
 class AgentEvent:
@@ -38,22 +36,3 @@ class ToolCallFinished(AgentEvent):
 @dataclass(frozen=True)
 class TurnComplete(AgentEvent):
     final_text: str
-
-
-@dataclass(frozen=True)
-class TaskSpawnedEvent(AgentEvent):
-    task_id: str
-    title: str
-
-
-@dataclass(frozen=True)
-class TaskProgressEvent(AgentEvent):
-    task_id: str
-    step: int
-    message: str
-
-
-@dataclass(frozen=True)
-class TaskFinishedEvent(AgentEvent):
-    task_id: str
-    result: WorkerResult

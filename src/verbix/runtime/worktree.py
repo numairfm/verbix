@@ -42,9 +42,9 @@ class WorktreeManager:
         worktree_path = self._worktrees_dir / task_id
         branch_name = f"worker/{task_id}"
 
-        # Clean up stale worktree or branch if exists
+        # Refuse to clobber existing worktree path
         if worktree_path.exists():
-            await self.remove_worktree(task_id, delete_branch=True)
+            raise FileExistsError(f"Worktree path already exists: {worktree_path}")
 
         proc = await asyncio.create_subprocess_exec(
             "git",

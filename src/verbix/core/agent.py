@@ -23,6 +23,9 @@ from verbix.core.models import (
     TaskState,
 )
 from verbix.provider.models import (
+    Finish as ProviderFinish,
+)
+from verbix.provider.models import (
     TextDelta as ProviderTextDelta,
 )
 from verbix.provider.models import (
@@ -72,6 +75,7 @@ class AgentSession:
         history: ConversationHistory | None = None,
         max_turns: int = 30,
         reasoning_effort: str | None = None,
+        steer_callback: Callable[[], list[str]] | None = None,
     ) -> None:
         self.session_id = session_id
         self.system_prompt = system_prompt
@@ -81,11 +85,13 @@ class AgentSession:
         self.history = history or ConversationHistory()
         self.max_turns = max_turns
         self.reasoning_effort = reasoning_effort
+        self.steer_callback = steer_callback
 
     async def step(
         self,
         user_input: str | None = None,
         running_tasks: list[TaskState] | Callable[[], list[TaskState]] | None = None,
+        steer: Callable[[], list[str]] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Runs the agent loop until the model yields a final text response,
 
@@ -113,6 +119,16 @@ class AgentSession:
         while turn_count < self.max_turns:
             turn_count += 1
 
+            # Drain any steering instructions before preparing turn prompt
+            steer_fn = steer or self.steer_callback
+            if steer_fn:
+                steer_msgs = steer_fn()
+                if steer_msgs:
+                    steering_prompt = "\n".join(
+                        f"[Steering instruction from user: {m}]" for m in steer_msgs
+                    )
+                    self.history.append_user(steering_prompt)
+
             # Prepare turn messages (resolving dynamic running tasks callable if provided)
             active_tasks = running_tasks() if callable(running_tasks) else running_tasks
             raw_rendered = self.history.render_turn_prompt(active_tasks)
@@ -124,6 +140,7 @@ class AgentSession:
             accumulated_text: list[str] = []
             accumulated_thought: list[str] = []
             tool_call_chunks: dict[int, dict[str, Any]] = {}
+            finish_reason: str | None = None
 
             # Stream from provider
             async for event in self.provider.stream(
@@ -147,6 +164,19 @@ class AgentSession:
                         entry["name"] = event.name
                     if event.arguments_delta:
                         entry["args"].append(event.arguments_delta)
+                elif isinstance(event, ProviderFinish):
+                    finish_reason = event.reason
+
+            # Handle token limit truncation
+            if finish_reason == "length":
+                if tool_call_chunks:
+                    stop_msg = "... (reply cut off at the token limit)"
+                    self.history.append_assistant(content=stop_msg)
+                    yield TurnComplete(final_text=stop_msg)
+                    return
+                cutoff_suffix = " ... (reply cut off at the token limit)"
+                accumulated_text.append(cutoff_suffix)
+                yield TextDelta(text=cutoff_suffix)
 
             # Check if model requested tool calls
             if tool_call_chunks:
@@ -155,7 +185,6 @@ class AgentSession:
                     c = tool_call_chunks[idx]
                     raw_args = "".join(c["args"]).strip()
                     # Support multiple concatenated JSON objects emitted in a single tool call stream
-                    # (common in open models like Gemma when requesting multiple tool executions)
                     sub_jsons: list[str] = []
                     if raw_args.startswith("{"):
                         dec = json.JSONDecoder()
@@ -210,13 +239,22 @@ class AgentSession:
 
                 if cycle_triggered:
                     stop_msg = "Agent stopped: repetitive tool calling loop detected."
+                    for tc in canonical_calls:
+                        self.history.append(
+                            CanonicalMessage(
+                                role="tool",
+                                content="error: not executed (repetitive tool calling loop detected)",
+                                tool_call_id=tc.id,
+                            )
+                        )
+                    self.history.append_assistant(content=stop_msg)
                     yield TurnComplete(final_text=stop_msg)
                     return
 
                 # Execute tool calls
                 ctx = ToolContext(workspace=self.workspace)
                 terminal_requested = False
-                terminal_observation = ""
+                terminal_observations: list[str] = []
                 for tc in canonical_calls:
                     parsed_args = parse_lenient_json(tc.arguments)
                     yield ToolCallStarted(
@@ -236,8 +274,8 @@ class AgentSession:
                             is_error = result.is_error
                             if getattr(result, "is_terminal", False):
                                 terminal_requested = True
-                                terminal_observation = obs
-                        except (RuntimeError, OSError, ValueError) as e:
+                                terminal_observations.append(obs)
+                        except Exception as e:  # noqa: BLE001
                             obs = f"error: tool execution failed: {e}"
                             is_error = True
 
@@ -249,6 +287,7 @@ class AgentSession:
                     )
 
                 if terminal_requested:
+                    terminal_observation = " ".join(terminal_observations)
                     self.history.append_assistant(content=terminal_observation)
                     yield TurnComplete(final_text=terminal_observation)
                     return
@@ -267,4 +306,5 @@ class AgentSession:
         limit_msg = (
             f"Agent stopped: reached maximum step limit ({self.max_turns} turns)."
         )
+        self.history.append_assistant(content=limit_msg)
         yield TurnComplete(final_text=limit_msg)

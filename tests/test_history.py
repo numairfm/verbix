@@ -1,5 +1,4 @@
-import pytest
-
+from tests.test_regressions import assert_valid_history
 from verbix.core.history import ConversationHistory
 from verbix.core.models import (
     CanonicalMessage,
@@ -9,39 +8,23 @@ from verbix.core.models import (
 )
 
 
-def test_history_append_and_is_turn_boundary():
+def test_history_append_and_messages():
     history = ConversationHistory()
-    assert history.is_turn_boundary() is True
     assert len(history.messages) == 0
 
     history.append_user("Build the project")
-    assert history.is_turn_boundary() is False
     assert len(history.messages) == 1
+    assert history.messages[0].role == "user"
 
     tc = CanonicalToolCall(id="c1", name="task_spawn", arguments='{"title": "build"}')
     history.append_assistant("Starting build", tool_calls=[tc])
-    # Expecting tool result, not at turn boundary yet
-    assert history.is_turn_boundary() is False
+    assert len(history.messages) == 2
 
     history.append(
         CanonicalMessage(role="tool", content="task-1 spawned", tool_call_id="c1")
     )
-    # Tool result provided, now ready for next turn step or completion
-    assert history.is_turn_boundary() is True
-
-
-def test_runtime_turn_parity():
-    history = ConversationHistory()
-    history.append_runtime_turn(
-        user_input="status", runtime_reply="Task 1 is running at step 5."
-    )
-
-    assert len(history.messages) == 2
-    assert history.messages[0].role == "user"
-    assert history.messages[0].content == "status"
-    assert history.messages[1].role == "assistant"
-    assert history.messages[1].content == "Task 1 is running at step 5."
-    assert history.is_turn_boundary() is True
+    assert len(history.messages) == 3
+    assert_valid_history(history.messages)
 
 
 def test_inject_task_completion():
@@ -56,46 +39,88 @@ def test_inject_task_completion():
     )
     history.inject_task_completion(task_id="task-42", title="run tests", result=res)
 
-    # Injected as an immutable event message
     assert len(history.messages) == 3
     last = history.messages[-1]
-    assert last.role == "system"
-    assert "[Task completed: 'run tests' (task-42)" in last.content
-    assert "All 14 unit tests passed." in last.content
-    assert history.is_turn_boundary() is True
+    assert last.role == "user"
+    assert "[Verbix runtime notice — not said by the user]" in last.content
+    assert (
+        "[Task completed: 'run tests' (task-42) -> Succeeded: All 14 unit tests passed. Details: test_auth: ok\ntest_db: ok]"
+        in last.content
+    )
+    assert_valid_history(history.messages)
 
 
-def test_barge_in_pruning_applies_strictly_to_foreground_assistant():
+def test_inject_task_completion_capped_details():
     history = ConversationHistory()
-    history.append_user("Explain quantum computing")
-    # Assistant started speaking 3 sentences, but user interrupted after sentence 1
-    full_text = "Quantum computing uses qubits. Qubits can exist in superposition. This enables exponential speedup."
-    history.append_assistant(content=full_text)
+    long_details = "D" * 800
+    res = WorkerResult(
+        success=False,
+        speech_summary="Build failed.",
+        details=long_details,
+    )
+    history.inject_task_completion(task_id="task-99", title="compile", result=res)
 
-    played_text = "Quantum computing uses qubits."
-    history.prune_foreground_barge_in(played_text)
+    last = history.messages[-1]
+    assert "... (call task_status for full details)" in last.content
+    assert len(last.content) < 800
 
-    # Last assistant message pruned to what was actually heard
-    assert history.messages[-1].role == "assistant"
-    assert history.messages[-1].content == "Quantum computing uses qubits."
 
-    # Background task completion added after is NOT pruned
-    res = WorkerResult(success=True, speech_summary="Download done.", details="Saved.")
-    history.inject_task_completion("task-1", "download", res)
-    # Another prune call shouldn't touch task completions
-    with pytest.raises(ValueError, match="Cannot prune non-assistant message"):
-        history.prune_foreground_barge_in("anything")
+def test_close_aborted_turn_with_tool_calls():
+    history = ConversationHistory()
+    history.append_user("Do something")
+    tc1 = CanonicalToolCall(id="c1", name="tool_a", arguments="{}")
+    tc2 = CanonicalToolCall(id="c2", name="tool_b", arguments="{}")
+    history.append_assistant("Calling tools", tool_calls=[tc1, tc2])
+
+    # Abort before tool execution finishes
+    history.close_aborted_turn("")
+
+    # Must append synthetic tool responses so tool calls are not dangling
+    assert len(history.messages) == 4
+    assert history.messages[2].role == "tool"
+    assert history.messages[2].tool_call_id == "c1"
+    assert history.messages[3].role == "tool"
+    assert history.messages[3].tool_call_id == "c2"
+    assert_valid_history(history.messages)
+
+
+def test_close_aborted_turn_with_partial_speech():
+    history = ConversationHistory()
+    history.append_user("Explain gravity")
+    history.append_assistant(
+        "Gravity is a fundamental interaction. It curves spacetime."
+    )
+
+    # User barged in after hearing first sentence
+    history.close_aborted_turn("Gravity is a fundamental interaction.")
+
+    assert len(history.messages) == 2
+    assert history.messages[1].role == "assistant"
+    assert history.messages[1].content == "Gravity is a fundamental interaction."
+    assert_valid_history(history.messages)
+
+
+def test_close_aborted_turn_with_no_speech():
+    history = ConversationHistory()
+    history.append_user("Explain gravity")
+    history.append_assistant("Gravity is a fundamental interaction.")
+
+    # User barged in before anything was spoken
+    history.close_aborted_turn("")
+
+    # Assistant message should be popped
+    assert len(history.messages) == 1
+    assert history.messages[0].role == "user"
+    assert_valid_history(history.messages)
 
 
 def test_render_turn_prompt_ephemeral_running_task_line():
     history = ConversationHistory()
     history.append_user("How much memory is left?")
 
-    # Active running task
     running_task = TaskState(
         id="task-1", title="compile kernel", status="running", step_count=12
     )
-    # Finished task (must NOT be rendered in ephemeral line!)
     finished_task = TaskState(
         id="task-2",
         title="download dataset",
@@ -105,10 +130,8 @@ def test_render_turn_prompt_ephemeral_running_task_line():
 
     rendered = history.render_turn_prompt(running_tasks=[running_task, finished_task])
     assert len(rendered) == 1
-    # Check that running task was prepended
-    assert "[Running: task-1 'compile kernel' (step 12)]" in rendered[0].content
+    assert "[Running: task-1 'compile kernel' (12 tool calls)]" in rendered[0].content
     assert "How much memory is left?" in rendered[0].content
-    # Finished task must NOT be in the rendered prompt
     assert "download dataset" not in rendered[0].content
 
     # Invariant: Underlying history must NOT be mutated!

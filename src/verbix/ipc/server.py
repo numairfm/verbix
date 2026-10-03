@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from verbix.core.events import (
+    AgentEvent,
     TextDelta,
     ThoughtDelta,
     ToolCallFinished,
@@ -20,6 +21,56 @@ if TYPE_CHECKING:
     from verbix.voice.pipeline import VoicePipeline
 
 logger = logging.getLogger(__name__)
+
+
+def event_to_payload(event: AgentEvent) -> tuple[str, dict[str, Any]]:
+    """Converts a domain AgentEvent into an IPC event type and payload dictionary."""
+    if isinstance(event, TextDelta):
+        return "text_delta", {"text": event.text}
+    if isinstance(event, ThoughtDelta):
+        return "thought_delta", {"thought": event.thought}
+    if isinstance(event, ToolCallStarted):
+        return "tool_call_started", {
+            "call_id": event.call_id,
+            "tool_name": event.tool_name,
+            "arguments": event.arguments,
+        }
+    if isinstance(event, ToolCallFinished):
+        return "tool_call_finished", {
+            "call_id": event.call_id,
+            "observation": event.observation,
+            "is_error": event.is_error,
+        }
+    if isinstance(event, TurnComplete):
+        return "turn_complete", {"final_text": event.final_text}
+    return "unknown", {}
+
+
+class BroadcastWakeOutput:
+    """Delivers wake-turn events to all connected IPC clients."""
+
+    def __init__(self, server: VerbixServer) -> None:
+        self.server = server
+        self._delivered: list[str] = []
+
+    async def emit(self, event: AgentEvent) -> None:
+        if isinstance(event, TextDelta):
+            self._delivered.append(event.text)
+        ev_type, payload = event_to_payload(event)
+        ipc_event = IPCEvent(type=ev_type, payload=payload)
+        msg_bytes = ipc_event.to_jsonl()
+        for writer in list(self.server._clients):
+            try:
+                writer.write(msg_bytes)
+                await writer.drain()
+            except (OSError, RuntimeError):
+                self.server._clients.discard(writer)
+
+    def delivered_text(self) -> str:
+        return "".join(self._delivered)
+
+    def reset_delivered(self) -> None:
+        self._delivered.clear()
 
 
 class VerbixServer:
@@ -42,6 +93,10 @@ class VerbixServer:
         self._server: asyncio.Server | None = None
         self._clients: set[asyncio.StreamWriter] = set()
         self._event_forwarder_task: asyncio.Task[None] | None = None
+
+        # Configure wake turn output if not already assigned
+        if self.runtime.wake_output is None:
+            self.runtime.wake_output = BroadcastWakeOutput(self)
 
     async def start(self) -> None:
         """Starts listening on Unix domain socket or TCP host/port."""
@@ -67,7 +122,6 @@ class VerbixServer:
         else:
             raise ValueError("Must specify either socket_path or host/port.")
 
-        # Start forwarding runtime events to subscribed clients
         self._event_forwarder_task = asyncio.create_task(self._forward_runtime_events())
 
     async def stop(self) -> None:
@@ -171,51 +225,47 @@ class VerbixServer:
                 await writer.drain()
                 return
 
-            try:
-                async for event in self.runtime.step_receptionist(
-                    user_input=request.prompt
-                ):
-                    ev_type = "unknown"
-                    payload: dict[str, Any] = {}
+            class IPCTurnOutput:
+                def __init__(self, req_id: str, w: asyncio.StreamWriter) -> None:
+                    self.req_id = req_id
+                    self.w = w
+                    self._delivered: list[str] = []
 
+                async def emit(self, event: AgentEvent) -> None:
                     if isinstance(event, TextDelta):
-                        ev_type = "text_delta"
-                        payload = {"text": event.text}
-                    elif isinstance(event, ThoughtDelta):
-                        ev_type = "thought_delta"
-                        payload = {"thought": event.thought}
-                    elif isinstance(event, ToolCallStarted):
-                        ev_type = "tool_call_started"
-                        payload = {
-                            "call_id": event.call_id,
-                            "tool_name": event.tool_name,
-                            "arguments": event.arguments,
-                        }
-                    elif isinstance(event, ToolCallFinished):
-                        ev_type = "tool_call_finished"
-                        payload = {
-                            "call_id": event.call_id,
-                            "observation": event.observation,
-                            "is_error": event.is_error,
-                        }
-                    elif isinstance(event, TurnComplete):
-                        ev_type = "turn_complete"
-                        payload = {"final_text": event.final_text}
+                        self._delivered.append(event.text)
+                    ev_type, payload = event_to_payload(event)
+                    try:
+                        self.w.write(
+                            IPCEvent(
+                                type=ev_type, request_id=self.req_id, payload=payload
+                            ).to_jsonl()
+                        )
+                        await self.w.drain()
+                    except (OSError, RuntimeError):
+                        pass
 
-                    writer.write(
-                        IPCEvent(
-                            type=ev_type, request_id=request.id, payload=payload
-                        ).to_jsonl()
-                    )
+                def delivered_text(self) -> str:
+                    return "".join(self._delivered)
+
+                def reset_delivered(self) -> None:
+                    self._delivered.clear()
+
+            async def _run_prompt() -> None:
+                ipc_out = IPCTurnOutput(request.id, writer)
+                try:
+                    await self.runtime.submit(request.prompt or "", ipc_out)
+                    writer.write(IPCResponse(id=request.id, status="ok").to_jsonl())
                     await writer.drain()
+                except Exception as e:  # noqa: BLE001
+                    err_resp = IPCResponse(id=request.id, status="error", error=str(e))
+                    try:
+                        writer.write(err_resp.to_jsonl())
+                        await writer.drain()
+                    except (OSError, RuntimeError):
+                        pass
 
-                # Send success response indicating turn ended
-                writer.write(IPCResponse(id=request.id, status="ok").to_jsonl())
-                await writer.drain()
-            except (RuntimeError, OSError, ValueError) as e:
-                err_resp = IPCResponse(id=request.id, status="error", error=str(e))
-                writer.write(err_resp.to_jsonl())
-                await writer.drain()
+            asyncio.create_task(_run_prompt())
 
         elif action == "status":
             summary = self.runtime.get_task_status_summary(request.task_id)
@@ -258,22 +308,6 @@ class VerbixServer:
             if self.pipeline:
                 data = await self.pipeline.toggle()
             resp = IPCResponse(id=request.id, status="ok", data=data)
-            writer.write(resp.to_jsonl())
-            await writer.drain()
-
-        elif action == "confirm":
-            ok = False
-            if self.pipeline:
-                ok = self.pipeline.confirm()
-            resp = IPCResponse(id=request.id, status="ok", data={"confirmed": ok})
-            writer.write(resp.to_jsonl())
-            await writer.drain()
-
-        elif action == "deny":
-            ok = False
-            if self.pipeline:
-                ok = self.pipeline.deny()
-            resp = IPCResponse(id=request.id, status="ok", data={"denied": ok})
             writer.write(resp.to_jsonl())
             await writer.drain()
 

@@ -11,6 +11,7 @@ from verbix.cli import load_env
 from verbix.core.models import CanonicalMessage
 from verbix.provider.client import ProviderClient
 from verbix.voice.pocket_tts import PocketTTSEngine
+from verbix.voice.sinks import SubprocessAudioSink
 from verbix.voice.stt import FasterWhisperSTT
 
 
@@ -21,13 +22,15 @@ async def main() -> None:
         print("ERROR: OPENROUTER_API_KEY not found.")
         return
 
-    # 1. Initialize STT and PocketTTS
-    print("Initializing FasterWhisperSTT and PocketTTSEngine...")
+    # 1. Initialize STT, PocketTTS, and Streaming SubprocessAudioSink
+    print("Initializing FasterWhisperSTT, PocketTTSEngine, and SubprocessAudioSink...")
     stt = FasterWhisperSTT(model_size="tiny.en")
     await stt.warmup()
 
     tts = PocketTTSEngine(voice="alba")
     await tts.load()
+
+    sink = SubprocessAudioSink(sample_rate=24000, channels=1, audio_format="f32")
 
     provider = ProviderClient(
         base_url="https://openrouter.ai/api/v1",
@@ -129,18 +132,34 @@ async def main() -> None:
         ttft = (t_first_token - t_llm_start) * 1000
         ttfs = (t_first_sentence - t_llm_start) * 1000
 
-        # 3. PocketTTS synthesis to first audio chunk
+        # 3. PocketTTS synthesis and streaming into SubprocessAudioSink
         t_tts_start = time.perf_counter()
-        first_pcm_chunk_time: float | None = None
+        first_audio_delivery_time: float | None = None
 
-        async for _chunk in tts.synthesize(first_sentence):
-            if first_pcm_chunk_time is None:
-                first_pcm_chunk_time = time.perf_counter()
-                break  # only measure time to first chunk
+        async def _stream_with_timing(text: str = first_sentence):
+            nonlocal first_audio_delivery_time
+            async for chunk in tts.synthesize(text):
+                if first_audio_delivery_time is None:
+                    first_audio_delivery_time = time.perf_counter()
+                yield chunk
 
-        t_first_audio = first_pcm_chunk_time or time.perf_counter()
+        # Stream into real PipeWire SubprocessAudioSink
+        play_task = asyncio.create_task(sink.play_stream(_stream_with_timing()))
+        while first_audio_delivery_time is None and not play_task.done():
+            await asyncio.sleep(0.005)
+
+        t_first_audio = first_audio_delivery_time or time.perf_counter()
         tts_chunk_latency = (t_first_audio - t_tts_start) * 1000
         total_ttfa = (t_first_audio - t_toggle_off) * 1000
+
+        # Stop sink after first sentence playback is verified
+        sink.stop()
+        try:
+            await play_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001, S110
+            pass
 
         stt_latencies.append(stt_latency)
         ttft_latencies.append(ttft)

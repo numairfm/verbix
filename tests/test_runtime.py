@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
 
+from tests.test_regressions import assert_valid_history
 from verbix.core.models import WorkerResult
 from verbix.provider.client import ProviderClient
+from verbix.provider.models import Finish, TextDelta, ToolCallDelta
 from verbix.runtime.orchestration import (
     TaskCancelTool,
     TaskSpawnTool,
@@ -13,7 +16,7 @@ from verbix.runtime.orchestration import (
     TaskSteerTool,
     WorkerFinishTool,
 )
-from verbix.runtime.tasks import TaskRuntime
+from verbix.runtime.tasks import DefaultTurnOutput, TaskRuntime
 from verbix.runtime.worktree import WorktreeManager
 from verbix.tools.base import ToolContext
 
@@ -30,7 +33,6 @@ def mock_provider() -> ProviderClient:
 @pytest.mark.asyncio
 async def test_worktree_fallback(tmp_path: Path):
     manager = WorktreeManager(root_workspace=tmp_path)
-    # tmp_path is not a git repo, should fall back to standard subdirectory
     worktree = await manager.create_worktree("task-fallback-1")
     assert worktree.exists()
     assert worktree.is_dir()
@@ -57,7 +59,6 @@ async def test_worker_finish_tool(tmp_path: Path):
     assert not result.is_error
     assert tool.captured_result is not None
     assert tool.captured_result.success is True
-    # Verify 180 char truncation on speech_summary
     assert len(tool.captured_result.speech_summary) <= 180
     assert tool.captured_result.details == "All unit tests passed with 100% coverage."
 
@@ -68,10 +69,11 @@ async def test_task_runtime_spawn_and_finish(
 ):
     runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
     receptionist = runtime.create_receptionist()
+    out = DefaultTurnOutput()
+    runtime.wake_output = out
 
-    # Pre-configure a dummy worker finish directly
     task_id = await runtime.spawn_task(title="Build Project", prompt="Run build")
-    assert task_id == "task-1"
+    assert task_id.startswith("task-")
     task = runtime.get_task(task_id)
     assert task is not None
     assert task.status == "running"
@@ -89,55 +91,18 @@ async def test_task_runtime_spawn_and_finish(
     assert task.is_running is False
     assert task.result == worker_res
 
-    # Spoken announcement queue received the completion
-    assert not runtime.announcement_q.empty()
-    queued_task_id, queued_res = runtime.announcement_q.get_nowait()
-    assert queued_task_id == task_id
-    assert queued_res.speech_summary == "Build succeeded."
+    # Give wake turn time to run
+    await asyncio.sleep(0.1)
 
-    # Immediate turn-boundary injection into idle receptionist history
-    assert len(receptionist.history.messages) == 1
-    assert receptionist.history.messages[0].role == "system"
-    assert (
-        "[Task completed: 'Build Project' (task-1) -> Succeeded: Build succeeded."
-        in receptionist.history.messages[0].content
+    # When a foreground turn runs, history records completion notice
+    out2 = DefaultTurnOutput()
+    await runtime.submit("Status?", out2)
+
+    assert any(
+        f"[Task completed: 'Build Project' ({task_id})" in m.content
+        for m in receptionist.history.messages
     )
-    assert (
-        "Compiled 12 files without errors." in receptionist.history.messages[0].content
-    )
-
-
-@pytest.mark.asyncio
-async def test_turn_boundary_injection_during_active_turn(
-    tmp_path: Path, mock_provider: ProviderClient
-):
-    runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
-    receptionist = runtime.create_receptionist()
-
-    task_id = await runtime.spawn_task(title="Long Task", prompt="Do work")
-
-    # Start main turn
-    runtime.on_main_turn_start()
-    assert runtime.is_main_turn_active is True
-
-    # Task finishes while receptionist turn is actively running
-    worker_res = WorkerResult(
-        success=True,
-        speech_summary="Long task done.",
-        details="Detailed log.",
-    )
-    runtime._finish_task(task_id, worker_res, status="completed")
-
-    # Message must NOT be injected mid-turn to preserve tool call/result ordering!
-    assert len(receptionist.history.messages) == 0
-    assert len(runtime._pending_completions) == 1
-
-    # End main turn -> flushes pending completions
-    runtime.on_main_turn_end()
-    assert runtime.is_main_turn_active is False
-    assert len(runtime._pending_completions) == 0
-    assert len(receptionist.history.messages) == 1
-    assert "Long task done." in receptionist.history.messages[0].content
+    assert_valid_history(receptionist.history.messages)
 
 
 @pytest.mark.asyncio
@@ -157,9 +122,9 @@ async def test_ephemeral_running_task_prompt_annotation(
     active_tasks = runtime.list_active_tasks()
     rendered = receptionist.history.render_turn_prompt(active_tasks)
 
-    # The rendered prompt has the ephemeral annotation
+    # The rendered prompt has the ephemeral annotation with tool calls
     assert len(rendered) == 1
-    assert "[Running: task-1 'Compile Core' (step 5)]" in rendered[0].content
+    assert f"[Running: {task_id} 'Compile Core' (5 tool calls)]" in rendered[0].content
 
     # The underlying history was NOT mutated
     assert "[Running:" not in receptionist.history.messages[0].content
@@ -179,7 +144,7 @@ async def test_ephemeral_running_task_prompt_annotation(
 @pytest.mark.asyncio
 async def test_task_runtime_cancellation(tmp_path: Path, mock_provider: ProviderClient):
     runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
-    receptionist = runtime.create_receptionist()
+    runtime.create_receptionist()
 
     task_id = await runtime.spawn_task(title="Cancel Me", prompt="Neverending")
     cancelled = await runtime.cancel_task(task_id)
@@ -190,27 +155,8 @@ async def test_task_runtime_cancellation(tmp_path: Path, mock_provider: Provider
     assert task.status == "cancelled"
     assert task.result is not None
     assert "cancelled" in task.result.speech_summary.lower()
-
-    # History got cancellation record
-    assert len(receptionist.history.messages) == 1
-    assert (
-        "Failed" in receptionist.history.messages[0].content
-        or "cancelled" in receptionist.history.messages[0].content.lower()
-    )
-
-
-@pytest.mark.asyncio
-async def test_task_runtime_steering(tmp_path: Path, mock_provider: ProviderClient):
-    runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
-    task_id = await runtime.spawn_task(title="Steer Me", prompt="Steerable")
-
-    steered = await runtime.steer_task(task_id, "Please focus on documentation.")
-    assert steered is True
-
-    q = runtime._steer_queues[task_id]
-    assert not q.empty()
-    instruction = q.get_nowait()
-    assert instruction == "Please focus on documentation."
+    assert task.recorded is True
+    assert task.announced is True
 
 
 @pytest.mark.asyncio
@@ -228,22 +174,25 @@ async def test_orchestration_tools(tmp_path: Path, mock_provider: ProviderClient
     assert not res.is_error
     assert res.is_terminal is True
     assert "Starting task: Test Task." in res.observation
-    assert "task-1" in runtime.tasks
+
+    active_tasks = runtime.list_active_tasks()
+    assert len(active_tasks) == 1
+    task_id = active_tasks[0].id
 
     # 2. Status
-    res_status = await status_tool.execute({"task_id": "task-1"}, ctx)
+    res_status = await status_tool.execute({"task_id": task_id}, ctx)
     assert not res_status.is_error
     assert "running" in res_status.observation.lower()
 
     # 3. Steer
     res_steer = await steer_tool.execute(
-        {"task_id": "task-1", "instruction": "Hurry up"}, ctx
+        {"task_id": task_id, "instruction": "Hurry up"}, ctx
     )
     assert not res_steer.is_error
     assert "delivered" in res_steer.observation.lower()
 
     # 4. Cancel
-    res_cancel = await cancel_tool.execute({"task_id": "task-1"}, ctx)
+    res_cancel = await cancel_tool.execute({"task_id": task_id}, ctx)
     assert not res_cancel.is_error
     assert "cancelled" in res_cancel.observation.lower()
 
@@ -252,16 +201,6 @@ async def test_orchestration_tools(tmp_path: Path, mock_provider: ProviderClient
 async def test_task_completion_sync_before_foreground_turn(
     tmp_path: Path, mock_provider: ProviderClient
 ):
-    """Regression test for task completion synchronization:
-    1. Main agent spawns a background task.
-    2. Task completes.
-    3. Runtime emits task completion.
-    4. A new user turn arrives immediately afterward.
-    Invariant:
-    - The new foreground turn must observe the terminal state.
-    - Completed task must NEVER appear in transient running-task prompt annotation.
-    - Completed task result (summary + details) is available in history for receptionist.
-    """
     runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
     receptionist = runtime.create_receptionist()
 
@@ -277,44 +216,30 @@ async def test_task_completion_sync_before_foreground_turn(
         speech_summary="Analyzed repository successfully.",
         details="Found pyproject.toml and src/verbix.",
     )
+    runtime._finish_task(task_id, worker_res, status="completed")
 
-    # 3. Simulate completion occurring while turn state is transitioning or buffered
-    # If a completion arrived in _pending_completions:
-    runtime._pending_completions.append((task_id, task.title, worker_res))
-    task.status = "completed"
-    task.result = worker_res
+    # 3. A new user turn arrives immediately afterward
+    out = DefaultTurnOutput()
+    await runtime.submit("what did it find?", out)
 
-    # 4. A new user turn arrives immediately afterward
-    runtime.on_main_turn_start()
-
-    # INVARIANT 1: Pending completions MUST be drained at turn start
-    assert len(runtime._pending_completions) == 0
-    assert len(receptionist.history.messages) == 1
-    assert (
-        "Analyzed repository successfully." in receptionist.history.messages[0].content
-    )
-    assert (
-        "Found pyproject.toml and src/verbix."
-        in receptionist.history.messages[0].content
+    # INVARIANT 1: Completed task is injected into history
+    assert any(
+        "Analyzed repository successfully." in m.content
+        for m in receptionist.history.messages
     )
 
     # INVARIANT 2: render_turn_prompt must NEVER include the completed task
     active_tasks = runtime.list_active_tasks()
     assert len(active_tasks) == 0
-    receptionist.history.append_user("what did it find?")
     prompt_msgs = receptionist.history.render_turn_prompt(active_tasks)
     user_msg = prompt_msgs[-1]
     assert "[Running:" not in user_msg.content
-    assert user_msg.content == "what did it find?"
 
 
 @pytest.mark.asyncio
 async def test_worker_finish_tool_immediate_state_transition(
     tmp_path: Path, mock_provider: ProviderClient
 ):
-    """Verifies that invoking WorkerFinishTool immediately transitions TaskState
-    to terminal 'completed' status and signals is_terminal to stop agent loop.
-    """
     runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
     runtime.create_receptionist()
     task_id = await runtime.spawn_task(title="Build", prompt="Build core")
@@ -338,9 +263,6 @@ async def test_worker_finish_tool_immediate_state_transition(
     # Immediate state transition before any further turns
     assert task.status == "completed"
     assert task.is_running is False
-    assert not runtime.announcement_q.empty()
-
-    # Dynamic running tasks evaluated in receptionist must be empty
     assert len(runtime.list_active_tasks()) == 0
 
 
@@ -348,7 +270,6 @@ async def test_worker_finish_tool_immediate_state_transition(
 async def test_task_spawn_workspace_awareness(
     tmp_path: Path, mock_provider: ProviderClient
 ):
-    """Verifies TaskSpawnTool and TaskStatusTool expose workspace in descriptions and schema."""
     runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
     spawn_tool = TaskSpawnTool(runtime)
     status_tool = TaskStatusTool(runtime)
@@ -357,7 +278,6 @@ async def test_task_spawn_workspace_awareness(
     assert str(tmp_path) in status_tool.description
 
     schema = spawn_tool.parameters_schema
-    # Safety invariant: the runtime, not the model, chooses the workspace path
     assert "workspace" not in schema["properties"]
 
     ctx = ToolContext(workspace=tmp_path)
@@ -371,21 +291,15 @@ async def test_task_spawn_workspace_awareness(
     assert not res.is_error
     assert res.is_terminal is True
     assert "Starting task: Check files." in res.observation
-    task_id = "task-1"
-    task = runtime.get_task(task_id)
-    assert task is not None
+
+    active_tasks = runtime.list_active_tasks()
+    assert len(active_tasks) == 1
+    task = active_tasks[0]
     assert task.workspace == tmp_path
 
 
 @pytest.mark.asyncio
 async def test_task_spawn_terminal_turn_and_history_parity(tmp_path: Path):
-    """Verifies that a successful task_spawn ends the turn immediately with the spoken ack,
-
-    omits a second LLM call, and records the spoken ack in history per the parity rule.
-    """
-    from verbix.core.events import TurnComplete
-    from verbix.provider.models import Finish, ToolCallDelta
-
     calls_made = 0
 
     class MockSingleTurnProvider(ProviderClient):
@@ -394,34 +308,235 @@ async def test_task_spawn_terminal_turn_and_history_parity(tmp_path: Path):
 
         async def stream(self, messages, tools=None, **kwargs):  # type: ignore[override]
             nonlocal calls_made
-            calls_made += 1
-            # First and only call: emit task_spawn tool call
-            yield ToolCallDelta(
-                index=0,
-                call_id="call-spawn-1",
-                name="task_spawn",
-                arguments_delta='{"title": "Run full test suite", "prompt": "pytest -v"}',
+            is_receptionist = any(
+                getattr(getattr(t, "function", None), "name", None) == "task_spawn"
+                for t in (tools or [])
             )
-            yield Finish(reason="tool_calls")
+            if is_receptionist:
+                calls_made += 1
+                yield ToolCallDelta(
+                    index=0,
+                    call_id="call-spawn-1",
+                    name="task_spawn",
+                    arguments_delta='{"title": "Run full test suite", "prompt": "pytest -v"}',
+                )
+                yield Finish(reason="tool_calls")
+            else:
+                await asyncio.sleep(0.2)
+                yield ToolCallDelta(
+                    index=0,
+                    call_id="call-finish-1",
+                    name="worker_finish",
+                    arguments_delta='{"success": true, "speech_summary": "Done", "details": "Done"}',
+                )
+                yield Finish(reason="tool_calls")
 
     provider = MockSingleTurnProvider()
     runtime = TaskRuntime(workspace=tmp_path, provider=provider)
     runtime.create_receptionist()
 
-    events = []
-    async for event in runtime.step_receptionist(user_input="Run the tests"):
-        events.append(event)
+    out = DefaultTurnOutput()
+    await runtime.submit("Run the tests", out)
 
-    # 1. Exactly one LLM call made (no second turn call)
     assert calls_made == 1
-
-    # 2. Turn completed with the spoken acknowledgement
-    turn_completes = [e for e in events if isinstance(e, TurnComplete)]
-    assert len(turn_completes) == 1
-    assert turn_completes[0].final_text == "Starting task: Run full test suite."
-
-    # 3. Parity rule: history records the spoken ack as the assistant message
     assert runtime.main_session is not None
     last_msg = runtime.main_session.history.messages[-1]
     assert last_msg.role == "assistant"
     assert last_msg.content == "Starting task: Run full test suite."
+
+
+@pytest.mark.asyncio
+async def test_wake_turn_queues_behind_active_user_turn_and_does_not_cancel_it(
+    tmp_path: Path,
+):
+    """A background task completion that finishes mid-turn must queue behind the active turn
+
+    and never cancel the user's active turn.
+    """
+
+    class SlowMockProvider(ProviderClient):
+        def __init__(self) -> None:
+            super().__init__(base_url="http://mock", model="mock")
+
+        async def stream(self, messages, tools=None, **kwargs):  # type: ignore[override]
+            await asyncio.sleep(0.08)
+            yield TextDelta(text="User response complete.")
+            yield Finish(reason="stop")
+
+    provider = SlowMockProvider()
+    runtime = TaskRuntime(workspace=tmp_path, provider=provider)
+    runtime.create_receptionist()
+    wake_out = DefaultTurnOutput()
+    runtime.wake_output = wake_out
+
+    # 1. Start an active user turn
+    user_out = DefaultTurnOutput()
+    user_task = runtime.start_turn("Analyze codebase", user_out, kind="user")
+
+    # 2. While user turn is active, a background task finishes
+    await asyncio.sleep(0.02)
+    assert not user_task.done()
+
+    task_id = "task-bg-1"
+    runtime.tasks[task_id] = runtime.tasks.get(
+        task_id,
+        runtime.tasks.setdefault(
+            task_id,
+            runtime.get_task(task_id)  # type: ignore
+            or TaskRuntime.spawn_task.__annotations__,  # placeholder
+        ),
+    )
+    from verbix.core.models import TaskState
+
+    runtime.tasks[task_id] = TaskState(
+        id=task_id,
+        title="Background Lint",
+        status="running",
+        step_count=2,
+    )
+    runtime._finish_task(
+        task_id,
+        WorkerResult(
+            success=True,
+            speech_summary="Linting passed cleanly.",
+            details="All 10 files ok",
+        ),
+        status="completed",
+    )
+
+    # 3. User turn must complete successfully (NOT cancelled!)
+    res = await user_task
+    assert res == "User response complete."
+    assert not user_task.cancelled()
+
+    # 4. Wait for queued wake turn to complete
+    await asyncio.sleep(0.12)
+    assert runtime.tasks[task_id].announced is True
+    assert runtime.main_session is not None
+    assert_valid_history(runtime.main_session.history.messages)
+
+
+@pytest.mark.asyncio
+async def test_user_input_cancels_pending_wake_turn(tmp_path: Path):
+    """User input arriving while a wake turn is running must cancel the wake turn immediately."""
+
+    class SlowWakeProvider(ProviderClient):
+        def __init__(self) -> None:
+            super().__init__(base_url="http://mock", model="mock")
+
+        async def stream(self, messages, tools=None, **kwargs):  # type: ignore[override]
+            is_user = any("What time is it?" in (m.content or "") for m in messages)
+            if is_user:
+                yield TextDelta(text="User response immediate.")
+            else:
+                await asyncio.sleep(0.15)
+                yield TextDelta(text="Wake announcement complete.")
+            yield Finish(reason="stop")
+
+    provider = SlowWakeProvider()
+    runtime = TaskRuntime(workspace=tmp_path, provider=provider)
+    runtime.create_receptionist()
+    wake_out = DefaultTurnOutput()
+    runtime.wake_output = wake_out
+
+    # 1. Background task finishes while idle -> triggers wake turn
+    from verbix.core.models import TaskState
+
+    task_id = "task-bg-wake"
+    runtime.tasks[task_id] = TaskState(
+        id=task_id,
+        title="Compile",
+        status="running",
+        step_count=1,
+    )
+    runtime._finish_task(
+        task_id,
+        WorkerResult(success=True, speech_summary="Build succeeded.", details="OK"),
+        status="completed",
+    )
+
+    # Give wake turn time to start running
+    await asyncio.sleep(0.03)
+    wake_task = runtime._turn_task
+    assert wake_task is not None
+    assert not wake_task.done()
+
+    # 2. User inputs a new prompt -> cancels the wake turn!
+    user_out = DefaultTurnOutput()
+    user_res = await runtime.submit("What time is it?", user_out)
+    assert user_res == "User response immediate."
+    assert wake_task.cancelled() or wake_task.done()
+
+    assert runtime.main_session is not None
+    assert_valid_history(runtime.main_session.history.messages)
+
+
+@pytest.mark.asyncio
+async def test_wake_batching_simultaneous_completions(tmp_path: Path):
+    """Multiple tasks completing concurrently must be batched together without duplicate wake turns."""
+    calls_made = 0
+
+    class BatchWakeProvider(ProviderClient):
+        def __init__(self) -> None:
+            super().__init__(base_url="http://mock", model="mock")
+
+        async def stream(self, messages, tools=None, **kwargs):  # type: ignore[override]
+            nonlocal calls_made
+            calls_made += 1
+            yield TextDelta(text="Both tasks finished.")
+            yield Finish(reason="stop")
+
+    provider = BatchWakeProvider()
+    runtime = TaskRuntime(workspace=tmp_path, provider=provider)
+    runtime.create_receptionist()
+    wake_out = DefaultTurnOutput()
+    runtime.wake_output = wake_out
+
+    from verbix.core.models import TaskState
+
+    for tid, title in [("t-1", "Task 1"), ("t-2", "Task 2")]:
+        runtime.tasks[tid] = TaskState(
+            id=tid, title=title, status="running", step_count=1
+        )
+        runtime._finish_task(
+            tid,
+            WorkerResult(success=True, speech_summary=f"{title} ok.", details="OK"),
+            status="completed",
+        )
+
+    # Give wake turn time to execute
+    await asyncio.sleep(0.08)
+
+    assert calls_made == 1
+    assert runtime.tasks["t-1"].announced is True
+    assert runtime.tasks["t-2"].announced is True
+    assert runtime.main_session is not None
+    assert_valid_history(runtime.main_session.history.messages)
+
+
+@pytest.mark.asyncio
+async def test_provider_error_handling_user_visible_message(tmp_path: Path):
+    """A provider error in a user turn must result in a clean user-visible message without crashing."""
+
+    class ErrorProvider(ProviderClient):
+        def __init__(self) -> None:
+            super().__init__(base_url="http://mock", model="mock")
+
+        async def stream(self, messages, tools=None, **kwargs):  # type: ignore[override]
+            raise ConnectionError("Connection refused by provider endpoint")
+            yield  # type: ignore[unreachable]
+
+    provider = ErrorProvider()
+    runtime = TaskRuntime(workspace=tmp_path, provider=provider)
+    runtime.create_receptionist()
+
+    out = DefaultTurnOutput()
+    res = await runtime.submit("Hello", out)
+    assert res is not None
+    assert "Provider connection failed" in res or "Connection refused" in res
+
+    assert runtime.main_session is not None
+    msgs = runtime.main_session.history.messages
+    assert_valid_history(msgs)
+    assert msgs[-1].role == "assistant"
+    assert msgs[-1].content == res

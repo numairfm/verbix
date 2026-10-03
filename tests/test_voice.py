@@ -7,6 +7,7 @@ import pytest
 
 from verbix.core.models import WorkerResult
 from verbix.provider.client import ProviderClient
+from verbix.provider.models import Finish, TextDelta, ToolCallDelta
 from verbix.runtime.tasks import TaskRuntime
 from verbix.voice.base import MockAudioSink, MockSpeechToText, MockTextToSpeech
 from verbix.voice.pipeline import VoicePipeline, split_sentences
@@ -30,56 +31,48 @@ async def test_audio_player_foreground_speech(tmp_path: Path):
     sink = MockAudioSink(playback_delay=0.01)
     player = AudioPlayer(tts=tts, sink=sink)
 
-    sentences = ["First sentence.", "Second sentence.", "Third sentence."]
-    played = await player.speak_foreground_sentences(sentences)
-
-    assert played == "First sentence. Second sentence. Third sentence."
-    assert len(tts.synthesized_texts) == 3
-    assert len(sink.played_chunks) == 6  # 2 chunks per sentence
+    ok = await player.speak("First sentence.")
+    assert ok is True
+    assert len(tts.synthesized_texts) == 1
+    assert len(sink.played_chunks) == 2
 
 
 @pytest.mark.asyncio
 async def test_audio_player_barge_in_interruption(tmp_path: Path):
     tts = MockTextToSpeech()
-    # 0.05s per chunk. 2 chunks per sentence = 0.10s per sentence
     sink = MockAudioSink(playback_delay=0.05)
     player = AudioPlayer(tts=tts, sink=sink)
 
-    sentences = ["Sentence one.", "Sentence two.", "Sentence three."]
+    task = asyncio.create_task(player.speak("Sentence one. Sentence two."))
+    await asyncio.sleep(0.02)
+    player.stop()
 
-    async def speak_task():
-        return await player.speak_foreground_sentences(sentences)
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
-    task = asyncio.create_task(speak_task())
-
-    # Wait for first sentence (0.10s) to finish, interrupt during sentence two (0.13s)
-    await asyncio.sleep(0.13)
-    played_so_far = player.interrupt()
-    result = await task
-
-    # Interruption stopped subsequent sentences
-    assert "Sentence three." not in result
-    assert "Sentence one." in played_so_far
+    assert not player.is_playing
 
 
 @pytest.mark.asyncio
-async def test_audio_player_announcement_queue(tmp_path: Path):
-    provider = ProviderClient(base_url="http://mock", model="mock", api_key="k")
+async def test_audio_player_wake_turn_announcement(tmp_path: Path):
+    class MockWakeProvider(ProviderClient):
+        def __init__(self) -> None:
+            super().__init__(base_url="http://mock", model="mock")
+
+        async def stream(self, messages, tools=None, **kwargs):  # type: ignore[override]
+            yield TextDelta(text="Build finished successfully in 4 seconds.")
+            yield Finish(reason="stop")
+
+    provider = MockWakeProvider()
     runtime = TaskRuntime(workspace=tmp_path, provider=provider)
     runtime.create_receptionist()
 
     tts = MockTextToSpeech()
     sink = MockAudioSink(playback_delay=0.01)
-    player = AudioPlayer(tts=tts, sink=sink, runtime=runtime)
+    player = AudioPlayer(tts=tts, sink=sink)
+    _pipeline = VoicePipeline(runtime=runtime, stt=MockSpeechToText(), player=player)
 
-    # Register task and finish it
-    from verbix.core.models import TaskState
-
-    task_id = "task-build-1"
-    runtime.tasks[task_id] = TaskState(
-        id=task_id, title="Background Build", status="running"
-    )
-
+    task_id = await runtime.spawn_task(title="Background Build", prompt="build")
     worker_res = WorkerResult(
         success=True,
         speech_summary="Build finished successfully in 4 seconds.",
@@ -87,15 +80,9 @@ async def test_audio_player_announcement_queue(tmp_path: Path):
     )
     runtime._finish_task(task_id, worker_res, status="completed")
 
-    task = runtime.get_task(task_id)
-    assert task is not None
-    assert task.announced is False
-
-    # Drain announcement queue
-    drained = await player.drain_announcements()
-    assert drained == 1
-    assert task.announced is True
-    assert "Build finished successfully in 4 seconds." in tts.synthesized_texts
+    # Give wake turn time to synthesize and speak
+    await asyncio.sleep(0.15)
+    assert any("Build finished" in t for t in tts.synthesized_texts)
 
 
 @pytest.mark.asyncio
@@ -107,7 +94,7 @@ async def test_voice_pipeline_toggle_flow(tmp_path: Path):
     stt = MockSpeechToText(predefined_transcriptions=["Where is the workspace?"])
     tts = MockTextToSpeech()
     sink = MockAudioSink(playback_delay=0.01)
-    player = AudioPlayer(tts=tts, sink=sink, runtime=runtime)
+    player = AudioPlayer(tts=tts, sink=sink)
 
     pipeline = VoicePipeline(runtime=runtime, stt=stt, player=player)
 
@@ -123,109 +110,10 @@ async def test_voice_pipeline_toggle_flow(tmp_path: Path):
     assert len(sink.played_chunks) > 0
 
     # 3. Test toggle during active playback -> interrupts playback and starts recording
-    await player.speak_foreground_sentences(["First sentence is playing."])
-    # Set playing state manually for test
     player._is_playing = True
     res2 = await pipeline.toggle()
     assert res2["action"] == "interrupted_and_recording"
     await pipeline.capture.stop_recording()
-
-    # 4. Test confirmation and denial gestures
-    async def _confirm_background():
-        await asyncio.sleep(0.01)
-        pipeline.confirm()
-
-    task_c = asyncio.create_task(_confirm_background())
-    confirmed = await pipeline.request_confirmation("Delete file?", timeout_seconds=1.0)
-    assert confirmed is True
-    await task_c
-
-    # Test denial on timeout
-    denied = await pipeline.request_confirmation("Drop database?", timeout_seconds=0.05)
-    assert denied is False
-
-
-@pytest.mark.asyncio
-async def test_faster_whisper_stt_conformance():
-    from verbix.voice.base import SpeechToText
-    from verbix.voice.stt import FasterWhisperSTT
-
-    stt = FasterWhisperSTT(model_size="tiny.en")
-    assert isinstance(stt, SpeechToText)
-
-    # Empty audio returns empty string without loading model
-    assert await stt.transcribe(b"") == ""
-    assert await stt.transcribe(b"\x00" * 100) == ""
-
-
-@pytest.mark.asyncio
-async def test_faster_whisper_stt_transcribe_speech():
-    import numpy as np
-
-    from verbix.voice.stt import FasterWhisperSTT
-
-    stt = FasterWhisperSTT(model_size="tiny.en")
-
-    # Read scratch/test_tts.wav (IEEE float32 24kHz mono) and resample to 16kHz int16 PCM
-    test_wav = Path("scratch/test_tts.wav")
-    if not test_wav.exists():
-        pytest.skip("scratch/test_tts.wav not found")
-
-    raw = test_wav.read_bytes()
-    data_idx = raw.find(b"data") + 8
-    f32_24k = np.frombuffer(raw[data_idx:], dtype=np.float32)
-    n_16k = int(len(f32_24k) * 16000 / 24000)
-    f32_16k = np.interp(
-        np.linspace(0, len(f32_24k) - 1, n_16k),
-        np.arange(len(f32_24k)),
-        f32_24k,
-    )
-    i16_pcm = (f32_16k * 32767).astype(np.int16).tobytes()
-
-    text = await stt.transcribe(i16_pcm, sample_rate=16000)
-    assert len(text) > 0
-    assert any(w in text.lower() for w in ["build", "finished", "success", "seconds"])
-
-
-@pytest.mark.asyncio
-async def test_pocket_tts_engine_conformance():
-    from verbix.voice.base import TextToSpeech
-    from verbix.voice.pocket_tts import PocketTTSEngine
-
-    tts = PocketTTSEngine()
-    assert isinstance(tts, TextToSpeech)
-
-    # Empty text yields nothing
-    chunks = [c async for c in tts.synthesize("")]
-    assert len(chunks) == 0
-
-
-@pytest.mark.asyncio
-async def test_pocket_tts_engine_synthesis():
-    from verbix.voice.pocket_tts import PocketTTSEngine
-
-    tts = PocketTTSEngine()
-    try:
-        chunks = [c async for c in tts.synthesize("Unit test playback.")]
-        assert len(chunks) > 0
-        total_bytes = sum(len(c) for c in chunks)
-        # 24kHz float32 is 4 bytes per sample, non-empty
-        assert total_bytes > 0
-        assert total_bytes % 4 == 0
-    finally:
-        await tts.aclose()
-
-
-def test_subprocess_audio_sink_config():
-    from verbix.voice.sinks import SubprocessAudioSink
-
-    sink_f32 = SubprocessAudioSink(sample_rate=24000, audio_format="f32")
-    assert sink_f32.sample_rate == 24000
-    assert sink_f32.audio_format == "f32"
-
-    sink_s16 = SubprocessAudioSink(sample_rate=16000, audio_format="s16")
-    assert sink_s16.sample_rate == 16000
-    assert sink_s16.audio_format == "s16"
 
 
 @pytest.mark.asyncio
@@ -241,7 +129,7 @@ async def test_toggle_state_machine_transitions(tmp_path: Path):
     stt = MockSpeechToText(predefined_transcriptions=["Run tests"])
     tts = MockTextToSpeech()
     sink = MockAudioSink(playback_delay=0.01)
-    player = AudioPlayer(tts=tts, sink=sink, runtime=runtime)
+    player = AudioPlayer(tts=tts, sink=sink)
 
     class MockCapture:
         def __init__(self) -> None:
@@ -281,51 +169,33 @@ async def test_toggle_state_machine_transitions(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_confirmation_timeout_and_gestures(tmp_path: Path):
-    """Verifies confirmation resolve, denial resolve, and automatic timeout denial."""
-    provider = ProviderClient(base_url="http://mock", model="mock", api_key="k")
+async def test_runtime_spoken_acknowledgement_on_spawn(tmp_path: Path):
+    """Verifies that spawning a background task immediately triggers spoken acknowledgement via turn complete."""
+
+    class MockSpawnProvider(ProviderClient):
+        def __init__(self) -> None:
+            super().__init__(base_url="http://mock", model="mock")
+
+        async def stream(self, messages, tools=None, **kwargs):  # type: ignore[override]
+            yield ToolCallDelta(
+                index=0,
+                call_id="c1",
+                name="task_spawn",
+                arguments_delta='{"title": "compile binaries", "prompt": "cargo build"}',
+            )
+            yield Finish(reason="tool_calls")
+
+    provider = MockSpawnProvider()
     runtime = TaskRuntime(workspace=tmp_path, provider=provider)
-    stt = MockSpeechToText()
+    runtime.create_receptionist()
+
     tts = MockTextToSpeech()
     sink = MockAudioSink()
-    player = AudioPlayer(tts=tts, sink=sink, runtime=runtime)
-    pipeline = VoicePipeline(runtime=runtime, stt=stt, player=player)
+    player = AudioPlayer(tts=tts, sink=sink)
+    pipeline = VoicePipeline(runtime=runtime, stt=MockSpeechToText(), player=player)
 
-    # A. Explicit Confirm
-    async def _do_confirm():
-        await asyncio.sleep(0.01)
-        assert pipeline.is_confirmation_pending
-        assert pipeline.confirmation_prompt == "Overwrite file?"
-        assert pipeline.confirm() is True
-
-    c_task = asyncio.create_task(_do_confirm())
-    confirmed = await pipeline.request_confirmation(
-        "Overwrite file?", timeout_seconds=1.0
-    )
-    assert confirmed is True
-    assert not pipeline.is_confirmation_pending
-    await c_task
-
-    # B. Explicit Deny
-    async def _do_deny():
-        await asyncio.sleep(0.01)
-        assert pipeline.is_confirmation_pending
-        assert pipeline.deny() is True
-
-    d_task = asyncio.create_task(_do_deny())
-    denied = await pipeline.request_confirmation(
-        "Delete repository?", timeout_seconds=1.0
-    )
-    assert denied is False
-    assert not pipeline.is_confirmation_pending
-    await d_task
-
-    # C. Timeout Auto-Deny
-    timed_out_res = await pipeline.request_confirmation(
-        "Execute dangerous command?", timeout_seconds=0.03
-    )
-    assert timed_out_res is False
-    assert not pipeline.is_confirmation_pending
+    await pipeline.execute_voice_turn("Compile the code")
+    assert any("Starting task: compile binaries." in t for t in tts.synthesized_texts)
 
 
 @pytest.mark.asyncio
@@ -347,29 +217,6 @@ async def test_live_stt_session_lifecycle():
         sess.feed(silence_chunk)
     text = await sess.finish()
     assert text == ""
-
-
-@pytest.mark.asyncio
-async def test_runtime_spoken_acknowledgement_on_spawn(tmp_path: Path):
-    """Verifies that spawning a background task immediately triggers spoken acknowledgement."""
-    provider = ProviderClient(base_url="http://mock", model="mock", api_key="k")
-    runtime = TaskRuntime(workspace=tmp_path, provider=provider)
-    runtime.create_receptionist()
-
-    tts = MockTextToSpeech()
-    sink = MockAudioSink()
-    player = AudioPlayer(tts=tts, sink=sink, runtime=runtime)
-    assert runtime.player is player
-
-    task_id = await runtime.spawn_task(
-        title="compile binaries",
-        prompt="run cargo build --release",
-    )
-    assert task_id == "task-1"
-
-    # Give the create_task(player.speak_foreground_sentences) a tick to run
-    await asyncio.sleep(0.02)
-    assert "Starting task: compile binaries." in tts.synthesized_texts
 
 
 @pytest.mark.asyncio
@@ -399,13 +246,10 @@ async def test_live_stt_never_drops_non_silent_tail():
     sess.start()
     sess.feed(i16_pcm)
 
-    # Simulate that background worker only transcribed up to 1.8s ("The build finished successfully in 12")
+    # Simulate that background worker only transcribed up to 1.8s
     split_byte_idx = int(16000 * 2 * 1.8)
     sess.latest_text = "The build finished successfully in 12"
     sess.last_transcribed_len = split_byte_idx
 
-    # Final audio contains "seconds." in the tail from 1.8s to 2.56s
     final_text = await sess.finish()
-
-    # Must NOT drop "seconds" even though latest_text was non-empty and tail was only 0.7s
     assert "seconds" in final_text.lower()

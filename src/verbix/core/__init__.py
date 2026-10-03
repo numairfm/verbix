@@ -1,9 +1,6 @@
 from verbix.core.agent import AgentSession, CycleDetector
 from verbix.core.events import (
     AgentEvent,
-    TaskFinishedEvent,
-    TaskProgressEvent,
-    TaskSpawnedEvent,
     TextDelta,
     ThoughtDelta,
     ToolCallFinished,
@@ -28,9 +25,6 @@ __all__ = [
     "ConversationHistory",
     "CycleDetector",
     "Role",
-    "TaskFinishedEvent",
-    "TaskProgressEvent",
-    "TaskSpawnedEvent",
     "TaskState",
     "TaskStatus",
     "TextDelta",

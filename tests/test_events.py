@@ -1,12 +1,10 @@
 from verbix.core.events import (
-    TaskFinishedEvent,
     TextDelta,
     ThoughtDelta,
     ToolCallFinished,
     ToolCallStarted,
     TurnComplete,
 )
-from verbix.core.models import WorkerResult
 
 
 def test_text_and_thought_deltas():
@@ -33,11 +31,6 @@ def test_tool_call_events():
     assert finished.is_error is False
 
 
-def test_turn_complete_and_task_finished():
+def test_turn_complete():
     turn = TurnComplete(final_text="I spawned the build task.")
     assert turn.final_text == "I spawned the build task."
-
-    res = WorkerResult(success=True, speech_summary="Done.", details="Output: ok")
-    t_fin = TaskFinishedEvent(task_id="task-1", result=res)
-    assert t_fin.task_id == "task-1"
-    assert t_fin.result.speech_summary == "Done."

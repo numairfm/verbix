@@ -15,8 +15,8 @@ def test_cli_parser_defaults():
     assert args.max_tokens == 2048
     assert args.voice is False
     assert args.toggle is False
-    assert args.confirm is False
-    assert args.deny is False
+    assert args.isolate_worktrees is False
+    assert args.allow_network is False
 
 
 def test_cli_parser_custom_args():
@@ -32,6 +32,8 @@ def test_cli_parser_custom_args():
             "secret-key",
             "--max-tokens",
             "512",
+            "--isolate-worktrees",
+            "--allow-network",
         ]
     )
     assert args.prompt == "hello world"
@@ -39,6 +41,8 @@ def test_cli_parser_custom_args():
     assert args.base_url == "https://custom.endpoint/v1"
     assert args.api_key == "secret-key"
     assert args.max_tokens == 512
+    assert args.isolate_worktrees is True
+    assert args.allow_network is True
 
 
 def test_load_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -51,15 +55,11 @@ def test_load_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert os.environ.get("TEST_KEY_FOO") == "bar_value"
 
 
-def test_cli_parser_serve_and_direct():
+def test_cli_parser_serve():
     parser = build_parser()
     args_serve = parser.parse_args(["--serve", "--socket-path", "/tmp/test.sock"])
     assert args_serve.serve is True
     assert str(args_serve.socket_path) == "/tmp/test.sock"
-
-    args_direct = parser.parse_args(["--direct", "direct prompt"])
-    assert args_direct.direct is True
-    assert args_direct.prompt == "direct prompt"
 
 
 def test_cli_parser_voice_and_toggle():
@@ -69,9 +69,3 @@ def test_cli_parser_voice_and_toggle():
 
     args_toggle = parser.parse_args(["--toggle"])
     assert args_toggle.toggle is True
-
-    args_confirm = parser.parse_args(["--confirm"])
-    assert args_confirm.confirm is True
-
-    args_deny = parser.parse_args(["--deny"])
-    assert args_deny.deny is True

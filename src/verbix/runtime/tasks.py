@@ -68,6 +68,9 @@ class TaskRuntime:
         self.is_main_turn_active: bool = False
         self._pending_completions: list[tuple[str, str, WorkerResult]] = []
 
+        # Optional audio player for runtime-spoken acknowledgements
+        self.player: Any = None
+
     def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
         """Registers a subscriber queue to receive runtime events."""
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -219,6 +222,12 @@ class TaskRuntime:
         self._steer_queues[task_id] = asyncio.Queue()
 
         self._broadcast("task_spawned", {"task_id": task_id, "title": title})
+
+        # Immediate runtime-spoken acknowledgement
+        if self.player is not None:
+            asyncio.create_task(
+                self.player.speak_foreground_sentences([f"Starting task: {title}."])
+            )
 
         # Launch background worker task
         worker_coro = self._run_worker(

@@ -21,7 +21,7 @@ class FasterWhisperSTT:
         model_size: str = "tiny.en",
         device: str = "cpu",
         compute_type: str = "int8",
-        threads: int = 4,
+        threads: int = 6,
     ) -> None:
         self.model_size = model_size
         self.device = device
@@ -127,7 +127,7 @@ class LiveSTTSession:
         self.last_transcribed_len: int = 0
         self._running: bool = False
         self._loop_task: asyncio.Task[None] | None = None
-        self._in_flight_task: asyncio.Task[tuple[str, int]] | None = None
+        self._worker_task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
         self.buf.clear()
@@ -142,55 +142,71 @@ class LiveSTTSession:
 
     async def _transcribe_loop(self) -> None:
         while self._running:
-            await asyncio.sleep(0.12)
+            await asyncio.sleep(0.04)
             curr_len = len(self.buf)
-            # If at least 0.4s new audio has accumulated and no worker is in flight
-            if (
-                curr_len - self.last_transcribed_len >= self.sample_rate * 2 * 0.4
-                and self._in_flight_task is None
+            # If idle and at least 0.3s new audio has accumulated since last snapshot
+            if self._worker_task is None and (
+                curr_len - self.last_transcribed_len >= self.sample_rate * 2 * 0.30
             ):
                 snapshot = bytes(self.buf)
                 snapshot_len = len(snapshot)
 
                 async def _worker(
                     snap: bytes = snapshot, s_len: int = snapshot_len
-                ) -> tuple[str, int]:
-                    text = await self.stt.transcribe(snap, sample_rate=self.sample_rate)
-                    return text, s_len
+                ) -> None:
+                    try:
+                        text = await self.stt.transcribe(
+                            snap, sample_rate=self.sample_rate
+                        )
+                        self.latest_text = text
+                        self.last_transcribed_len = s_len
+                    except (asyncio.CancelledError, RuntimeError, OSError) as e:
+                        logger.debug("Live STT worker error: %s", e)
+                    finally:
+                        self._worker_task = None
 
-                self._in_flight_task = asyncio.create_task(_worker())
-                try:
-                    text, committed_len = await self._in_flight_task
-                    self.latest_text = text
-                    self.last_transcribed_len = committed_len
-                except (asyncio.CancelledError, RuntimeError, OSError) as e:
-                    logger.debug("Live STT worker interrupted: %s", e)
-                finally:
-                    self._in_flight_task = None
+                self._worker_task = asyncio.create_task(_worker())
 
     async def finish(self, final_audio: bytes | None = None) -> str:
         self._running = False
         if final_audio:
             self.buf = bytearray(final_audio)
 
-        # Await any in-flight background worker
-        if self._in_flight_task is not None and not self._in_flight_task.done():
-            try:
-                text, committed_len = await self._in_flight_task
-                self.latest_text = text
-                self.last_transcribed_len = committed_len
-            except (asyncio.CancelledError, RuntimeError, OSError) as e:
-                logger.debug("Live STT finish worker error: %s", e)
-
         if self._loop_task and not self._loop_task.done():
             self._loop_task.cancel()
 
-        # If trailing audio since last transcription is small (<0.35s), use latest_text
+        # Await any in-flight background worker to incorporate its progress
+        if self._worker_task is not None and not self._worker_task.done():
+            try:
+                await self._worker_task
+            except (asyncio.CancelledError, RuntimeError, OSError) as e:
+                logger.debug("Live STT finish worker await error: %s", e)
+
         tail_bytes = len(self.buf) - self.last_transcribed_len
-        if self.latest_text and tail_bytes < self.sample_rate * 2 * 0.35:
+        if tail_bytes <= 0:
             return self.latest_text
 
-        # Otherwise do final pass on accumulated buffer
+        # If background transcription has produced text, examine the trailing audio
+        if self.latest_text:
+            import numpy as np
+
+            tail_pcm = bytes(self.buf[self.last_transcribed_len :])
+            audio_int = np.frombuffer(tail_pcm, dtype=np.int16)
+            rms = (
+                float(np.sqrt(np.mean(audio_int.astype(np.float32) ** 2)))
+                if audio_int.size > 0
+                else 0.0
+            )
+
+            # If trailing audio is short (<0.40s) and quiet (RMS < 500), speech already concluded
+            if tail_bytes < self.sample_rate * 2 * 0.40 and rms < 500.0:
+                return self.latest_text
+
+            # If trailing audio is quiet even if slightly longer (RMS < 300)
+            if rms < 300.0:
+                return self.latest_text
+
+        # If there is real speech in the tail that hasn't been transcribed, do final pass
         if len(self.buf) > 320:
             return await self.stt.transcribe(
                 bytes(self.buf), sample_rate=self.sample_rate

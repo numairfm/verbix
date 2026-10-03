@@ -33,6 +33,7 @@ class ToolCallDelta(StreamEvent):
 class Usage(StreamEvent):
     prompt_tokens: int
     completion_tokens: int
+    reasoning_tokens: int = 0
 
 
 @dataclass(frozen=True)

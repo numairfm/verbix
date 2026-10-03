@@ -39,6 +39,8 @@ class VoicePipeline:
         self.stt = stt
         self.player = player
         self.capture = capture or PTTCapture()
+        if self.runtime is not None:
+            self.runtime.player = self.player
 
         self._is_active_turn = False
         self._live_stt: Any = None

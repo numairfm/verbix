@@ -28,6 +28,8 @@ class AudioPlayer:
         self.tts = tts
         self.sink = sink
         self.runtime = runtime
+        if self.runtime is not None:
+            self.runtime.player = self
 
         self._active_play_task: asyncio.Task[None] | None = None
         self._is_interrupted: bool = False

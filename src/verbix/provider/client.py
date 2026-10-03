@@ -36,6 +36,7 @@ class ProviderClient:
         timeout: float = 60.0,
         max_tokens: int | None = 2048,
         http_client: httpx2.AsyncClient | None = None,
+        default_extra_body: dict[str, Any] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -43,6 +44,7 @@ class ProviderClient:
         self.timeout = timeout
         self.max_tokens = max_tokens
         self._external_client = http_client
+        self.default_extra_body = default_extra_body
 
     def _get_client(self) -> httpx2.AsyncClient:
         if self._external_client is not None:
@@ -90,6 +92,7 @@ class ProviderClient:
             "model": self.model,
             "messages": self._serialize_messages(messages),
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
         if effective_max_tokens is not None:
@@ -98,6 +101,8 @@ class ProviderClient:
             payload["tools"] = [t.model_dump() for t in tools]
         if reasoning_effort:
             payload["reasoning"] = {"effort": reasoning_effort}
+        if self.default_extra_body:
+            payload.update(self.default_extra_body)
         if extra_body:
             payload.update(extra_body)
 
@@ -200,9 +205,17 @@ class ProviderClient:
                     # Usage metadata
                     usage = chunk.get("usage")
                     if usage:
+                        reasoning_tokens = 0
+                        comp_details = usage.get("completion_tokens_details")
+                        if isinstance(comp_details, dict):
+                            reasoning_tokens = comp_details.get("reasoning_tokens", 0)
+                        elif "reasoning_tokens" in usage:
+                            reasoning_tokens = usage.get("reasoning_tokens", 0)
+
                         yield Usage(
                             prompt_tokens=usage.get("prompt_tokens", 0),
                             completion_tokens=usage.get("completion_tokens", 0),
+                            reasoning_tokens=reasoning_tokens,
                         )
         finally:
             if owns_client:

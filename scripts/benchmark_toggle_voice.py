@@ -160,8 +160,7 @@ async def main() -> None:
         s = sorted(arr)
         p50 = s[len(s) // 2]
         p95 = s[int(len(s) * 0.95)]
-        mean = sum(s) / len(s)
-        return f"p50: {p50:6.1f}ms | p95: {p95:6.1f}ms | mean: {mean:6.1f}ms (min: {min(s):5.1f}ms, max: {max(s):5.1f}ms)"
+        return f"p50: {p50:6.1f} ms | p95: {p95:6.1f} ms"
 
     print("\n" + "=" * 70)
     print("VOICE LATENCY BREAKDOWN (10 Runs):")

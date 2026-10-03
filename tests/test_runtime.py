@@ -226,7 +226,9 @@ async def test_orchestration_tools(tmp_path: Path, mock_provider: ProviderClient
     # 1. Spawn
     res = await spawn_tool.execute({"title": "Test Task", "prompt": "Run test"}, ctx)
     assert not res.is_error
-    assert "task-1" in res.observation
+    assert res.is_terminal is True
+    assert "Starting task: Test Task." in res.observation
+    assert "task-1" in runtime.tasks
 
     # 2. Status
     res_status = await status_tool.execute({"task_id": "task-1"}, ctx)
@@ -367,8 +369,59 @@ async def test_task_spawn_workspace_awareness(
         ctx,
     )
     assert not res.is_error
-    assert "spawned with id" in res.observation
+    assert res.is_terminal is True
+    assert "Starting task: Check files." in res.observation
     task_id = "task-1"
     task = runtime.get_task(task_id)
     assert task is not None
     assert task.workspace == tmp_path
+
+
+@pytest.mark.asyncio
+async def test_task_spawn_terminal_turn_and_history_parity(tmp_path: Path):
+    """Verifies that a successful task_spawn ends the turn immediately with the spoken ack,
+
+    omits a second LLM call, and records the spoken ack in history per the parity rule.
+    """
+    from verbix.core.events import TurnComplete
+    from verbix.provider.models import Finish, ToolCallDelta
+
+    calls_made = 0
+
+    class MockSingleTurnProvider(ProviderClient):
+        def __init__(self) -> None:
+            super().__init__(base_url="http://mock", model="mock")
+
+        async def stream(self, messages, tools=None, **kwargs):  # type: ignore[override]
+            nonlocal calls_made
+            calls_made += 1
+            # First and only call: emit task_spawn tool call
+            yield ToolCallDelta(
+                index=0,
+                call_id="call-spawn-1",
+                name="task_spawn",
+                arguments_delta='{"title": "Run full test suite", "prompt": "pytest -v"}',
+            )
+            yield Finish(reason="tool_calls")
+
+    provider = MockSingleTurnProvider()
+    runtime = TaskRuntime(workspace=tmp_path, provider=provider)
+    runtime.create_receptionist()
+
+    events = []
+    async for event in runtime.step_receptionist(user_input="Run the tests"):
+        events.append(event)
+
+    # 1. Exactly one LLM call made (no second turn call)
+    assert calls_made == 1
+
+    # 2. Turn completed with the spoken acknowledgement
+    turn_completes = [e for e in events if isinstance(e, TurnComplete)]
+    assert len(turn_completes) == 1
+    assert turn_completes[0].final_text == "Starting task: Run full test suite."
+
+    # 3. Parity rule: history records the spoken ack as the assistant message
+    assert runtime.main_session is not None
+    last_msg = runtime.main_session.history.messages[-1]
+    assert last_msg.role == "assistant"
+    assert last_msg.content == "Starting task: Run full test suite."

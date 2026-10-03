@@ -123,13 +123,16 @@ class TaskSpawnTool:
                 is_error=True,
             )
 
-        task_id = await self.runtime.spawn_task(
+        await self.runtime.spawn_task(
             title=title,
             prompt=prompt,
             isolate_worktree=isolate,
         )
+        spoken_title = title if len(title) <= 45 else title[:42].rstrip() + "..."
+        ack_text = f"Starting task: {spoken_title}."
         return ToolResult(
-            observation=f"Task '{title}' spawned with id '{task_id}'. It is now running in the background."
+            observation=ack_text,
+            is_terminal=True,
         )
 
 

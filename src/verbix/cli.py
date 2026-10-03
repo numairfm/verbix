@@ -100,6 +100,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum completion tokens per turn (default: 2048)",
     )
     parser.add_argument(
+        "--receptionist-model",
+        type=str,
+        default=None,
+        help="Model for the receptionist agent (overrides --model).",
+    )
+    parser.add_argument(
+        "--worker-model",
+        type=str,
+        default=None,
+        help="Model for background autonomous workers (overrides --model).",
+    )
+    parser.add_argument(
         "--direct",
         action="store_true",
         help="Run direct foreground coding agent instead of background receptionist runtime.",
@@ -250,7 +262,12 @@ async def async_main(args: argparse.Namespace) -> int:
         socket_path = args.socket_path or (
             Path.home() / ".local" / "share" / "verbix" / "verbix.sock"
         )
-        runtime = TaskRuntime(workspace=workspace, provider=provider)
+        runtime = TaskRuntime(
+            workspace=workspace,
+            provider=provider,
+            receptionist_model=args.receptionist_model,
+            worker_model=args.worker_model,
+        )
         runtime.create_receptionist()
 
         pipeline: VoicePipeline | None = None
@@ -284,7 +301,12 @@ async def async_main(args: argparse.Namespace) -> int:
         return 0
 
     if args.voice:
-        runtime = TaskRuntime(workspace=workspace, provider=provider)
+        runtime = TaskRuntime(
+            workspace=workspace,
+            provider=provider,
+            receptionist_model=args.receptionist_model,
+            worker_model=args.worker_model,
+        )
         runtime.create_receptionist()
         stt = FasterWhisperSTT()
         tts = PocketTTSEngine()
@@ -420,7 +442,12 @@ async def async_main(args: argparse.Namespace) -> int:
         return 0
 
     # Default: TaskRuntime Receptionist orchestration
-    runtime = TaskRuntime(workspace=workspace, provider=provider)
+    runtime = TaskRuntime(
+        workspace=workspace,
+        provider=provider,
+        receptionist_model=args.receptionist_model,
+        worker_model=args.worker_model,
+    )
     runtime.create_receptionist()
 
     def print_announcements() -> None:

@@ -44,12 +44,40 @@ class ProviderClient:
         self.timeout = timeout
         self.max_tokens = max_tokens
         self._external_client = http_client
+        self._client: httpx2.AsyncClient | None = http_client
         self.default_extra_body = default_extra_body
 
     def _get_client(self) -> httpx2.AsyncClient:
-        if self._external_client is not None:
-            return self._external_client
-        return httpx2.AsyncClient(timeout=self.timeout)
+        if self._client is None:
+            self._client = httpx2.AsyncClient(timeout=self.timeout)
+        return self._client
+
+    async def warm(self) -> None:
+        """Warms the network connection by establishing a pooled TLS keep-alive session."""
+        try:
+            client = self._get_client()
+            headers = (
+                {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+            )
+            await client.get(f"{self.base_url}/models", headers=headers)
+        except (httpx2.HTTPError, OSError, RuntimeError):
+            pass
+
+    async def measure_network_rtt(self) -> float:
+        """Measures raw network RTT to endpoint in milliseconds."""
+        client = self._get_client()
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        import time
+
+        t0 = time.perf_counter()
+        await client.get(f"{self.base_url}/models", headers=headers)
+        return (time.perf_counter() - t0) * 1000.0
+
+    async def aclose(self) -> None:
+        """Closes the underlying persistent HTTP client."""
+        if self._client is not None and self._external_client is None:
+            await self._client.aclose()
+            self._client = None
 
     def _serialize_messages(
         self, messages: list[CanonicalMessage]
@@ -87,6 +115,32 @@ class ProviderClient:
         max_tokens: int | None = None,
         extra_body: dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamEvent]:
+        """Streams events, retrying once on a stale pooled connection if nothing was yielded yet."""
+        yielded = False
+        for attempt in range(2):
+            try:
+                async for event in self._stream_once(
+                    messages, tools, reasoning_effort, max_tokens, extra_body
+                ):
+                    yielded = True
+                    yield event
+                return
+            except (httpx2.ReadError, httpx2.RemoteProtocolError, httpx2.ConnectError):
+                if yielded or attempt == 1:
+                    raise
+                # Drop the dead pooled connection and retry on a fresh one.
+                if self._external_client is None and self._client is not None:
+                    await self._client.aclose()
+                    self._client = None
+
+    async def _stream_once(
+        self,
+        messages: list[CanonicalMessage],
+        tools: list[ToolDefinition] | None = None,
+        reasoning_effort: str | None = None,
+        max_tokens: int | None = None,
+        extra_body: dict[str, Any] | None = None,
+    ) -> AsyncIterator[StreamEvent]:
         """Streams completion events from the provider endpoint via Server-Sent Events (SSE)."""
         payload: dict[str, Any] = {
             "model": self.model,
@@ -116,107 +170,100 @@ class ProviderClient:
         url = f"{self.base_url}/chat/completions"
 
         client = self._get_client()
-        owns_client = self._external_client is None
 
-        try:
-            async with client.stream(
-                "POST", url, json=payload, headers=headers
-            ) as response:
-                if response.status_code == 401:
-                    err_body = await response.aread()
-                    raise AuthenticationError(
-                        f"Authentication failed: {err_body.decode('utf-8', errors='replace')}",
-                        status_code=401,
-                    )
-                if response.status_code == 429:
-                    err_body = await response.aread()
-                    raise RateLimitError(
-                        f"Rate limit exceeded: {err_body.decode('utf-8', errors='replace')}",
-                        status_code=429,
-                    )
-                if response.status_code == 400:
-                    err_body = await response.aread()
-                    raise InvalidRequestError(
-                        f"Invalid request: {err_body.decode('utf-8', errors='replace')}",
-                        status_code=400,
-                    )
-                if response.status_code >= 500:
-                    err_body = await response.aread()
-                    raise ServerError(
-                        f"Server error {response.status_code}: {err_body.decode('utf-8', errors='replace')}",
-                        status_code=response.status_code,
-                    )
-                if response.status_code != 200:
-                    err_body = await response.aread()
-                    raise ProviderError(
-                        f"HTTP error {response.status_code}: {err_body.decode('utf-8', errors='replace')}",
-                        status_code=response.status_code,
-                    )
+        async with client.stream(
+            "POST", url, json=payload, headers=headers
+        ) as response:
+            if response.status_code == 401:
+                err_body = await response.aread()
+                raise AuthenticationError(
+                    f"Authentication failed: {err_body.decode('utf-8', errors='replace')}",
+                    status_code=401,
+                )
+            if response.status_code == 429:
+                err_body = await response.aread()
+                raise RateLimitError(
+                    f"Rate limit exceeded: {err_body.decode('utf-8', errors='replace')}",
+                    status_code=429,
+                )
+            if response.status_code == 400:
+                err_body = await response.aread()
+                raise InvalidRequestError(
+                    f"Invalid request: {err_body.decode('utf-8', errors='replace')}",
+                    status_code=400,
+                )
+            if response.status_code >= 500:
+                err_body = await response.aread()
+                raise ServerError(
+                    f"Server error {response.status_code}: {err_body.decode('utf-8', errors='replace')}",
+                    status_code=response.status_code,
+                )
+            if response.status_code != 200:
+                err_body = await response.aread()
+                raise ProviderError(
+                    f"HTTP error {response.status_code}: {err_body.decode('utf-8', errors='replace')}",
+                    status_code=response.status_code,
+                )
 
-                async for line in response.aiter_lines():
-                    trimmed = line.strip()
-                    if not trimmed or not trimmed.startswith("data:"):
-                        continue
+            async for line in response.aiter_lines():
+                trimmed = line.strip()
+                if not trimmed or not trimmed.startswith("data:"):
+                    continue
 
-                    data_str = trimmed[5:].strip()
-                    if data_str == "[DONE]":
-                        break
+                data_str = trimmed[5:].strip()
+                if data_str == "[DONE]":
+                    break
 
-                    try:
-                        chunk = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
 
-                    choices = chunk.get("choices", [])
-                    if choices:
-                        delta = choices[0].get("delta", {})
+                choices = chunk.get("choices", [])
+                if choices:
+                    delta = choices[0].get("delta", {})
 
-                        # 1. Structured reasoning/thought delta (OpenRouter / DeepSeek / vLLM style)
-                        reasoning = delta.get("reasoning_content") or delta.get(
-                            "reasoning"
+                    # 1. Structured reasoning/thought delta (OpenRouter / DeepSeek / vLLM style)
+                    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                    if reasoning:
+                        yield ThoughtDelta(thought=reasoning)
+
+                    # 2. Assistant text content delta
+                    content = delta.get("content")
+                    if content:
+                        yield TextDelta(text=content)
+
+                    # 3. Tool call streaming deltas
+                    tool_calls = delta.get("tool_calls", [])
+                    for tc in tool_calls:
+                        idx = tc.get("index", 0)
+                        call_id = tc.get("id")
+                        fn = tc.get("function", {})
+                        fn_name = fn.get("name")
+                        args_delta = fn.get("arguments", "")
+                        yield ToolCallDelta(
+                            index=idx,
+                            call_id=call_id,
+                            name=fn_name,
+                            arguments_delta=args_delta,
                         )
-                        if reasoning:
-                            yield ThoughtDelta(thought=reasoning)
 
-                        # 2. Assistant text content delta
-                        content = delta.get("content")
-                        if content:
-                            yield TextDelta(text=content)
+                    finish_reason = choices[0].get("finish_reason")
+                    if finish_reason:
+                        yield Finish(reason=finish_reason)
 
-                        # 3. Tool call streaming deltas
-                        tool_calls = delta.get("tool_calls", [])
-                        for tc in tool_calls:
-                            idx = tc.get("index", 0)
-                            call_id = tc.get("id")
-                            fn = tc.get("function", {})
-                            fn_name = fn.get("name")
-                            args_delta = fn.get("arguments", "")
-                            yield ToolCallDelta(
-                                index=idx,
-                                call_id=call_id,
-                                name=fn_name,
-                                arguments_delta=args_delta,
-                            )
+                # Usage metadata
+                usage = chunk.get("usage")
+                if usage:
+                    reasoning_tokens = 0
+                    comp_details = usage.get("completion_tokens_details")
+                    if isinstance(comp_details, dict):
+                        reasoning_tokens = comp_details.get("reasoning_tokens", 0)
+                    elif "reasoning_tokens" in usage:
+                        reasoning_tokens = usage.get("reasoning_tokens", 0)
 
-                        finish_reason = choices[0].get("finish_reason")
-                        if finish_reason:
-                            yield Finish(reason=finish_reason)
-
-                    # Usage metadata
-                    usage = chunk.get("usage")
-                    if usage:
-                        reasoning_tokens = 0
-                        comp_details = usage.get("completion_tokens_details")
-                        if isinstance(comp_details, dict):
-                            reasoning_tokens = comp_details.get("reasoning_tokens", 0)
-                        elif "reasoning_tokens" in usage:
-                            reasoning_tokens = usage.get("reasoning_tokens", 0)
-
-                        yield Usage(
-                            prompt_tokens=usage.get("prompt_tokens", 0),
-                            completion_tokens=usage.get("completion_tokens", 0),
-                            reasoning_tokens=reasoning_tokens,
-                        )
-        finally:
-            if owns_client:
-                await client.aclose()
+                    yield Usage(
+                        prompt_tokens=usage.get("prompt_tokens", 0),
+                        completion_tokens=usage.get("completion_tokens", 0),
+                        reasoning_tokens=reasoning_tokens,
+                    )

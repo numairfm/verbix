@@ -97,6 +97,10 @@ class VoicePipeline:
             self._live_stt.start()
             self.capture.on_chunk = self._live_stt.feed
 
+        # Warm provider connection in background so TLS handshake is complete before speech ends
+        if hasattr(self.runtime, "provider") and hasattr(self.runtime.provider, "warm"):
+            asyncio.create_task(self.runtime.provider.warm())
+
         await self.capture.start_recording()
 
     async def stop_recording_and_process(self) -> dict[str, Any]:

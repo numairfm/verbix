@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -152,13 +153,43 @@ class AgentSession:
                 canonical_calls: list[CanonicalToolCall] = []
                 for idx in sorted(tool_call_chunks.keys()):
                     c = tool_call_chunks[idx]
-                    canonical_calls.append(
-                        CanonicalToolCall(
-                            id=c["id"] or f"call_{idx}",
-                            name=c["name"],
-                            arguments="".join(c["args"]),
+                    raw_args = "".join(c["args"]).strip()
+                    # Support multiple concatenated JSON objects emitted in a single tool call stream
+                    # (common in open models like Gemma when requesting multiple tool executions)
+                    sub_jsons: list[str] = []
+                    if raw_args.startswith("{"):
+                        dec = json.JSONDecoder()
+                        pos = 0
+                        while pos < len(raw_args):
+                            while pos < len(raw_args) and raw_args[pos].isspace():
+                                pos += 1
+                            if pos >= len(raw_args):
+                                break
+                            try:
+                                _, end_pos = dec.raw_decode(raw_args, idx=pos)
+                                sub_jsons.append(raw_args[pos:end_pos])
+                                pos = end_pos
+                            except json.JSONDecodeError:
+                                break
+
+                    if len(sub_jsons) > 1:
+                        base_id = c["id"] or f"call_{idx}"
+                        for sub_i, s_json in enumerate(sub_jsons):
+                            canonical_calls.append(
+                                CanonicalToolCall(
+                                    id=f"{base_id}_{sub_i}",
+                                    name=c["name"],
+                                    arguments=s_json,
+                                )
+                            )
+                    else:
+                        canonical_calls.append(
+                            CanonicalToolCall(
+                                id=c["id"] or f"call_{idx}",
+                                name=c["name"],
+                                arguments=raw_args,
+                            )
                         )
-                    )
 
                 # Commit assistant turn to history
                 thought_str = (
@@ -218,6 +249,7 @@ class AgentSession:
                     )
 
                 if terminal_requested:
+                    self.history.append_assistant(content=terminal_observation)
                     yield TurnComplete(final_text=terminal_observation)
                     return
 

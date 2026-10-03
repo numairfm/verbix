@@ -65,6 +65,12 @@ class FasterWhisperSTT:
             model = self._load_model()
             dummy = np.zeros(16000, dtype=np.float32)
             list(model.transcribe(dummy, beam_size=1)[0])
+            try:
+                from faster_whisper.vad import get_speech_timestamps
+
+                get_speech_timestamps(dummy)
+            except (OSError, RuntimeError, ValueError):
+                pass
 
         await asyncio.to_thread(_do_warmup)
 
@@ -186,27 +192,39 @@ class LiveSTTSession:
         if tail_bytes <= 0:
             return self.latest_text
 
-        # If background transcription has produced text, examine the trailing audio
+        # If background transcription has produced text, examine the trailing audio using neural VAD
         if self.latest_text:
             import numpy as np
 
             tail_pcm = bytes(self.buf[self.last_transcribed_len :])
             audio_int = np.frombuffer(tail_pcm, dtype=np.int16)
-            rms = (
-                float(np.sqrt(np.mean(audio_int.astype(np.float32) ** 2)))
-                if audio_int.size > 0
-                else 0.0
-            )
-
-            # If trailing audio is short (<0.40s) and quiet (RMS < 500), speech already concluded
-            if tail_bytes < self.sample_rate * 2 * 0.40 and rms < 500.0:
+            if audio_int.size < 320:  # < 10ms
                 return self.latest_text
 
-            # If trailing audio is quiet even if slightly longer (RMS < 300)
-            if rms < 300.0:
-                return self.latest_text
+            audio_float = (audio_int.astype(np.float32) / 32768.0).astype(np.float32)
+            if self.sample_rate != 16000 and len(audio_float) > 0:
+                n_target = int(len(audio_float) * 16000 / self.sample_rate)
+                audio_float = np.interp(
+                    np.linspace(0, len(audio_float) - 1, n_target),
+                    np.arange(len(audio_float)),
+                    audio_float,
+                ).astype(np.float32)
 
-        # If there is real speech in the tail that hasn't been transcribed, do final pass
+            try:
+                from faster_whisper.vad import get_speech_timestamps
+
+                speech_segments = get_speech_timestamps(
+                    audio_float, sampling_rate=16000
+                )
+                # If no speech is detected in the tail, return latest_text immediately
+                if not speech_segments:
+                    return self.latest_text
+            except (OSError, RuntimeError, ValueError) as e:
+                logger.debug(
+                    "VAD tail check error, falling back to full transcribe: %s", e
+                )
+
+        # If speech was detected in the tail (e.g. final word), never drop it: transcribe full buffer
         if len(self.buf) > 320:
             return await self.stt.transcribe(
                 bytes(self.buf), sample_rate=self.sample_rate

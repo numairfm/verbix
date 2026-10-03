@@ -43,10 +43,16 @@ class TaskRuntime:
         workspace: Path,
         provider: ProviderClient,
         max_worker_turns: int = 30,
+        receptionist_model: str | None = None,
+        worker_model: str | None = None,
+        receptionist_reasoning_effort: str | None = None,
     ) -> None:
         self.workspace = workspace.resolve()
         self.provider = provider
         self.max_worker_turns = max_worker_turns
+        self.receptionist_model = receptionist_model or provider.model
+        self.worker_model = worker_model or provider.model
+        self.receptionist_reasoning_effort = receptionist_reasoning_effort
         self.worktree_manager = WorktreeManager(self.workspace)
 
         # In-memory task registry (plain dict)
@@ -100,10 +106,24 @@ class TaskRuntime:
             TaskStatusTool(self),
         ]
 
+    def _get_provider_for_model(self, model: str) -> ProviderClient:
+        """Returns a ProviderClient targeting the given model, reusing base config if identical."""
+        if model == self.provider.model:
+            return self.provider
+        return ProviderClient(
+            base_url=self.provider.base_url,
+            model=model,
+            api_key=self.provider.api_key,
+            timeout=self.provider.timeout,
+            max_tokens=self.provider.max_tokens,
+            default_extra_body=self.provider.default_extra_body,
+        )
+
     def create_receptionist(
         self,
         system_prompt: str | None = None,
         history: ConversationHistory | None = None,
+        reasoning_effort: str | None = None,
     ) -> AgentSession:
         """Initializes and returns the main receptionist AgentSession."""
         default_prompt = (
@@ -117,14 +137,18 @@ class TaskRuntime:
             "Keep your spoken responses concise, natural, and conversational."
         )
         tools = self.get_receptionist_tools()
+        provider = self._get_provider_for_model(self.receptionist_model)
+        eff = reasoning_effort or self.receptionist_reasoning_effort
+        if eff is None:
+            eff = "none" if "gemma" in self.receptionist_model.lower() else "minimal"
         session = AgentSession(
             session_id="receptionist-main",
             system_prompt=system_prompt or default_prompt,
-            provider=self.provider,
+            provider=provider,
             workspace=self.workspace,
             tools=tools,
             history=history,
-            reasoning_effort="low",
+            reasoning_effort=eff,
         )
         self.main_session = session
         return session
@@ -225,8 +249,11 @@ class TaskRuntime:
 
         # Immediate runtime-spoken acknowledgement
         if self.player is not None:
+            spoken_title = title if len(title) <= 45 else title[:42].rstrip() + "..."
             asyncio.create_task(
-                self.player.speak_foreground_sentences([f"Starting task: {title}."])
+                self.player.speak_foreground_sentences(
+                    [f"Starting task: {spoken_title}."]
+                )
             )
 
         # Launch background worker task
@@ -383,10 +410,11 @@ class TaskRuntime:
             "- details: complete technical details, modified files, diffs, test logs, or error traces."
         )
 
+        worker_provider = self._get_provider_for_model(self.worker_model)
         session = AgentSession(
             session_id=f"worker-{task_id}",
             system_prompt=system_prompt,
-            provider=self.provider,
+            provider=worker_provider,
             workspace=worker_dir,
             tools=worker_tools,
             max_turns=self.max_worker_turns,

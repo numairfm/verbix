@@ -370,3 +370,42 @@ async def test_runtime_spoken_acknowledgement_on_spawn(tmp_path: Path):
     # Give the create_task(player.speak_foreground_sentences) a tick to run
     await asyncio.sleep(0.02)
     assert "Starting task: compile binaries." in tts.synthesized_texts
+
+
+@pytest.mark.asyncio
+async def test_live_stt_never_drops_non_silent_tail():
+    """Regression test: verifies that LiveSTT never drops a short non-silent tail (e.g. final word)."""
+    import numpy as np
+
+    from verbix.voice.stt import FasterWhisperSTT
+
+    test_wav = Path("scratch/test_tts.wav")
+    if not test_wav.exists():
+        pytest.skip("scratch/test_tts.wav not found")
+
+    raw = test_wav.read_bytes()
+    data_idx = raw.find(b"data") + 8
+    f32_24k = np.frombuffer(raw[data_idx:], dtype=np.float32)
+    n_16k = int(len(f32_24k) * 16000 / 24000)
+    f32_16k = np.interp(
+        np.linspace(0, len(f32_24k) - 1, n_16k),
+        np.arange(len(f32_24k)),
+        f32_24k,
+    ).astype(np.float32)
+    i16_pcm = (f32_16k * 32767).astype(np.int16).tobytes()
+
+    stt = FasterWhisperSTT(model_size="tiny.en")
+    sess = stt.create_live_session()
+    sess.start()
+    sess.feed(i16_pcm)
+
+    # Simulate that background worker only transcribed up to 1.8s ("The build finished successfully in 12")
+    split_byte_idx = int(16000 * 2 * 1.8)
+    sess.latest_text = "The build finished successfully in 12"
+    sess.last_transcribed_len = split_byte_idx
+
+    # Final audio contains "seconds." in the tail from 1.8s to 2.56s
+    final_text = await sess.finish()
+
+    # Must NOT drop "seconds" even though latest_text was non-empty and tail was only 0.7s
+    assert "seconds" in final_text.lower()

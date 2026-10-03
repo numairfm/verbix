@@ -35,12 +35,37 @@ class AudioPlayer:
         self._played_text: str = ""
         self._current_task_id: str | None = None
 
-        # Lock to ensure only one item plays at a time
         self._playback_lock = asyncio.Lock()
+        self._is_playing: bool = False
 
     @property
     def is_playing(self) -> bool:
-        return self._active_play_task is not None and not self._active_play_task.done()
+        return self._is_playing or (
+            self._active_play_task is not None and not self._active_play_task.done()
+        )
+
+    async def play_cue(self) -> None:
+        """Plays an instant audible earcon/cue sound to acknowledge capture stop."""
+        try:
+            import numpy as np
+
+            sample_rate = getattr(self.sink, "sample_rate", 24000)
+            fmt = getattr(self.sink, "audio_format", "f32")
+            duration = 0.05
+            t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+            envelope = np.sin(np.pi * np.linspace(0, 1, len(t))) ** 2
+            wave_f32 = (np.sin(2 * np.pi * 880.0 * t) * envelope * 0.25).astype(
+                np.float32
+            )
+
+            if fmt == "f32":
+                cue_bytes = wave_f32.tobytes()
+            else:
+                cue_bytes = (wave_f32 * 32767).astype(np.int16).tobytes()
+
+            await self.sink.play(cue_bytes)
+        except (OSError, RuntimeError) as e:
+            logger.debug("Failed to play cue sound: %s", e)
 
     def interrupt(self) -> str:
         """Instantly halts any active audio playback on the sink and cancels the playback task.
@@ -48,6 +73,7 @@ class AudioPlayer:
         Returns the text that was successfully played before the interruption.
         """
         self._is_interrupted = True
+        self._is_playing = False
         self.sink.stop()
 
         if self._active_play_task and not self._active_play_task.done():
@@ -65,22 +91,26 @@ class AudioPlayer:
         Returns the accumulated text that was actually spoken before any interruption.
         """
         async with self._playback_lock:
-            self._is_interrupted = False
-            self._current_task_id = None
-            self._played_text = ""
+            self._is_playing = True
+            try:
+                self._is_interrupted = False
+                self._current_task_id = None
+                self._played_text = ""
 
-            for sentence in sentences:
-                if self._is_interrupted:
-                    break
+                for sentence in sentences:
+                    if self._is_interrupted:
+                        break
 
-                self._current_text = sentence
-                completed = await self._synthesize_and_play(sentence)
-                if completed:
-                    self._played_text += sentence + " "
-                else:
-                    break
+                    self._current_text = sentence
+                    completed = await self._synthesize_and_play(sentence)
+                    if completed:
+                        self._played_text += sentence + " "
+                    else:
+                        break
 
-            return self._played_text.strip()
+                return self._played_text.strip()
+            finally:
+                self._is_playing = False
 
     async def play_announcement(
         self,
@@ -92,20 +122,24 @@ class AudioPlayer:
         Sets task.announced = True only if playback completed without interruption.
         """
         async with self._playback_lock:
-            self._is_interrupted = False
-            self._current_task_id = task_id
-            self._current_text = result.speech_summary
-            self._played_text = ""
+            self._is_playing = True
+            try:
+                self._is_interrupted = False
+                self._current_task_id = task_id
+                self._current_text = result.speech_summary
+                self._played_text = ""
 
-            completed = await self._synthesize_and_play(result.speech_summary)
+                completed = await self._synthesize_and_play(result.speech_summary)
 
-            if completed:
-                if self.runtime:
-                    task = self.runtime.get_task(task_id)
-                    if task:
-                        task.announced = True
-                return True
-            return False
+                if completed:
+                    if self.runtime:
+                        task = self.runtime.get_task(task_id)
+                        if task:
+                            task.announced = True
+                    return True
+                return False
+            finally:
+                self._is_playing = False
 
     async def drain_announcements(self) -> int:
         """Drains and sequentially plays all pending announcements in the runtime's announcement queue."""

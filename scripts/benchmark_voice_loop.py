@@ -48,8 +48,8 @@ async def main() -> None:
     print("  FasterWhisperSTT warmed up (tiny.en, int8 CPU).")
 
     tts = PocketTTSEngine()
-    await tts.start()
-    print("  PocketTTSEngine resident server ready (24kHz float32).")
+    await tts.load()
+    print("  PocketTTSEngine ready (24kHz float32).")
 
     sink = SubprocessAudioSink(sample_rate=24000, audio_format="f32")
     provider = ProviderClient(

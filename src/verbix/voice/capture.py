@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -10,9 +11,15 @@ logger = logging.getLogger(__name__)
 class PTTCapture:
     """Push-to-Talk audio recording controller using native system capture (pw-record or arecord)."""
 
-    def __init__(self, sample_rate: int = 16000, channels: int = 1) -> None:
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        channels: int = 1,
+        on_chunk: Callable[[bytes], None] | None = None,
+    ) -> None:
         self.sample_rate = sample_rate
         self.channels = channels
+        self.on_chunk = on_chunk
         self._current_proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[bytes] | None = None
         self._backend = self._detect_backend()
@@ -75,6 +82,11 @@ class PTTCapture:
                 if not chunk:
                     break
                 buf.extend(chunk)
+                if self.on_chunk:
+                    try:
+                        self.on_chunk(chunk)
+                    except (OSError, RuntimeError) as e:
+                        logger.debug("on_chunk error: %s", e)
             return bytes(buf)
 
         self._reader_task = asyncio.create_task(_read_stream())

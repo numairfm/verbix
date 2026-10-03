@@ -253,20 +253,27 @@ class VerbixServer:
             writer.write(resp.to_jsonl())
             await writer.drain()
 
-        elif action == "ptt_down":
+        elif action == "toggle":
+            data: dict[str, Any] = {}
             if self.pipeline:
-                await self.pipeline.on_ptt_down()
-            resp = IPCResponse(id=request.id, status="ok")
+                data = await self.pipeline.toggle()
+            resp = IPCResponse(id=request.id, status="ok", data=data)
             writer.write(resp.to_jsonl())
             await writer.drain()
 
-        elif action == "ptt_up":
-            transcription = None
+        elif action == "confirm":
+            ok = False
             if self.pipeline:
-                transcription = await self.pipeline.on_ptt_up()
-            resp = IPCResponse(
-                id=request.id, status="ok", data={"transcription": transcription}
-            )
+                ok = self.pipeline.confirm()
+            resp = IPCResponse(id=request.id, status="ok", data={"confirmed": ok})
+            writer.write(resp.to_jsonl())
+            await writer.drain()
+
+        elif action == "deny":
+            ok = False
+            if self.pipeline:
+                ok = self.pipeline.deny()
+            resp = IPCResponse(id=request.id, status="ok", data={"denied": ok})
             writer.write(resp.to_jsonl())
             await writer.drain()
 

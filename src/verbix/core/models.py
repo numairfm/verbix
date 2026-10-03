@@ -55,6 +55,7 @@ class TaskState(BaseModel):
     step_count: int = 0
     announced: bool = False
     result: WorkerResult | None = None
+    workspace: Any = None
 
     @property
     def is_running(self) -> bool:

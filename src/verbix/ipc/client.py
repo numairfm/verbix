@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 from verbix.ipc.protocol import IPCEvent, IPCRequest, IPCResponse
 
@@ -92,20 +93,23 @@ class VerbixClient:
         resp = await self._send_request(req)
         return bool(resp.data.get("cancelled", False))
 
-    async def ptt_down(self) -> bool:
-        """Triggers push-to-talk press down."""
-        req = IPCRequest(id="ptt-down-1", action="ptt_down")
+    async def toggle(self) -> dict[str, Any]:
+        """Toggles voice capture/playback."""
+        req = IPCRequest(id="toggle-1", action="toggle")
         resp = await self._send_request(req)
-        return resp.status == "ok"
+        return resp.data
 
-    async def ptt_up(self) -> str | None:
-        """Triggers push-to-talk release."""
-        req = IPCRequest(id="ptt-up-1", action="ptt_up")
+    async def confirm(self) -> bool:
+        """Confirms a pending action prompt."""
+        req = IPCRequest(id="confirm-1", action="confirm")
         resp = await self._send_request(req)
-        if resp.status == "ok":
-            val = resp.data.get("transcription")
-            return str(val) if val is not None else None
-        return None
+        return bool(resp.data.get("confirmed", False))
+
+    async def deny(self) -> bool:
+        """Denies a pending action prompt."""
+        req = IPCRequest(id="deny-1", action="deny")
+        resp = await self._send_request(req)
+        return bool(resp.data.get("denied", False))
 
     async def _send_request(self, req: IPCRequest) -> IPCResponse:
         """Sends a single request and awaits the matching response."""

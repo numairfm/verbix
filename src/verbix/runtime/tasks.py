@@ -121,6 +121,7 @@ class TaskRuntime:
             workspace=self.workspace,
             tools=tools,
             history=history,
+            reasoning_effort="low",
         )
         self.main_session = session
         return session
@@ -212,6 +213,7 @@ class TaskRuntime:
             title=title,
             status="running",
             step_count=0,
+            workspace=target_ws,
         )
         self.tasks[task_id] = task
         self._steer_queues[task_id] = asyncio.Queue()

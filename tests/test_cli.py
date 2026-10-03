@@ -14,7 +14,9 @@ def test_cli_parser_defaults():
     assert args.api_key is None
     assert args.max_tokens == 2048
     assert args.voice is False
-    assert args.ptt is None
+    assert args.toggle is False
+    assert args.confirm is False
+    assert args.deny is False
 
 
 def test_cli_parser_custom_args():
@@ -60,10 +62,16 @@ def test_cli_parser_serve_and_direct():
     assert args_direct.prompt == "direct prompt"
 
 
-def test_cli_parser_voice_and_ptt():
+def test_cli_parser_voice_and_toggle():
     parser = build_parser()
     args_voice = parser.parse_args(["--voice"])
     assert args_voice.voice is True
 
-    args_ptt = parser.parse_args(["--ptt", "down"])
-    assert args_ptt.ptt == "down"
+    args_toggle = parser.parse_args(["--toggle"])
+    assert args_toggle.toggle is True
+
+    args_confirm = parser.parse_args(["--confirm"])
+    assert args_confirm.confirm is True
+
+    args_deny = parser.parse_args(["--deny"])
+    assert args_deny.deny is True

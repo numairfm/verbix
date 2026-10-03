@@ -99,12 +99,11 @@ async def test_audio_player_announcement_queue(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_voice_pipeline_ptt_flow(tmp_path: Path):
+async def test_voice_pipeline_toggle_flow(tmp_path: Path):
     provider = ProviderClient(base_url="http://mock", model="mock", api_key="k")
     runtime = TaskRuntime(workspace=tmp_path, provider=provider)
-    receptionist = runtime.create_receptionist()
+    runtime.create_receptionist()
 
-    # Pre-populate history so receptionist can respond
     stt = MockSpeechToText(predefined_transcriptions=["Where is the workspace?"])
     tts = MockTextToSpeech()
     sink = MockAudioSink(playback_delay=0.01)
@@ -112,21 +111,38 @@ async def test_voice_pipeline_ptt_flow(tmp_path: Path):
 
     pipeline = VoicePipeline(runtime=runtime, stt=stt, player=player)
 
-    # Simulate PTT down
-    await pipeline.on_ptt_down()
-    assert not player.is_playing
+    # 1. Idle toggle -> starts recording
+    res1 = await pipeline.toggle()
+    assert res1["action"] == "recording"
 
-    # Simulate feeding recorded audio directly to stt test
-    transcription = await stt.transcribe(b"\x00" * 3200)
-    assert transcription == "Where is the workspace?"
+    # Stop recording simulation
+    await pipeline.capture.stop_recording()
 
-    # Execute voice turn manually with mock receptionist
-    receptionist.history.append_user("Where is the workspace?")
-    receptionist.history.append_assistant("The workspace is in /tmp.")
+    # 2. Test audible cue playback
+    await player.play_cue()
+    assert len(sink.played_chunks) > 0
 
-    spoken = await player.speak_foreground_sentences(["The workspace is in /tmp."])
-    assert spoken == "The workspace is in /tmp."
-    assert "The workspace is in /tmp." in tts.synthesized_texts
+    # 3. Test toggle during active playback -> interrupts playback and starts recording
+    await player.speak_foreground_sentences(["First sentence is playing."])
+    # Set playing state manually for test
+    player._is_playing = True
+    res2 = await pipeline.toggle()
+    assert res2["action"] == "interrupted_and_recording"
+    await pipeline.capture.stop_recording()
+
+    # 4. Test confirmation and denial gestures
+    async def _confirm_background():
+        await asyncio.sleep(0.01)
+        pipeline.confirm()
+
+    task_c = asyncio.create_task(_confirm_background())
+    confirmed = await pipeline.request_confirmation("Delete file?", timeout_seconds=1.0)
+    assert confirmed is True
+    await task_c
+
+    # Test denial on timeout
+    denied = await pipeline.request_confirmation("Drop database?", timeout_seconds=0.05)
+    assert denied is False
 
 
 @pytest.mark.asyncio

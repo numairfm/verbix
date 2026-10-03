@@ -1,217 +1,123 @@
 from __future__ import annotations
 
 import asyncio
-import atexit
 import logging
-import os
-import socket
+import threading
 from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import Any
 
-import httpx
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
-
-def _find_free_port() -> int:
-    """Finds an unused local TCP port."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
+try:
+    from pocket_tts import TTSModel
+except ImportError:
+    TTSModel = None  # type: ignore[assignment, misc]
 
 
 class PocketTTSEngine:
-    """Local Text-to-Speech engine wrapping the resident PocketTTS C++ server helper.
+    """Local Text-to-Speech engine using Kyutai's pocket-tts Python library.
 
-    Outputs 24kHz float32 mono PCM audio bytes with low first-chunk latency.
+    Outputs 24kHz float32 mono PCM audio bytes streamed in small chunks (~80ms each).
+    Conforms to the TextToSpeech protocol.
     """
 
     def __init__(
         self,
-        runtime_dir: Path | str | None = None,
-        voice: str = "alba_1.10x.wav",
-        threads: int = 4,
+        voice: str = "alba",
         temperature: float = 0.3,
+        quantize: bool = False,
+        sample_rate: int = 24000,
     ) -> None:
-        self.runtime_dir = self._resolve_runtime_dir(runtime_dir)
         self.voice = voice
-        self.threads = threads
         self.temperature = temperature
+        self.quantize = quantize
+        self.sample_rate = sample_rate
+        self.channels = 1
+        self.audio_format = "f32"
 
-        self.port: int | None = None
-        self._proc: asyncio.subprocess.Process | None = None
+        self._model: Any = None
+        self._voice_state: Any = None
         self._lock = asyncio.Lock()
-        self._http_client: httpx.AsyncClient | None = None
-
-        # Register exit hook to ensure subprocess termination
-        atexit.register(self.stop)
-
-    def _resolve_runtime_dir(self, explicit: Path | str | None) -> Path:
-        if explicit:
-            p = Path(explicit).resolve()
-            if p.is_dir():
-                return p
-
-        env_dir = os.environ.get("VERBIX_TTS_DIR")
-        if env_dir:
-            p = Path(env_dir).resolve()
-            if p.is_dir():
-                return p
-
-        candidates = [
-            Path("tts/runtime"),
-            Path("../verbix-old-go/core/tts/runtime"),
-            Path("/home/numair/dev/projects/verbix-old-go/core/tts/runtime"),
-        ]
-        for cand in candidates:
-            if cand.resolve().is_dir():
-                return cand.resolve()
-
-        return Path("tts/runtime").resolve()
-
-    def _resolve_binary(self) -> Path:
-        bin_env = os.environ.get("VERBIX_TTS_BIN")
-        if bin_env and Path(bin_env).is_file():
-            return Path(bin_env).resolve()
-
-        candidates = [
-            self.runtime_dir / "bin" / "verbix-tts-helper",
-            self.runtime_dir / "bin" / "pocket-tts",
-        ]
-        for c in candidates:
-            if c.is_file():
-                return c
-        raise FileNotFoundError(
-            f"PocketTTS helper binary not found in {self.runtime_dir / 'bin'}"
-        )
+        self._is_closed = False
 
     @property
-    def is_running(self) -> bool:
-        return self._proc is not None and self._proc.returncode is None
+    def is_loaded(self) -> bool:
+        return self._model is not None and self._voice_state is not None
 
-    async def start(self) -> None:
-        """Launches the resident pocket-tts HTTP server and waits for health check."""
+    async def load(self) -> None:
+        """Loads the TTSModel and pre-computes the target voice state in a thread."""
+        if TTSModel is None:
+            raise ImportError(
+                "pocket-tts is not installed. Install it with `uv sync --extra tts` "
+                "or `pip install pocket-tts`."
+            )
+
         async with self._lock:
-            if self.is_running:
+            if self.is_loaded:
                 return
 
-            bin_path = self._resolve_binary()
-            lib_path = self.runtime_dir / "lib"
-            models_dir = self.runtime_dir / "models"
-            voices_dir = self.runtime_dir / "voices"
-            tokenizer = models_dir / "tokenizer.model"
-
-            self.port = _find_free_port()
-
-            cmd = [
-                str(bin_path),
-                "--server",
-                "--port",
-                str(self.port),
-                "--precision",
-                "int8",
-                "--mimi-precision",
-                "fp32",
-                "--temperature",
-                str(self.temperature),
-                "--lsd-steps",
-                "1",
-                "--first-chunk",
-                "1",
-                "--max-chunk",
-                "1",
-                "--threads",
-                str(self.threads),
-                "--models-dir",
-                str(models_dir),
-                "--voices-dir",
-                str(voices_dir),
-                "--tokenizer",
-                str(tokenizer),
-            ]
-
-            env = dict(os.environ)
-            ld_path = str(lib_path)
-            if "LD_LIBRARY_PATH" in env:
-                ld_path = f"{ld_path}:{env['LD_LIBRARY_PATH']}"
-            env["LD_LIBRARY_PATH"] = ld_path
-            env["DYLD_LIBRARY_PATH"] = str(lib_path)
-
-            logger.info("Starting PocketTTS helper on port %d...", self.port)
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                env=env,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            self._proc = proc
-
-            # Poll health endpoint
-            client = httpx.AsyncClient(timeout=1.0)
-            self._http_client = httpx.AsyncClient(timeout=60.0)
-
-            deadline = asyncio.get_running_loop().time() + 10.0
-            healthy = False
-            while asyncio.get_running_loop().time() < deadline:
-                if proc.returncode is not None:
-                    break
-                try:
-                    resp = await client.get(f"http://127.0.0.1:{self.port}/health")
-                    if resp.status_code == 200 and resp.json().get("status") == "ok":
-                        healthy = True
-                        break
-                except (httpx.ConnectError, httpx.TimeoutException):
-                    pass
-                await asyncio.sleep(0.05)
-
-            await client.aclose()
-
-            if not healthy:
-                self.stop()
-                raise RuntimeError(
-                    f"PocketTTS server failed to become healthy on port {self.port}"
+            def _init() -> tuple[Any, Any]:
+                assert TTSModel is not None
+                logger.info("Loading PocketTTS model (quantize=%s)...", self.quantize)
+                model = TTSModel.load_model(
+                    quantize=self.quantize, temp=self.temperature
                 )
+                voice_state = model.get_state_for_audio_prompt(self.voice)
+                return model, voice_state
 
-            logger.info("PocketTTS helper healthy on http://127.0.0.1:%d", self.port)
-
-    def stop(self) -> None:
-        """Terminates the helper subprocess."""
-        if self._proc is not None:
-            if self._proc.returncode is None:
-                try:
-                    self._proc.kill()
-                except ProcessLookupError:
-                    pass
-            self._proc = None
+            self._model, self._voice_state = await asyncio.to_thread(_init)
+            logger.info("PocketTTS loaded successfully with voice '%s'", self.voice)
 
     async def aclose(self) -> None:
         """Async cleanup method."""
-        if self._http_client:
-            await self._http_client.aclose()
-            self._http_client = None
-        self.stop()
+        self._is_closed = True
+        self._voice_state = None
+        self._model = None
 
     async def synthesize(self, text: str) -> AsyncIterator[bytes]:
         """Synthesizes text into chunks of raw 24kHz float32 mono PCM audio bytes."""
-        if not text.strip():
+        clean_text = text.strip()
+        if not clean_text or self._is_closed:
             return
 
-        if not self.is_running:
-            await self.start()
+        if not self.is_loaded:
+            await self.load()
 
-        assert self.port is not None
-        if self._http_client is None:
-            self._http_client = httpx.AsyncClient(timeout=60.0)
+        assert self._model is not None
+        assert self._voice_state is not None
 
-        url = f"http://127.0.0.1:{self.port}/tts"
-        payload = {"text": text, "voice": self.voice}
+        q: asyncio.Queue[bytes | None | Exception] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        stop_event = threading.Event()
+
+        def _worker() -> None:
+            try:
+                for chunk in self._model.generate_audio_stream(
+                    self._voice_state,
+                    clean_text,
+                    stop=stop_event,
+                ):
+                    if stop_event.is_set():
+                        break
+                    pcm_bytes = chunk.numpy().astype(np.float32).tobytes()
+                    loop.call_soon_threadsafe(q.put_nowait, pcm_bytes)
+                loop.call_soon_threadsafe(q.put_nowait, None)
+            except (OSError, RuntimeError, ValueError) as e:
+                loop.call_soon_threadsafe(q.put_nowait, e)
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
 
         try:
-            async with self._http_client.stream("POST", url, json=payload) as resp:
-                resp.raise_for_status()
-                async for chunk in resp.aiter_bytes(chunk_size=4096):
-                    if chunk:
-                        yield chunk
-        except (httpx.HTTPError, OSError) as e:
-            logger.warning("PocketTTS synthesis failed: %s", e)
-            return
+            while True:
+                item = await q.get()
+                if item is None:
+                    break
+                if isinstance(item, Exception):
+                    logger.warning("PocketTTS generation error: %s", item)
+                    break
+                yield item
+        finally:
+            stop_event.set()

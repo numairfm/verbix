@@ -118,12 +118,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--voice",
         action="store_true",
-        help="Run in voice mode (PTT -> STT -> Receptionist -> PocketTTS audio playback).",
+        help="Run in voice mode (Toggle -> Live STT -> Receptionist -> PocketTTS audio playback).",
     )
     parser.add_argument(
-        "--ptt",
-        choices=["down", "up"],
-        help="Send push-to-talk event to running Verbix daemon over IPC socket.",
+        "--toggle",
+        action="store_true",
+        help="Send voice toggle event to running Verbix daemon over IPC socket.",
+    )
+    parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Confirm pending action on running Verbix daemon.",
+    )
+    parser.add_argument(
+        "--deny",
+        action="store_true",
+        help="Deny pending action on running Verbix daemon.",
     )
     return parser
 
@@ -181,21 +191,31 @@ async def run_turn(session: AgentSession, user_input: str) -> str:
 
 
 async def async_main(args: argparse.Namespace) -> int:
-    if args.ptt:
+    is_toggle = args.toggle or (args.prompt and args.prompt.strip().lower() == "toggle")
+    is_confirm = args.confirm or (
+        args.prompt and args.prompt.strip().lower() == "confirm"
+    )
+    is_deny = args.deny or (args.prompt and args.prompt.strip().lower() == "deny")
+
+    if is_toggle or is_confirm or is_deny:
         socket_path = args.socket_path or (
             Path.home() / ".local" / "share" / "verbix" / "verbix.sock"
         )
         client = VerbixClient(socket_path=socket_path)
         try:
             await client.connect()
-            if args.ptt == "down":
-                ok = await client.ptt_down()
-                sys.stdout.write(f"PTT down: {'ok' if ok else 'failed'}\n")
-            elif args.ptt == "up":
-                text = await client.ptt_up()
+            if is_toggle:
+                res = await client.toggle()
+                action = res.get("action", "unknown")
+                sys.stdout.write(f"Voice toggle: {action}\n")
+            elif is_confirm:
+                ok = await client.confirm()
                 sys.stdout.write(
-                    f"PTT up: {text if text is not None else 'no transcription'}\n"
+                    f"Action confirmation: {'confirmed' if ok else 'failed'}\n"
                 )
+            elif is_deny:
+                ok = await client.deny()
+                sys.stdout.write(f"Action denial: {'denied' if ok else 'failed'}\n")
             await client.close()
             return 0
         except (OSError, RuntimeError) as e:
@@ -279,9 +299,8 @@ async def async_main(args: argparse.Namespace) -> int:
             f"Verbix Voice Mode (model: {args.model}, workspace: {workspace})\n"
         )
         sys.stdout.write(
-            "Stand-in PTT: Press [Enter] to start recording, speak, then press [Enter] to finish.\n"
-        )
-        sys.stdout.write(
+            "Toggle Mode: Press [Enter] to start recording, speak, then press [Enter] to stop.\n"
+            "If audio is playing, [Enter] halts playback and begins recording immediately.\n"
             "Or type a prompt directly. Type 'exit' or 'quit' to end session.\n\n"
         )
         sys.stdout.flush()
@@ -289,7 +308,24 @@ async def async_main(args: argparse.Namespace) -> int:
         loop = asyncio.get_running_loop()
         try:
             while True:
-                sys.stdout.write("verbix [Enter=PTT / type prompt]> ")
+                # Check for pending confirmations
+                if pipeline.is_confirmation_pending:
+                    prompt_txt = (
+                        pipeline.confirmation_prompt or "Action confirmation required"
+                    )
+                    sys.stdout.write(
+                        f"\n[Confirm action]: {prompt_txt}\nPress 'y' to confirm, 'n' to deny: "
+                    )
+                    sys.stdout.flush()
+                    line = await loop.run_in_executor(None, sys.stdin.readline)
+                    ans = line.strip().lower()
+                    if ans in ("y", "yes"):
+                        pipeline.confirm()
+                    else:
+                        pipeline.deny()
+                    continue
+
+                sys.stdout.write("verbix [Enter=Toggle voice / type prompt]> ")
                 sys.stdout.flush()
                 line = await loop.run_in_executor(None, sys.stdin.readline)
                 if not line:
@@ -299,20 +335,26 @@ async def async_main(args: argparse.Namespace) -> int:
                     break
 
                 if not text:
-                    await pipeline.on_ptt_down()
-                    sys.stdout.write(
-                        "[Recording mic... Press Enter when done speaking]\n"
-                    )
-                    sys.stdout.flush()
-                    await loop.run_in_executor(None, sys.stdin.readline)
-                    sys.stdout.write("[Processing audio & transcribing...]\n")
-                    sys.stdout.flush()
-                    transcribed = await pipeline.on_ptt_up()
-                    if transcribed:
-                        sys.stdout.write(f"[User spoke]: {transcribed}\n")
+                    res = await pipeline.toggle()
+                    state = res.get("action")
+                    if state in ("recording", "interrupted_and_recording"):
+                        if state == "interrupted_and_recording":
+                            sys.stdout.write("[Playback interrupted]\n")
+                        sys.stdout.write(
+                            "[Recording mic... Press Enter when done speaking]\n"
+                        )
                         sys.stdout.flush()
-                    else:
-                        sys.stdout.write("[No speech detected or audio too short]\n")
+                        await loop.run_in_executor(None, sys.stdin.readline)
+                        sys.stdout.write("[Capture stopped. Earcon cue playing...]\n")
+                        sys.stdout.flush()
+                        stop_res = await pipeline.toggle()
+                        transcribed = stop_res.get("transcription", "")
+                        if transcribed:
+                            sys.stdout.write(f"[User spoke]: {transcribed}\n")
+                        else:
+                            sys.stdout.write(
+                                "[No speech detected or audio too short]\n"
+                            )
                         sys.stdout.flush()
                 else:
                     await pipeline.execute_voice_turn(text)

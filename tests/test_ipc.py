@@ -43,6 +43,16 @@ async def test_ipc_server_and_client_uds(tmp_path: Path):
     assert cancelled_task is not None
     assert cancelled_task.status == "cancelled"
 
+    # 4. Toggle, confirm, deny via IPC
+    toggle_res = await client.toggle()
+    assert isinstance(toggle_res, dict)
+
+    confirmed = await client.confirm()
+    assert confirmed is False  # No pending confirmation
+
+    denied = await client.deny()
+    assert denied is False  # No pending confirmation
+
     await client.close()
     await server.stop()
     assert not socket_path.exists()

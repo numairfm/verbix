@@ -355,19 +355,20 @@ async def test_task_spawn_workspace_awareness(
     assert str(tmp_path) in status_tool.description
 
     schema = spawn_tool.parameters_schema
-    assert "workspace" in schema["properties"]
-    assert schema["properties"]["workspace"]["default"] == str(tmp_path)
+    # Safety invariant: the runtime, not the model, chooses the workspace path
+    assert "workspace" not in schema["properties"]
 
     ctx = ToolContext(workspace=tmp_path)
     res = await spawn_tool.execute(
         {
             "title": "Check files",
             "prompt": "List files",
-            "workspace": str(tmp_path),
         },
         ctx,
     )
     assert not res.is_error
     assert "spawned with id" in res.observation
     task_id = "task-1"
-    assert runtime.get_task(task_id) is not None
+    task = runtime.get_task(task_id)
+    assert task is not None
+    assert task.workspace == tmp_path

@@ -70,6 +70,7 @@ class AgentSession:
         tools: list[Tool] | None = None,
         history: ConversationHistory | None = None,
         max_turns: int = 30,
+        reasoning_effort: str | None = None,
     ) -> None:
         self.session_id = session_id
         self.system_prompt = system_prompt
@@ -78,6 +79,7 @@ class AgentSession:
         self.tools: dict[str, Tool] = {t.name: t for t in (tools or [])}
         self.history = history or ConversationHistory()
         self.max_turns = max_turns
+        self.reasoning_effort = reasoning_effort
 
     async def step(
         self,
@@ -124,7 +126,9 @@ class AgentSession:
 
             # Stream from provider
             async for event in self.provider.stream(
-                messages, tools=tool_defs if tool_defs else None
+                messages,
+                tools=tool_defs if tool_defs else None,
+                reasoning_effort=self.reasoning_effort,
             ):
                 if isinstance(event, ProviderTextDelta):
                     accumulated_text.append(event.text)

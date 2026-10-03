@@ -108,11 +108,6 @@ class TaskSpawnTool:
                     "description": "Whether to isolate worker in a dedicated git worktree branch (recommended for mutating code tasks).",
                     "default": False,
                 },
-                "workspace": {
-                    "type": "string",
-                    "description": f"The target workspace root directory. Defaults to the active project workspace ({self.runtime.workspace}).",
-                    "default": str(self.runtime.workspace),
-                },
             },
             "required": ["title", "prompt"],
         }
@@ -121,7 +116,6 @@ class TaskSpawnTool:
         title = str(args.get("title", "")).strip()
         prompt = str(args.get("prompt", "")).strip()
         isolate = bool(args.get("isolate_worktree", False))
-        workspace = str(args.get("workspace", "")).strip() or None
 
         if not title or not prompt:
             return ToolResult(
@@ -133,7 +127,6 @@ class TaskSpawnTool:
             title=title,
             prompt=prompt,
             isolate_worktree=isolate,
-            workspace=workspace,
         )
         return ToolResult(
             observation=f"Task '{title}' spawned with id '{task_id}'. It is now running in the background."

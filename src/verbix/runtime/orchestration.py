@@ -52,8 +52,14 @@ class WorkerFinishTool:
         success = bool(args.get("success", True))
         raw_summary = str(args.get("speech_summary", "")).strip()
         # Enforce max length constraint gracefully
-        speech_summary = raw_summary[:180] if raw_summary else ("Task completed successfully." if success else "Task failed.")
-        details = str(args.get("details", "")).strip() or "No additional details provided."
+        speech_summary = (
+            raw_summary[:180]
+            if raw_summary
+            else ("Task completed successfully." if success else "Task failed.")
+        )
+        details = (
+            str(args.get("details", "")).strip() or "No additional details provided."
+        )
 
         self.captured_result = WorkerResult(
             success=success,
@@ -72,13 +78,17 @@ class TaskSpawnTool:
     """Orchestration tool for spawning background worker tasks."""
 
     name: str = "task_spawn"
-    description: str = (
-        "Spawns an independent background worker agent to execute long-running coding, testing, or building tasks. "
-        "Use this whenever work requires running commands, editing files, or deep investigation."
-    )
 
     def __init__(self, runtime: TaskRuntime) -> None:
         self.runtime = runtime
+
+    @property
+    def description(self) -> str:
+        return (
+            f"Spawns an independent background worker agent in the active workspace ({self.runtime.workspace}) "
+            "to execute long-running coding, testing, building, searching, or file inspection tasks. "
+            "Use this whenever work requires running commands, editing files, or inspecting files in the workspace."
+        )
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
@@ -98,6 +108,11 @@ class TaskSpawnTool:
                     "description": "Whether to isolate worker in a dedicated git worktree branch (recommended for mutating code tasks).",
                     "default": False,
                 },
+                "workspace": {
+                    "type": "string",
+                    "description": f"The target workspace root directory. Defaults to the active project workspace ({self.runtime.workspace}).",
+                    "default": str(self.runtime.workspace),
+                },
             },
             "required": ["title", "prompt"],
         }
@@ -106,11 +121,20 @@ class TaskSpawnTool:
         title = str(args.get("title", "")).strip()
         prompt = str(args.get("prompt", "")).strip()
         isolate = bool(args.get("isolate_worktree", False))
+        workspace = str(args.get("workspace", "")).strip() or None
 
         if not title or not prompt:
-            return ToolResult("error: both 'title' and 'prompt' are required to spawn a task.", is_error=True)
+            return ToolResult(
+                "error: both 'title' and 'prompt' are required to spawn a task.",
+                is_error=True,
+            )
 
-        task_id = await self.runtime.spawn_task(title=title, prompt=prompt, isolate_worktree=isolate)
+        task_id = await self.runtime.spawn_task(
+            title=title,
+            prompt=prompt,
+            isolate_worktree=isolate,
+            workspace=workspace,
+        )
         return ToolResult(
             observation=f"Task '{title}' spawned with id '{task_id}'. It is now running in the background."
         )
@@ -146,7 +170,10 @@ class TaskCancelTool:
         cancelled = await self.runtime.cancel_task(task_id)
         if cancelled:
             return ToolResult(f"Task '{task_id}' was successfully cancelled.")
-        return ToolResult(f"Task '{task_id}' could not be cancelled (not found or already finished).", is_error=True)
+        return ToolResult(
+            f"Task '{task_id}' could not be cancelled (not found or already finished).",
+            is_error=True,
+        )
 
 
 class TaskSteerTool:
@@ -179,25 +206,32 @@ class TaskSteerTool:
         task_id = str(args.get("task_id", "")).strip()
         instruction = str(args.get("instruction", "")).strip()
         if not task_id or not instruction:
-            return ToolResult("error: both 'task_id' and 'instruction' are required.", is_error=True)
+            return ToolResult(
+                "error: both 'task_id' and 'instruction' are required.", is_error=True
+            )
 
         steered = await self.runtime.steer_task(task_id, instruction)
         if steered:
             return ToolResult(f"Steering instruction delivered to task '{task_id}'.")
-        return ToolResult(f"Cannot steer task '{task_id}' (not active or not found).", is_error=True)
+        return ToolResult(
+            f"Cannot steer task '{task_id}' (not active or not found).", is_error=True
+        )
 
 
 class TaskStatusTool:
     """Orchestration tool for querying status and progress of tasks."""
 
     name: str = "task_status"
-    description: str = (
-        "Queries the current status, step count, and output of a specific background task, "
-        "or lists all active tasks if task_id is omitted."
-    )
 
     def __init__(self, runtime: TaskRuntime) -> None:
         self.runtime = runtime
+
+    @property
+    def description(self) -> str:
+        return (
+            f"Queries the current status, step count, and output of background tasks in workspace '{self.runtime.workspace}', "
+            "or lists all active tasks if task_id is omitted."
+        )
 
     @property
     def parameters_schema(self) -> dict[str, Any]:

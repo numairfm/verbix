@@ -76,7 +76,9 @@ async def test_audio_player_announcement_queue(tmp_path: Path):
     from verbix.core.models import TaskState
 
     task_id = "task-build-1"
-    runtime.tasks[task_id] = TaskState(id=task_id, title="Background Build", status="running")
+    runtime.tasks[task_id] = TaskState(
+        id=task_id, title="Background Build", status="running"
+    )
 
     worker_res = WorkerResult(
         success=True,
@@ -125,3 +127,86 @@ async def test_voice_pipeline_ptt_flow(tmp_path: Path):
     spoken = await player.speak_foreground_sentences(["The workspace is in /tmp."])
     assert spoken == "The workspace is in /tmp."
     assert "The workspace is in /tmp." in tts.synthesized_texts
+
+
+@pytest.mark.asyncio
+async def test_faster_whisper_stt_conformance():
+    from verbix.voice.base import SpeechToText
+    from verbix.voice.stt import FasterWhisperSTT
+
+    stt = FasterWhisperSTT(model_size="tiny.en")
+    assert isinstance(stt, SpeechToText)
+
+    # Empty audio returns empty string without loading model
+    assert await stt.transcribe(b"") == ""
+    assert await stt.transcribe(b"\x00" * 100) == ""
+
+
+@pytest.mark.asyncio
+async def test_faster_whisper_stt_transcribe_speech():
+    import numpy as np
+
+    from verbix.voice.stt import FasterWhisperSTT
+
+    stt = FasterWhisperSTT(model_size="tiny.en")
+
+    # Read scratch/test_tts.wav (IEEE float32 24kHz mono) and resample to 16kHz int16 PCM
+    test_wav = Path("scratch/test_tts.wav")
+    if not test_wav.exists():
+        pytest.skip("scratch/test_tts.wav not found")
+
+    raw = test_wav.read_bytes()
+    data_idx = raw.find(b"data") + 8
+    f32_24k = np.frombuffer(raw[data_idx:], dtype=np.float32)
+    n_16k = int(len(f32_24k) * 16000 / 24000)
+    f32_16k = np.interp(
+        np.linspace(0, len(f32_24k) - 1, n_16k),
+        np.arange(len(f32_24k)),
+        f32_24k,
+    )
+    i16_pcm = (f32_16k * 32767).astype(np.int16).tobytes()
+
+    text = await stt.transcribe(i16_pcm, sample_rate=16000)
+    assert len(text) > 0
+    assert any(w in text.lower() for w in ["build", "finished", "success", "seconds"])
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_engine_conformance():
+    from verbix.voice.base import TextToSpeech
+    from verbix.voice.pocket_tts import PocketTTSEngine
+
+    tts = PocketTTSEngine()
+    assert isinstance(tts, TextToSpeech)
+
+    # Empty text yields nothing
+    chunks = [c async for c in tts.synthesize("")]
+    assert len(chunks) == 0
+
+
+@pytest.mark.asyncio
+async def test_pocket_tts_engine_synthesis():
+    from verbix.voice.pocket_tts import PocketTTSEngine
+
+    tts = PocketTTSEngine()
+    try:
+        chunks = [c async for c in tts.synthesize("Unit test playback.")]
+        assert len(chunks) > 0
+        total_bytes = sum(len(c) for c in chunks)
+        # 24kHz float32 is 4 bytes per sample, non-empty
+        assert total_bytes > 0
+        assert total_bytes % 4 == 0
+    finally:
+        await tts.aclose()
+
+
+def test_subprocess_audio_sink_config():
+    from verbix.voice.sinks import SubprocessAudioSink
+
+    sink_f32 = SubprocessAudioSink(sample_rate=24000, audio_format="f32")
+    assert sink_f32.sample_rate == 24000
+    assert sink_f32.audio_format == "f32"
+
+    sink_s16 = SubprocessAudioSink(sample_rate=16000, audio_format="s16")
+    assert sink_s16.sample_rate == 16000
+    assert sink_s16.audio_format == "s16"

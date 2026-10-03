@@ -63,7 +63,9 @@ async def test_worker_finish_tool(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_task_runtime_spawn_and_finish(tmp_path: Path, mock_provider: ProviderClient):
+async def test_task_runtime_spawn_and_finish(
+    tmp_path: Path, mock_provider: ProviderClient
+):
     runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
     receptionist = runtime.create_receptionist()
 
@@ -96,12 +98,19 @@ async def test_task_runtime_spawn_and_finish(tmp_path: Path, mock_provider: Prov
     # Immediate turn-boundary injection into idle receptionist history
     assert len(receptionist.history.messages) == 1
     assert receptionist.history.messages[0].role == "system"
-    assert "[Task completed: 'Build Project' (task-1) -> Succeeded: Build succeeded." in receptionist.history.messages[0].content
-    assert "Compiled 12 files without errors." in receptionist.history.messages[0].content
+    assert (
+        "[Task completed: 'Build Project' (task-1) -> Succeeded: Build succeeded."
+        in receptionist.history.messages[0].content
+    )
+    assert (
+        "Compiled 12 files without errors." in receptionist.history.messages[0].content
+    )
 
 
 @pytest.mark.asyncio
-async def test_turn_boundary_injection_during_active_turn(tmp_path: Path, mock_provider: ProviderClient):
+async def test_turn_boundary_injection_during_active_turn(
+    tmp_path: Path, mock_provider: ProviderClient
+):
     runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
     receptionist = runtime.create_receptionist()
 
@@ -132,7 +141,9 @@ async def test_turn_boundary_injection_during_active_turn(tmp_path: Path, mock_p
 
 
 @pytest.mark.asyncio
-async def test_ephemeral_running_task_prompt_annotation(tmp_path: Path, mock_provider: ProviderClient):
+async def test_ephemeral_running_task_prompt_annotation(
+    tmp_path: Path, mock_provider: ProviderClient
+):
     runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
     receptionist = runtime.create_receptionist()
     receptionist.history.append_user("What is the status?")
@@ -159,7 +170,9 @@ async def test_ephemeral_running_task_prompt_annotation(tmp_path: Path, mock_pro
         WorkerResult(success=True, speech_summary="Done", details="Log"),
     )
     # Once finished, it must NEVER appear in running task annotation
-    rendered_after = receptionist.history.render_turn_prompt(runtime.list_active_tasks())
+    rendered_after = receptionist.history.render_turn_prompt(
+        runtime.list_active_tasks()
+    )
     assert "[Running:" not in rendered_after[0].content
 
 
@@ -180,7 +193,10 @@ async def test_task_runtime_cancellation(tmp_path: Path, mock_provider: Provider
 
     # History got cancellation record
     assert len(receptionist.history.messages) == 1
-    assert "Failed" in receptionist.history.messages[0].content or "cancelled" in receptionist.history.messages[0].content.lower()
+    assert (
+        "Failed" in receptionist.history.messages[0].content
+        or "cancelled" in receptionist.history.messages[0].content.lower()
+    )
 
 
 @pytest.mark.asyncio
@@ -272,8 +288,13 @@ async def test_task_completion_sync_before_foreground_turn(
     # INVARIANT 1: Pending completions MUST be drained at turn start
     assert len(runtime._pending_completions) == 0
     assert len(receptionist.history.messages) == 1
-    assert "Analyzed repository successfully." in receptionist.history.messages[0].content
-    assert "Found pyproject.toml and src/verbix." in receptionist.history.messages[0].content
+    assert (
+        "Analyzed repository successfully." in receptionist.history.messages[0].content
+    )
+    assert (
+        "Found pyproject.toml and src/verbix."
+        in receptionist.history.messages[0].content
+    )
 
     # INVARIANT 2: render_turn_prompt must NEVER include the completed task
     active_tasks = runtime.list_active_tasks()
@@ -321,3 +342,32 @@ async def test_worker_finish_tool_immediate_state_transition(
     assert len(runtime.list_active_tasks()) == 0
 
 
+@pytest.mark.asyncio
+async def test_task_spawn_workspace_awareness(
+    tmp_path: Path, mock_provider: ProviderClient
+):
+    """Verifies TaskSpawnTool and TaskStatusTool expose workspace in descriptions and schema."""
+    runtime = TaskRuntime(workspace=tmp_path, provider=mock_provider)
+    spawn_tool = TaskSpawnTool(runtime)
+    status_tool = TaskStatusTool(runtime)
+
+    assert str(tmp_path) in spawn_tool.description
+    assert str(tmp_path) in status_tool.description
+
+    schema = spawn_tool.parameters_schema
+    assert "workspace" in schema["properties"]
+    assert schema["properties"]["workspace"]["default"] == str(tmp_path)
+
+    ctx = ToolContext(workspace=tmp_path)
+    res = await spawn_tool.execute(
+        {
+            "title": "Check files",
+            "prompt": "List files",
+            "workspace": str(tmp_path),
+        },
+        ctx,
+    )
+    assert not res.is_error
+    assert "spawned with id" in res.observation
+    task_id = "task-1"
+    assert runtime.get_task(task_id) is not None

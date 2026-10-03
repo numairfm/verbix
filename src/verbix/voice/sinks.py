@@ -11,11 +11,18 @@ class SubprocessAudioSink:
     """Audio playback sink using system audio utilities (pw-play, aplay, or ffplay).
 
     Terminates the playback subprocess instantly on stop() for zero-latency barge-in.
+    Supports both 16-bit integer PCM ("s16") and 32-bit float PCM ("f32").
     """
 
-    def __init__(self, sample_rate: int = 16000, channels: int = 1) -> None:
+    def __init__(
+        self,
+        sample_rate: int = 24000,
+        channels: int = 1,
+        audio_format: str = "f32",
+    ) -> None:
         self.sample_rate = sample_rate
         self.channels = channels
+        self.audio_format = audio_format.lower()
         self._current_proc: asyncio.subprocess.Process | None = None
         self._backend = self._detect_backend()
 
@@ -45,13 +52,49 @@ class SubprocessAudioSink:
         self.stop()
 
         cmd: list[str] = []
+        is_float = self.audio_format in ("f32", "float", "f32le")
+
         if self._backend == "pw-play":
-            # pw-play supports raw input with parameters or wav
-            cmd = ["pw-play", "--rate", str(self.sample_rate), "--channels", str(self.channels), "-"]
+            fmt = "f32" if is_float else "s16"
+            cmd = [
+                "pw-play",
+                "-a",
+                "--rate",
+                str(self.sample_rate),
+                "--channels",
+                str(self.channels),
+                "--format",
+                fmt,
+                "-",
+            ]
         elif self._backend == "aplay":
-            cmd = ["aplay", "-q", "-r", str(self.sample_rate), "-c", str(self.channels), "-f", "S16_LE", "-"]
+            fmt = "FLOAT_LE" if is_float else "S16_LE"
+            cmd = [
+                "aplay",
+                "-q",
+                "-r",
+                str(self.sample_rate),
+                "-c",
+                str(self.channels),
+                "-f",
+                fmt,
+                "-",
+            ]
         elif self._backend == "ffplay":
-            cmd = ["ffplay", "-nodisp", "-autoexit", "-f", "s16le", "-ar", str(self.sample_rate), "-ac", str(self.channels), "-"]
+            fmt = "f32le" if is_float else "s16le"
+            layout = "mono" if self.channels == 1 else "stereo"
+            cmd = [
+                "ffplay",
+                "-nodisp",
+                "-autoexit",
+                "-f",
+                fmt,
+                "-ar",
+                str(self.sample_rate),
+                "-ch_layout",
+                layout,
+                "-",
+            ]
 
         proc: asyncio.subprocess.Process | None = None
         try:

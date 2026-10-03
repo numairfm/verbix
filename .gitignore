@@ -15,3 +15,6 @@ scratch/
 # Secrets and local environment
 .env
 .env.*
+
+# Verbix runtime files
+.verbix/

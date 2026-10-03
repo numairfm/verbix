@@ -61,7 +61,9 @@ class VerbixServer:
                 host=self.host,
                 port=self.port,
             )
-            logger.info("Verbix IPC server listening on TCP %s:%d", self.host, self.port)
+            logger.info(
+                "Verbix IPC server listening on TCP %s:%d", self.host, self.port
+            )
         else:
             raise ValueError("Must specify either socket_path or host/port.")
 
@@ -130,7 +132,9 @@ class VerbixServer:
                     raw_json = json.loads(line_str)
                     request = IPCRequest.model_validate(raw_json)
                 except (json.JSONDecodeError, ValueError) as e:
-                    err_resp = IPCResponse(status="error", error=f"Invalid request JSON: {e}")
+                    err_resp = IPCResponse(
+                        status="error", error=f"Invalid request JSON: {e}"
+                    )
                     writer.write(err_resp.to_jsonl())
                     await writer.drain()
                     continue
@@ -160,13 +164,17 @@ class VerbixServer:
 
         elif action == "prompt":
             if not request.prompt:
-                resp = IPCResponse(id=request.id, status="error", error="Missing 'prompt' field")
+                resp = IPCResponse(
+                    id=request.id, status="error", error="Missing 'prompt' field"
+                )
                 writer.write(resp.to_jsonl())
                 await writer.drain()
                 return
 
             try:
-                async for event in self.runtime.step_receptionist(user_input=request.prompt):
+                async for event in self.runtime.step_receptionist(
+                    user_input=request.prompt
+                ):
                     ev_type = "unknown"
                     payload: dict[str, Any] = {}
 
@@ -194,7 +202,11 @@ class VerbixServer:
                         ev_type = "turn_complete"
                         payload = {"final_text": event.final_text}
 
-                    writer.write(IPCEvent(type=ev_type, request_id=request.id, payload=payload).to_jsonl())
+                    writer.write(
+                        IPCEvent(
+                            type=ev_type, request_id=request.id, payload=payload
+                        ).to_jsonl()
+                    )
                     await writer.drain()
 
                 # Send success response indicating turn ended
@@ -213,19 +225,31 @@ class VerbixServer:
 
         elif action == "cancel":
             if not request.task_id:
-                resp = IPCResponse(id=request.id, status="error", error="Missing 'task_id'")
+                resp = IPCResponse(
+                    id=request.id, status="error", error="Missing 'task_id'"
+                )
             else:
                 ok = await self.runtime.cancel_task(request.task_id)
-                resp = IPCResponse(id=request.id, status="ok" if ok else "error", data={"cancelled": ok})
+                resp = IPCResponse(
+                    id=request.id,
+                    status="ok" if ok else "error",
+                    data={"cancelled": ok},
+                )
             writer.write(resp.to_jsonl())
             await writer.drain()
 
         elif action == "steer":
             if not request.task_id or not request.instruction:
-                resp = IPCResponse(id=request.id, status="error", error="Missing 'task_id' or 'instruction'")
+                resp = IPCResponse(
+                    id=request.id,
+                    status="error",
+                    error="Missing 'task_id' or 'instruction'",
+                )
             else:
                 ok = await self.runtime.steer_task(request.task_id, request.instruction)
-                resp = IPCResponse(id=request.id, status="ok" if ok else "error", data={"steered": ok})
+                resp = IPCResponse(
+                    id=request.id, status="ok" if ok else "error", data={"steered": ok}
+                )
             writer.write(resp.to_jsonl())
             await writer.drain()
 
@@ -240,11 +264,15 @@ class VerbixServer:
             transcription = None
             if self.pipeline:
                 transcription = await self.pipeline.on_ptt_up()
-            resp = IPCResponse(id=request.id, status="ok", data={"transcription": transcription})
+            resp = IPCResponse(
+                id=request.id, status="ok", data={"transcription": transcription}
+            )
             writer.write(resp.to_jsonl())
             await writer.drain()
 
         else:
-            resp = IPCResponse(id=request.id, status="error", error=f"Unknown action: '{action}'")
+            resp = IPCResponse(
+                id=request.id, status="error", error=f"Unknown action: '{action}'"
+            )
             writer.write(resp.to_jsonl())
             await writer.drain()

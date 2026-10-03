@@ -83,13 +83,18 @@ class VoicePipeline:
                     current_buffer += event.text
 
                     # Check for sentence boundary to begin immediate TTS synthesis
-                    if any(p in current_buffer for p in (". ", "! ", "? ", ".\n", "!\n", "?\n")):
+                    if any(
+                        p in current_buffer
+                        for p in (". ", "! ", "? ", ".\n", "!\n", "?\n")
+                    ):
                         sentences = split_sentences(current_buffer)
                         if len(sentences) > 1:
                             # Speak complete sentences, keep last partial sentence in buffer
                             complete = sentences[:-1]
                             current_buffer = sentences[-1]
-                            spoken = await self.player.speak_foreground_sentences(complete)
+                            spoken = await self.player.speak_foreground_sentences(
+                                complete
+                            )
                             spoken_sentences.append(spoken)
 
                 elif isinstance(event, TurnComplete):

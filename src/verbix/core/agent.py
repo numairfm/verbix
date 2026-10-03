@@ -111,9 +111,7 @@ class AgentSession:
             turn_count += 1
 
             # Prepare turn messages (resolving dynamic running tasks callable if provided)
-            active_tasks = (
-                running_tasks() if callable(running_tasks) else running_tasks
-            )
+            active_tasks = running_tasks() if callable(running_tasks) else running_tasks
             raw_rendered = self.history.render_turn_prompt(active_tasks)
             messages = [
                 CanonicalMessage(role="system", content=self.system_prompt),

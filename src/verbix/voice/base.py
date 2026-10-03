@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,7 @@ class AudioChunk:
     sample_width: int = 2  # 16-bit PCM
 
 
+@runtime_checkable
 class SpeechToText(Protocol):
     """Protocol for transcribing speech audio bytes to text."""
 
@@ -24,6 +25,7 @@ class SpeechToText(Protocol):
         ...
 
 
+@runtime_checkable
 class TextToSpeech(Protocol):
     """Protocol for synthesizing speech audio bytes from text."""
 
@@ -32,6 +34,7 @@ class TextToSpeech(Protocol):
         ...
 
 
+@runtime_checkable
 class AudioSink(Protocol):
     """Protocol for hardware or subprocess audio playback output."""
 

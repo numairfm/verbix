@@ -39,9 +39,26 @@ class PTTCapture:
 
         cmd: list[str] = []
         if self._backend == "pw-record":
-            cmd = ["pw-record", "--rate", str(self.sample_rate), "--channels", str(self.channels), "-"]
+            cmd = [
+                "pw-record",
+                "--rate",
+                str(self.sample_rate),
+                "--channels",
+                str(self.channels),
+                "-",
+            ]
         elif self._backend == "arecord":
-            cmd = ["arecord", "-q", "-r", str(self.sample_rate), "-c", str(self.channels), "-f", "S16_LE", "-"]
+            cmd = [
+                "arecord",
+                "-q",
+                "-r",
+                str(self.sample_rate),
+                "-c",
+                str(self.channels),
+                "-f",
+                "S16_LE",
+                "-",
+            ]
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,

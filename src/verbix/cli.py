@@ -16,11 +16,18 @@ from verbix.core.events import (
     ToolCallStarted,
     TurnComplete,
 )
+from verbix.ipc.client import VerbixClient
 from verbix.ipc.server import VerbixServer
 from verbix.provider.client import ProviderClient
 from verbix.runtime.tasks import TaskRuntime
 from verbix.tools.bash import BashTool
 from verbix.tools.filesystem import FileEditTool, FileReadTool, FileWriteTool
+from verbix.voice.capture import PTTCapture
+from verbix.voice.pipeline import VoicePipeline
+from verbix.voice.player import AudioPlayer
+from verbix.voice.pocket_tts import PocketTTSEngine
+from verbix.voice.sinks import SubprocessAudioSink
+from verbix.voice.stt import FasterWhisperSTT
 
 
 def load_env(env_path: Path | None = None) -> None:
@@ -63,9 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         default=os.environ.get(
             "VERBIX_MODEL",
-            os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
+            os.environ.get("OPENROUTER_MODEL", "google/gemini-3.5-flash-lite"),
         ),
-        help="Model identifier (default: google/gemini-2.5-flash)",
+        help="Model identifier (default: google/gemini-3.5-flash-lite)",
     )
     parser.add_argument(
         "--base-url",
@@ -107,6 +114,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Path for Unix Domain Socket (default: ~/.local/share/verbix/verbix.sock).",
+    )
+    parser.add_argument(
+        "--voice",
+        action="store_true",
+        help="Run in voice mode (PTT -> STT -> Receptionist -> PocketTTS audio playback).",
+    )
+    parser.add_argument(
+        "--ptt",
+        choices=["down", "up"],
+        help="Send push-to-talk event to running Verbix daemon over IPC socket.",
     )
     return parser
 
@@ -164,6 +181,27 @@ async def run_turn(session: AgentSession, user_input: str) -> str:
 
 
 async def async_main(args: argparse.Namespace) -> int:
+    if args.ptt:
+        socket_path = args.socket_path or (
+            Path.home() / ".local" / "share" / "verbix" / "verbix.sock"
+        )
+        client = VerbixClient(socket_path=socket_path)
+        try:
+            await client.connect()
+            if args.ptt == "down":
+                ok = await client.ptt_down()
+                sys.stdout.write(f"PTT down: {'ok' if ok else 'failed'}\n")
+            elif args.ptt == "up":
+                text = await client.ptt_up()
+                sys.stdout.write(
+                    f"PTT up: {text if text is not None else 'no transcription'}\n"
+                )
+            await client.close()
+            return 0
+        except (OSError, RuntimeError) as e:
+            sys.stderr.write(f"Error connecting to Verbix daemon: {e}\n")
+            return 1
+
     api_key = (
         args.api_key
         or os.environ.get("OPENROUTER_API_KEY")
@@ -194,15 +232,94 @@ async def async_main(args: argparse.Namespace) -> int:
         )
         runtime = TaskRuntime(workspace=workspace, provider=provider)
         runtime.create_receptionist()
-        server = VerbixServer(runtime=runtime, socket_path=socket_path)
+
+        pipeline: VoicePipeline | None = None
+        tts: PocketTTSEngine | None = None
+        if args.voice:
+            stt = FasterWhisperSTT()
+            tts = PocketTTSEngine()
+            sink = SubprocessAudioSink(sample_rate=24000, audio_format="f32")
+            player = AudioPlayer(tts=tts, sink=sink, runtime=runtime)
+            capture = PTTCapture()
+            pipeline = VoicePipeline(
+                runtime=runtime, stt=stt, player=player, capture=capture
+            )
+
+        server = VerbixServer(
+            runtime=runtime, pipeline=pipeline, socket_path=socket_path
+        )
         await server.start()
-        sys.stdout.write(f"Verbix daemon listening on {socket_path}\nPress Ctrl+C to terminate.\n")
+        voice_state = "on" if pipeline else "off"
+        sys.stdout.write(
+            f"Verbix daemon listening on {socket_path} (voice={voice_state})\nPress Ctrl+C to terminate.\n"
+        )
         sys.stdout.flush()
         try:
             while True:
                 await asyncio.sleep(1.0)
         finally:
             await server.stop()
+            if tts:
+                await tts.aclose()
+        return 0
+
+    if args.voice:
+        runtime = TaskRuntime(workspace=workspace, provider=provider)
+        runtime.create_receptionist()
+        stt = FasterWhisperSTT()
+        tts = PocketTTSEngine()
+        sink = SubprocessAudioSink(sample_rate=24000, audio_format="f32")
+        player = AudioPlayer(tts=tts, sink=sink, runtime=runtime)
+        capture = PTTCapture()
+        pipeline = VoicePipeline(
+            runtime=runtime, stt=stt, player=player, capture=capture
+        )
+
+        sys.stdout.write(
+            f"Verbix Voice Mode (model: {args.model}, workspace: {workspace})\n"
+        )
+        sys.stdout.write(
+            "Stand-in PTT: Press [Enter] to start recording, speak, then press [Enter] to finish.\n"
+        )
+        sys.stdout.write(
+            "Or type a prompt directly. Type 'exit' or 'quit' to end session.\n\n"
+        )
+        sys.stdout.flush()
+
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                sys.stdout.write("verbix [Enter=PTT / type prompt]> ")
+                sys.stdout.flush()
+                line = await loop.run_in_executor(None, sys.stdin.readline)
+                if not line:
+                    break
+                text = line.strip()
+                if text.lower() in ("exit", "quit"):
+                    break
+
+                if not text:
+                    await pipeline.on_ptt_down()
+                    sys.stdout.write(
+                        "[Recording mic... Press Enter when done speaking]\n"
+                    )
+                    sys.stdout.flush()
+                    await loop.run_in_executor(None, sys.stdin.readline)
+                    sys.stdout.write("[Processing audio & transcribing...]\n")
+                    sys.stdout.flush()
+                    transcribed = await pipeline.on_ptt_up()
+                    if transcribed:
+                        sys.stdout.write(f"[User spoke]: {transcribed}\n")
+                        sys.stdout.flush()
+                    else:
+                        sys.stdout.write("[No speech detected or audio too short]\n")
+                        sys.stdout.flush()
+                else:
+                    await pipeline.execute_voice_turn(text)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            sys.stdout.write("\n")
+        finally:
+            await tts.aclose()
         return 0
 
     if args.direct:
@@ -231,7 +348,9 @@ async def async_main(args: argparse.Namespace) -> int:
             except asyncio.CancelledError:
                 return 130
 
-        sys.stdout.write(f"Verbix Direct Agent (model: {args.model}, workspace: {workspace})\n")
+        sys.stdout.write(
+            f"Verbix Direct Agent (model: {args.model}, workspace: {workspace})\n"
+        )
         sys.stdout.write("Type 'exit' or 'quit' to end session.\n\n")
         sys.stdout.flush()
 
@@ -281,7 +400,9 @@ async def async_main(args: argparse.Namespace) -> int:
             return 130
 
     # Interactive REPL mode
-    sys.stdout.write(f"Verbix Receptionist (model: {args.model}, workspace: {workspace})\n")
+    sys.stdout.write(
+        f"Verbix Receptionist (model: {args.model}, workspace: {workspace})\n"
+    )
     sys.stdout.write("Type 'exit' or 'quit' to end session.\n\n")
     sys.stdout.flush()
 

@@ -9,10 +9,12 @@ def test_cli_parser_defaults():
     parser = build_parser()
     args = parser.parse_args([])
     assert args.prompt is None
-    assert args.model == "google/gemini-2.5-flash"
+    assert args.model == "google/gemini-3.5-flash-lite"
     assert args.base_url == "https://openrouter.ai/api/v1"
     assert args.api_key is None
     assert args.max_tokens == 2048
+    assert args.voice is False
+    assert args.ptt is None
 
 
 def test_cli_parser_custom_args():
@@ -57,3 +59,11 @@ def test_cli_parser_serve_and_direct():
     assert args_direct.direct is True
     assert args_direct.prompt == "direct prompt"
 
+
+def test_cli_parser_voice_and_ptt():
+    parser = build_parser()
+    args_voice = parser.parse_args(["--voice"])
+    assert args_voice.voice is True
+
+    args_ptt = parser.parse_args(["--ptt", "down"])
+    assert args_ptt.ptt == "down"

@@ -186,7 +186,9 @@ class TaskRuntime:
                 f"- {t.id} '{t.title}': {t.status} ({t.result.speech_summary if t.result else 'done'})"
                 for t in recent
             ]
-            return "No active background tasks.\nRecent tasks:\n" + "\n".join(recent_lines)
+            return "No active background tasks.\nRecent tasks:\n" + "\n".join(
+                recent_lines
+            )
 
         active_lines = [
             f"- {t.id} '{t.title}' (running, step {t.step_count})" for t in active
@@ -198,10 +200,12 @@ class TaskRuntime:
         title: str,
         prompt: str,
         isolate_worktree: bool = False,
+        workspace: Path | str | None = None,
     ) -> str:
         """Spawns an independent background worker session in structured concurrency."""
         self._task_counter += 1
         task_id = f"task-{self._task_counter}"
+        target_ws = Path(workspace).resolve() if workspace else self.workspace
 
         task = TaskState(
             id=task_id,
@@ -220,6 +224,7 @@ class TaskRuntime:
             title=title,
             prompt=prompt,
             isolate_worktree=isolate_worktree,
+            workspace=target_ws,
         )
         bg_task = asyncio.create_task(worker_coro, name=f"worker-{task_id}")
         self._worker_tasks[task_id] = bg_task
@@ -304,7 +309,9 @@ class TaskRuntime:
         # Turn boundary injection:
         # If main session is idle, inject immediately; if turn is active, buffer until turn ends.
         if not self.is_main_turn_active and self.main_session:
-            self.main_session.history.inject_task_completion(task_id, task.title, result)
+            self.main_session.history.inject_task_completion(
+                task_id, task.title, result
+            )
         else:
             self._pending_completions.append((task_id, task.title, result))
 
@@ -325,10 +332,12 @@ class TaskRuntime:
         title: str,
         prompt: str,
         isolate_worktree: bool,
+        workspace: Path | None = None,
     ) -> None:
         """Executes the worker agent loop until finish or cancellation."""
         task = self.tasks[task_id]
-        worker_dir = self.workspace
+        base_dir = workspace or self.workspace
+        worker_dir = base_dir
 
         if isolate_worktree:
             try:
@@ -339,7 +348,7 @@ class TaskRuntime:
                     task_id,
                     e,
                 )
-                worker_dir = self.workspace
+                worker_dir = base_dir
 
         finish_tool = WorkerFinishTool(
             on_finish=lambda res: self._finish_task(task_id, res, status="completed")
@@ -419,7 +428,10 @@ class TaskRuntime:
                     return
 
                 # If no tools were called and model produced a final text without calling worker_finish
-                if session.history.messages and session.history.messages[-1].role == "assistant":
+                if (
+                    session.history.messages
+                    and session.history.messages[-1].role == "assistant"
+                ):
                     last_msg = session.history.messages[-1]
                     if not last_msg.tool_calls:
                         # Model stopped speaking without calling worker_finish
@@ -433,9 +445,7 @@ class TaskRuntime:
                             speech_summary=speech,
                             details=last_text or "Task ended without tool calls.",
                         )
-                        self._finish_task(
-                            task_id, fallback_result, status="completed"
-                        )
+                        self._finish_task(task_id, fallback_result, status="completed")
                         return
 
             # If max turns reached without finish

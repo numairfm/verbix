@@ -58,7 +58,9 @@ class VerbixClient:
         if not self._writer or not self._reader:
             raise RuntimeError("Client not connected.")
 
-        req = IPCRequest(id=f"prompt-{asyncio.get_event_loop().time()}", action="prompt", prompt=text)
+        req = IPCRequest(
+            id=f"prompt-{asyncio.get_event_loop().time()}", action="prompt", prompt=text
+        )
         req_line = json.dumps(req.model_dump(exclude_none=True)) + "\n"
         self._writer.write(req_line.encode("utf-8"))
         await self._writer.drain()
@@ -89,6 +91,21 @@ class VerbixClient:
         req = IPCRequest(id="cancel-1", action="cancel", task_id=task_id)
         resp = await self._send_request(req)
         return bool(resp.data.get("cancelled", False))
+
+    async def ptt_down(self) -> bool:
+        """Triggers push-to-talk press down."""
+        req = IPCRequest(id="ptt-down-1", action="ptt_down")
+        resp = await self._send_request(req)
+        return resp.status == "ok"
+
+    async def ptt_up(self) -> str | None:
+        """Triggers push-to-talk release."""
+        req = IPCRequest(id="ptt-up-1", action="ptt_up")
+        resp = await self._send_request(req)
+        if resp.status == "ok":
+            val = resp.data.get("transcription")
+            return str(val) if val is not None else None
+        return None
 
     async def _send_request(self, req: IPCRequest) -> IPCResponse:
         """Sends a single request and awaits the matching response."""

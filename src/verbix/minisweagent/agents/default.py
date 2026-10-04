@@ -79,6 +79,7 @@ class DefaultAgent:
         model: Any,
         env: Any = None,
         tools: Any = None,
+        config: AgentConfig | None = None,
         *,
         config_class: type[AgentConfig] = AgentConfig,
         **kwargs: Any,
@@ -89,11 +90,13 @@ class DefaultAgent:
         elif isinstance(tools, (list, tuple)) and "tools" not in kwargs:
             kwargs["tools"] = list(tools)
 
-
-        if "config" in kwargs and isinstance(kwargs["config"], AgentConfig):
+        if config is not None:
+            self.config = config
+        elif "config" in kwargs and isinstance(kwargs["config"], AgentConfig):
             self.config = kwargs.pop("config")
         else:
             self.config = config_class(**kwargs)
+
 
         self.messages: list[dict[str, Any]] = []
         self.model = model
@@ -132,13 +135,13 @@ class DefaultAgent:
             kwargs,
         )
 
-    def _render_template(self, template: str) -> str:
+    def _render_template(self, template: str, **kwargs: Any) -> str:
         if not template:
             return ""
         try:
-            return Template(template, undefined=StrictUndefined).render(**self.get_template_vars())
+            return Template(template, undefined=StrictUndefined).render(**self.get_template_vars(**kwargs))
         except Exception:  # noqa: BLE001
-            return Template(template).render(**self.get_template_vars())
+            return Template(template).render(**self.get_template_vars(**kwargs))
 
     def add_messages(self, *messages: dict[str, Any]) -> list[dict[str, Any]]:
         self.logger.debug(messages)
@@ -185,8 +188,8 @@ class DefaultAgent:
             except Exception as e:  # noqa: BLE001
                 return f"Error executing tool '{name}': {e}", True
 
-        # 2. Check environment for bash / shell commands
-        if name == "bash" or self.env is not None:
+        # 2. Check environment for bash commands
+        if name == "bash":
             if self.env is None:
                 return "Error: Cannot execute bash command because no environment is configured.", True
 
@@ -194,9 +197,16 @@ class DefaultAgent:
             try:
                 res = await asyncio.to_thread(self.env.execute, action)
                 obs = res.get("output", "") if isinstance(res, dict) else str(res)
-                is_err = res.get("returncode", 0) != 0 if isinstance(res, dict) else False
+                returncode = res.get("returncode", 0) if isinstance(res, dict) else 0
+                is_err = returncode != 0
                 if is_err and not obs and isinstance(res, dict) and res.get("exception_info"):
                     obs = res["exception_info"]
+                if (
+                    is_err
+                    and f"returncode: {returncode}" not in obs.lower()
+                    and f"exit code: {returncode}" not in obs.lower()
+                ):
+                    obs = f"[Returncode: {returncode}]\n{obs}".strip()
 
                 # Check if output contains completion token if not already raised by env
                 lines = obs.lstrip().splitlines(keepends=True)
@@ -227,16 +237,21 @@ class DefaultAgent:
                 pass
         return {"role": role, "content": content, **kwargs}
 
-
     async def step_stream(self, user_input: str | None = None) -> AsyncIterator[AgentEvent]:
         """Stream an agent turn asynchronously, yielding AgentEvents and executing tools."""
+        is_initial_turn = not any(m.get("role") == "user" for m in self.messages)
         # Initialize conversation messages if starting fresh
         if not self.messages and self.config.system_template:
             sys_content = self._render_template(self.config.system_template)
             self.add_messages(self._format_message(role="system", content=sys_content))
 
         if user_input is not None:
-            self.add_messages(self._format_message(role="user", content=user_input))
+            if is_initial_turn and self.config.instance_template:
+                user_content = self._render_template(self.config.instance_template, task=user_input)
+            else:
+                user_content = user_input
+            self.add_messages(self._format_message(role="user", content=user_content))
+
 
 
         while True:

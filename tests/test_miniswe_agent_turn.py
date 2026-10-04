@@ -311,3 +311,116 @@ def test_agent_sync_run_and_save(tmp_path):
     assert "messages" in data
 
 
+def test_default_agent_positional_config():
+    mock_model = MagicMock()
+    mock_env = MagicMock()
+    tools = ToolRegistry()
+    config = AgentConfig(system_template="System", instance_template="Task: {{task}}", tools=["spawn"])
+
+    agent = DefaultAgent(mock_model, mock_env, tools, config)
+    assert agent.model is mock_model
+    assert agent.env is mock_env
+    assert agent.tools is tools
+    assert agent.config is config
+    assert agent.config.tools == ["spawn"]
+
+
+@pytest.mark.asyncio
+async def test_step_stream_renders_instance_template_initial_turn():
+    mock_model = MagicMock()
+    turn_count = 0
+
+    async def mock_stream(messages, tools=None):
+        nonlocal turn_count
+        turn_count += 1
+        yield TextDelta(text=f"Response {turn_count}")
+        yield TurnComplete(final_text=f"Response {turn_count}")
+
+    mock_model.query_stream = mock_stream
+    config = AgentConfig(
+        system_template="You are a helper.",
+        instance_template="Please solve this issue: {{task}}\nWorkflow: step-by-step.",
+    )
+    agent = DefaultAgent(mock_model, config=config)
+
+    # Initial turn: user message rendered via instance_template
+    _ = [e async for e in agent.step_stream("fix issue 42")]
+    assert len(agent.messages) >= 2
+    assert "Please solve this issue: fix issue 42" in agent.messages[1]["content"]
+    assert "Workflow: step-by-step." in agent.messages[1]["content"]
+
+    # Second turn: user message used directly
+    _ = [e async for e in agent.step_stream("what is the status?")]
+    assert agent.messages[3]["content"] == "what is the status?"
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_with_env_attached_returns_tool_error():
+    mock_model = MagicMock()
+    mock_env = MagicMock()
+    call_count = 0
+
+    async def mock_stream(messages, tools=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield ToolCallDelta(
+                index=0,
+                call_id="call_custom_1",
+                name="nonexistent_tool",
+                arguments_delta='{"arg": 1}',
+            )
+        else:
+            yield TextDelta(text="Done.")
+            yield TurnComplete(final_text="Done.")
+
+    mock_model.query_stream = mock_stream
+    agent = DefaultAgent(mock_model, env=mock_env, tools_list=["bash"])
+    events = [e async for e in agent.step_stream("run something")]
+
+    # Crucial assertion: mock_env.execute was NOT called for unknown tool
+    mock_env.execute.assert_not_called()
+
+    finished = [e for e in events if isinstance(e, ToolCallFinished)]
+    assert len(finished) == 1
+    assert finished[0].call_id == "call_custom_1"
+    assert finished[0].is_error is True
+    assert "not registered or supported" in finished[0].observation
+
+
+@pytest.mark.asyncio
+async def test_bash_observation_includes_returncode_on_failure():
+    mock_model = MagicMock()
+    mock_env = MagicMock()
+    mock_env.execute.return_value = {
+        "output": "cat: missing.txt: No such file or directory",
+        "returncode": 1,
+        "exception_info": "",
+    }
+    call_count = 0
+
+    async def mock_stream(messages, tools=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield ToolCallDelta(
+                index=0,
+                call_id="call_bash_err",
+                name="bash",
+                arguments_delta='{"command": "cat missing.txt"}',
+            )
+        else:
+            yield TextDelta(text="File was missing.")
+            yield TurnComplete(final_text="File was missing.")
+
+    mock_model.query_stream = mock_stream
+    agent = DefaultAgent(mock_model, env=mock_env, tools_list=["bash"])
+    events = [e async for e in agent.step_stream("read file")]
+
+    finished = [e for e in events if isinstance(e, ToolCallFinished)]
+    assert len(finished) == 1
+    assert finished[0].is_error is True
+    assert "[Returncode: 1]" in finished[0].observation
+
+
+

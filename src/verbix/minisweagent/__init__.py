@@ -1,5 +1,6 @@
 """Mini-SWE-Agent unified core vendored for Verbix."""
 
+from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent
 from verbix.minisweagent.exceptions import (
     FormatError,
     InterruptAgentFlow,
@@ -10,6 +11,8 @@ from verbix.minisweagent.exceptions import (
 )
 
 __all__ = [
+    "AgentConfig",
+    "DefaultAgent",
     "FormatError",
     "InterruptAgentFlow",
     "LimitsExceeded",
@@ -17,3 +20,4 @@ __all__ = [
     "TimeExceeded",
     "UserInterruption",
 ]
+

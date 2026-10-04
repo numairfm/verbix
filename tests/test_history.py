@@ -1,11 +1,39 @@
-from tests.test_regressions import assert_valid_history
 from verbix.core.history import ConversationHistory
 from verbix.core.models import (
     CanonicalMessage,
     CanonicalToolCall,
-    TaskState,
-    WorkerResult,
 )
+
+
+def assert_valid_history(msgs: list[CanonicalMessage]) -> None:
+    """Every assistant tool_calls message must be immediately followed by results for all its ids,
+
+    and there must be no orphan tool messages.
+    """
+    i = 0
+    n = len(msgs)
+    while i < n:
+        msg = msgs[i]
+        if msg.role == "tool":
+            raise AssertionError(
+                f"Orphan tool message at index {i} with id {msg.tool_call_id}"
+            )
+        if msg.role == "assistant" and msg.tool_calls:
+            call_ids = [tc.id for tc in msg.tool_calls]
+            num_calls = len(call_ids)
+            tool_res_msgs = msgs[i + 1 : i + 1 + num_calls]
+            if len(tool_res_msgs) != num_calls:
+                raise AssertionError(
+                    f"Assistant message at {i} has {num_calls} tool calls ({call_ids}), but {len(tool_res_msgs)} messages follow"
+                )
+            for j, t_msg in enumerate(tool_res_msgs):
+                if t_msg.role != "tool":
+                    raise AssertionError(
+                        f"Expected tool message at index {i + 1 + j} for call {call_ids[j]}, found role {t_msg.role}"
+                    )
+            i += 1 + num_calls
+            continue
+        i += 1
 
 
 def test_history_append_and_messages():
@@ -16,7 +44,7 @@ def test_history_append_and_messages():
     assert len(history.messages) == 1
     assert history.messages[0].role == "user"
 
-    tc = CanonicalToolCall(id="c1", name="task_spawn", arguments='{"title": "build"}')
+    tc = CanonicalToolCall(id="c1", name="spawn", arguments='{"task": "build"}')
     history.append_assistant("Starting build", tool_calls=[tc])
     assert len(history.messages) == 2
 
@@ -25,44 +53,6 @@ def test_history_append_and_messages():
     )
     assert len(history.messages) == 3
     assert_valid_history(history.messages)
-
-
-def test_inject_task_completion():
-    history = ConversationHistory()
-    history.append_user("Run the tests in background")
-    history.append_assistant("Spawned test worker.")
-
-    res = WorkerResult(
-        success=True,
-        speech_summary="All 14 unit tests passed.",
-        details="test_auth: ok\ntest_db: ok",
-    )
-    history.inject_task_completion(task_id="task-42", title="run tests", result=res)
-
-    assert len(history.messages) == 3
-    last = history.messages[-1]
-    assert last.role == "user"
-    assert "[Verbix runtime notice — not said by the user]" in last.content
-    assert (
-        "[Task completed: 'run tests' (task-42) -> Succeeded: All 14 unit tests passed. Details: test_auth: ok\ntest_db: ok]"
-        in last.content
-    )
-    assert_valid_history(history.messages)
-
-
-def test_inject_task_completion_capped_details():
-    history = ConversationHistory()
-    long_details = "D" * 800
-    res = WorkerResult(
-        success=False,
-        speech_summary="Build failed.",
-        details=long_details,
-    )
-    history.inject_task_completion(task_id="task-99", title="compile", result=res)
-
-    last = history.messages[-1]
-    assert "... (call task_status for full details)" in last.content
-    assert len(last.content) < 800
 
 
 def test_close_aborted_turn_with_tool_calls():
@@ -112,28 +102,3 @@ def test_close_aborted_turn_with_no_speech():
     assert len(history.messages) == 1
     assert history.messages[0].role == "user"
     assert_valid_history(history.messages)
-
-
-def test_render_turn_prompt_ephemeral_running_task_line():
-    history = ConversationHistory()
-    history.append_user("How much memory is left?")
-
-    running_task = TaskState(
-        id="task-1", title="compile kernel", status="running", step_count=12
-    )
-    finished_task = TaskState(
-        id="task-2",
-        title="download dataset",
-        status="completed",
-        result=WorkerResult(success=True, speech_summary="Done.", details="OK"),
-    )
-
-    rendered = history.render_turn_prompt(running_tasks=[running_task, finished_task])
-    assert len(rendered) == 1
-    assert "[Running: task-1 'compile kernel' (12 tool calls)]" in rendered[0].content
-    assert "How much memory is left?" in rendered[0].content
-    assert "download dataset" not in rendered[0].content
-
-    # Invariant: Underlying history must NOT be mutated!
-    assert "[Running:" not in history.messages[0].content
-    assert history.messages[0].content == "How much memory is left?"

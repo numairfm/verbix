@@ -11,7 +11,6 @@ class IPCRequest(BaseModel):
     action: str
     prompt: str | None = None
     task_id: str | None = None
-    instruction: str | None = None
     params: dict[str, Any] = Field(default_factory=dict)
 
 

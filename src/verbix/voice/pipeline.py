@@ -10,7 +10,6 @@ from verbix.voice.capture import PTTCapture
 from verbix.voice.player import AudioPlayer
 
 if TYPE_CHECKING:
-    from verbix.runtime.tasks import TaskRuntime
     from verbix.voice.base import SpeechToText
 
 logger = logging.getLogger(__name__)
@@ -25,12 +24,18 @@ def split_sentences(text: str) -> list[str]:
 class SpeechTurnOutput:
     """TurnOutput implementation that feeds completed sentences to the AudioPlayer."""
 
-    def __init__(self, player: AudioPlayer) -> None:
+    def __init__(self, player: AudioPlayer, printer: Any = None) -> None:
         self.player = player
+        self.printer = printer
         self._buffer: str = ""
         self._delivered_sentences: list[str] = []
 
     async def emit(self, event: AgentEvent) -> None:
+        if self.printer and hasattr(self.printer, "emit"):
+            res = self.printer.emit(event)
+            if asyncio.iscoroutine(res):
+                await res
+
         if isinstance(event, TextDelta):
             self._buffer += event.text
             if any(p in self._buffer for p in (". ", "! ", "? ", ".\n", "!\n", "?\n")):
@@ -54,10 +59,11 @@ class SpeechTurnOutput:
                     if s:
                         await self.player.speak(s)
                         self._delivered_sentences.append(s)
-            elif not self._delivered_sentences and event.final_text.strip():
+            elif event.final_text.strip() and event.final_text.strip() not in self._delivered_sentences:
                 txt = event.final_text.strip()
                 await self.player.speak(txt)
                 self._delivered_sentences.append(txt)
+            self._delivered_sentences.clear()
 
     def delivered_text(self) -> str:
         return " ".join(self._delivered_sentences).strip()
@@ -75,17 +81,19 @@ class VoicePipeline:
 
     def __init__(
         self,
-        runtime: TaskRuntime,
+        runtime: Any,
         stt: SpeechToText,
         player: AudioPlayer,
         capture: PTTCapture | None = None,
+        printer: Any = None,
     ) -> None:
         self.runtime = runtime
         self.stt = stt
         self.player = player
         self.capture = capture or PTTCapture()
+        self.printer = printer
 
-        self._speech_output = SpeechTurnOutput(self.player)
+        self._speech_output = SpeechTurnOutput(self.player, printer=self.printer)
         if self.runtime is not None:
             self.runtime.wake_output = self._speech_output
 
@@ -150,7 +158,6 @@ class VoicePipeline:
 
         transcribed_text = transcribed_text.strip()
         if not transcribed_text:
-            self.runtime._maybe_wake()
             return {"action": "idle", "transcription": ""}
 
         # Launch turn execution in background so toggle command returns immediately
@@ -161,4 +168,7 @@ class VoicePipeline:
 
     async def execute_voice_turn(self, user_text: str) -> str | None:
         """Executes a complete receptionist turn from transcribed user text, streaming TTS audio."""
+        if self.printer and hasattr(self.printer, "reset_delivered"):
+            self.printer.reset_delivered()
+        self._speech_output.reset_delivered()
         return await self.runtime.submit(user_text, self._speech_output)

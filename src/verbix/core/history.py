@@ -3,15 +3,13 @@ from __future__ import annotations
 from verbix.core.models import (
     CanonicalMessage,
     CanonicalToolCall,
-    TaskState,
-    WorkerResult,
 )
 
 
 class ConversationHistory:
-    """In-memory append-only sequence of canonical messages with turn-boundary validation,
+    """In-memory append-only sequence of canonical messages with turn-boundary validation
 
-    runtime-authored completion injection, and barge-in truncation.
+    and barge-in truncation.
     """
 
     def __init__(self) -> None:
@@ -41,31 +39,6 @@ class ConversationHistory:
                 tool_calls=tool_calls,
             )
         )
-
-    def inject_task_completion(
-        self, task_id: str, title: str, result: WorkerResult
-    ) -> None:
-        """Injects an immutable, runtime-authored task completion record into history.
-
-        Uses role='user' with runtime notice attribution so it works across providers
-        and allows a wake turn to respond naturally.
-        """
-        outcome = "Succeeded" if result.success else "Failed"
-        summary = result.speech_summary.rstrip(".")
-        details = result.details.strip()
-        if len(details) > 600:
-            details_str = (
-                f" Details: {details[:600]}... (call task_status for full details)"
-            )
-        elif details:
-            details_str = f" Details: {details}"
-        else:
-            details_str = ""
-        formatted = (
-            "[Verbix runtime notice — not said by the user]\n"
-            f"[Task completed: '{title}' ({task_id}) -> {outcome}: {summary}.{details_str}]"
-        )
-        self.append(CanonicalMessage(role="user", content=formatted))
 
     def close_aborted_turn(self, delivered: str) -> None:
         """Closes an aborted turn cleanly so history remains structurally valid.
@@ -124,34 +97,3 @@ class ConversationHistory:
                 self._messages.pop()
         elif delivered:
             self.append_assistant(content=delivered)
-
-    def render_turn_prompt(
-        self, running_tasks: list[TaskState] | None = None
-    ) -> list[CanonicalMessage]:
-        """Renders messages for the current turn prompt.
-
-        If running tasks exist, prepends an ephemeral running-task line to the active user message.
-        Invariants:
-        1. Never includes completed/finished tasks.
-        2. Never mutates or persists the running-task annotation to underlying history.
-        """
-        msgs = [m.model_copy() for m in self._messages]
-        if not running_tasks or not msgs:
-            return msgs
-
-        active = [t for t in running_tasks if t.is_running]
-        if not active:
-            return msgs
-
-        lines = [
-            f"[Running: {t.id} '{t.title}' ({t.step_count} tool calls)]" for t in active
-        ]
-        prefix = "\n".join(lines) + "\n\n"
-
-        # Attach prefix to the last user message
-        for i in range(len(msgs) - 1, -1, -1):
-            if msgs[i].role == "user":
-                msgs[i].content = prefix + msgs[i].content
-                break
-
-        return msgs

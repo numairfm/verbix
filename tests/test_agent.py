@@ -47,6 +47,17 @@ async def mock_agent_sse_app(scope, receive, send):
             {"choices": [{"delta": {"content": "I help you today?"}}]},
             {"choices": [{"finish_reason": "stop"}]},
         ]
+    # Case 1b: Reasoning only, empty text and tool calls
+    elif last_msg.get("content") == "Thought only":
+        chunks = [
+            {"choices": [{"delta": {"reasoning_content": "Internal reflection without speech."}}]},
+            {"choices": [{"finish_reason": "stop"}]},
+        ]
+    # Case 1c: Completely blank response
+    elif last_msg.get("content") == "Blank response":
+        chunks = [
+            {"choices": [{"finish_reason": "stop"}]},
+        ]
     # Case 2: Tool call requested
     elif last_msg.get("content") == "Create test.txt":
         chunks = [
@@ -236,3 +247,50 @@ async def test_agent_cycle_detection(tmp_path: Path):
             "loop detected" in turn_completes[0].final_text.lower()
             or "stopped" in turn_completes[0].final_text.lower()
         )
+
+
+@pytest.mark.asyncio
+async def test_agent_empty_content_with_thought_fallback(tmp_path: Path):
+    transport = ASGITransport(app=mock_agent_sse_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as http_client:
+        provider = ProviderClient(
+            base_url="http://test/v1", model="test-model", http_client=http_client
+        )
+        session = AgentSession(
+            session_id="sess_thought_fallback",
+            system_prompt="You are Verbix.",
+            provider=provider,
+            workspace=tmp_path,
+        )
+
+        events = []
+        async for event in session.step(user_input="Thought only"):
+            events.append(event)
+
+        turn_completes = [e for e in events if isinstance(e, TurnComplete)]
+        assert len(turn_completes) == 1
+        assert turn_completes[0].final_text == "Give me a moment."
+
+
+@pytest.mark.asyncio
+async def test_agent_empty_content_without_thought_fallback(tmp_path: Path):
+    transport = ASGITransport(app=mock_agent_sse_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as http_client:
+        provider = ProviderClient(
+            base_url="http://test/v1", model="test-model", http_client=http_client
+        )
+        session = AgentSession(
+            session_id="sess_blank_fallback",
+            system_prompt="You are Verbix.",
+            provider=provider,
+            workspace=tmp_path,
+        )
+
+        events = []
+        async for event in session.step(user_input="Blank response"):
+            events.append(event)
+
+        turn_completes = [e for e in events if isinstance(e, TurnComplete)]
+        assert len(turn_completes) == 1
+        assert turn_completes[0].final_text == "Sorry, something went wrong. Could you repeat that?"
+

@@ -1,5 +1,11 @@
 # Verbix — Current Architecture (as built)
 
+> **SUPERSEDED for turn-queue, wake-turn, task-lifecycle and worker topics by
+> `docs/qwen-loop-adaptation.md`.** This snapshot (commit `3b0c7e9`, 2026-10-03) is kept
+> for historical reference only. Where it disagrees with the current tree (e.g. turn
+> serialization, `announced` semantics, worker failure handling), the current code and
+> `docs/qwen-loop-adaptation.md` win.
+
 Snapshot: commit `3b0c7e9`, 2026-10-03. Written from the code, not from `docs/proposal.md`.
 No source code was changed to produce this document.
 

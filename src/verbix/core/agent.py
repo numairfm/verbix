@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -20,7 +20,6 @@ from verbix.core.history import ConversationHistory
 from verbix.core.models import (
     CanonicalMessage,
     CanonicalToolCall,
-    TaskState,
 )
 from verbix.provider.models import (
     Finish as ProviderFinish,
@@ -60,7 +59,7 @@ class CycleDetector:
 
 
 class AgentSession:
-    """Core autonomous agent turn loop with structured concurrency, streaming events,
+    """Core autonomous agent turn loop with streaming events,
 
     cycle detection, and lenient tool recovery.
     """
@@ -75,27 +74,24 @@ class AgentSession:
         history: ConversationHistory | None = None,
         max_turns: int = 30,
         reasoning_effort: str | None = None,
-        steer_callback: Callable[[], list[str]] | None = None,
     ) -> None:
         self.session_id = session_id
         self.system_prompt = system_prompt
         self.provider = provider
         self.workspace = workspace.resolve()
         self.tools: dict[str, Tool] = {t.name: t for t in (tools or [])}
+        self.tool_context = ToolContext(workspace=self.workspace)
         self.history = history or ConversationHistory()
         self.max_turns = max_turns
         self.reasoning_effort = reasoning_effort
-        self.steer_callback = steer_callback
 
     async def step(
         self,
         user_input: str | None = None,
-        running_tasks: list[TaskState] | Callable[[], list[TaskState]] | None = None,
-        steer: Callable[[], list[str]] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Runs the agent loop until the model yields a final text response,
 
-        reaching a terminal state, or max_turns is exhausted.
+        or max_turns is exhausted.
         Supports clean mid-flight cancellation via standard asyncio task cancellation.
         """
         if user_input:
@@ -119,22 +115,9 @@ class AgentSession:
         while turn_count < self.max_turns:
             turn_count += 1
 
-            # Drain any steering instructions before preparing turn prompt
-            steer_fn = steer or self.steer_callback
-            if steer_fn:
-                steer_msgs = steer_fn()
-                if steer_msgs:
-                    steering_prompt = "\n".join(
-                        f"[Steering instruction from user: {m}]" for m in steer_msgs
-                    )
-                    self.history.append_user(steering_prompt)
-
-            # Prepare turn messages (resolving dynamic running tasks callable if provided)
-            active_tasks = running_tasks() if callable(running_tasks) else running_tasks
-            raw_rendered = self.history.render_turn_prompt(active_tasks)
             messages = [
                 CanonicalMessage(role="system", content=self.system_prompt),
-                *raw_rendered,
+                *self.history.messages,
             ]
 
             accumulated_text: list[str] = []
@@ -251,10 +234,9 @@ class AgentSession:
                     yield TurnComplete(final_text=stop_msg)
                     return
 
-                # Execute tool calls
-                ctx = ToolContext(workspace=self.workspace)
-                terminal_requested = False
-                terminal_observations: list[str] = []
+                # Execute tool calls against one session-scoped context so the
+                # file-version log survives across iterations and tool calls.
+                ctx = self.tool_context
                 for tc in canonical_calls:
                     parsed_args = parse_lenient_json(tc.arguments)
                     yield ToolCallStarted(
@@ -272,9 +254,6 @@ class AgentSession:
                             result = await tool.execute(parsed_args, ctx)
                             obs = result.observation
                             is_error = result.is_error
-                            if getattr(result, "is_terminal", False):
-                                terminal_requested = True
-                                terminal_observations.append(obs)
                         except Exception as e:  # noqa: BLE001
                             obs = f"error: tool execution failed: {e}"
                             is_error = True
@@ -286,18 +265,18 @@ class AgentSession:
                         CanonicalMessage(role="tool", content=obs, tool_call_id=tc.id)
                     )
 
-                if terminal_requested:
-                    terminal_observation = " ".join(terminal_observations)
-                    self.history.append_assistant(content=terminal_observation)
-                    yield TurnComplete(final_text=terminal_observation)
-                    return
-
                 # Continue loop to next turn step so model can observe tool results
                 continue
 
             # No tool calls: final text response yielded
-            final_text = "".join(accumulated_text)
+            final_text = "".join(accumulated_text).strip()
             thought_str = "".join(accumulated_thought) if accumulated_thought else None
+            if not final_text:
+                final_text = (
+                    "Give me a moment."
+                    if thought_str
+                    else "Sorry, something went wrong. Could you repeat that?"
+                )
             self.history.append_assistant(content=final_text, thought=thought_str)
             yield TurnComplete(final_text=final_text)
             return

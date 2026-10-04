@@ -12,9 +12,6 @@ from verbix.core.models import (
     CanonicalMessage,
     CanonicalToolCall,
     Role,
-    TaskState,
-    TaskStatus,
-    WorkerResult,
 )
 
 __all__ = [
@@ -25,12 +22,9 @@ __all__ = [
     "ConversationHistory",
     "CycleDetector",
     "Role",
-    "TaskState",
-    "TaskStatus",
     "TextDelta",
     "ThoughtDelta",
     "ToolCallFinished",
     "ToolCallStarted",
     "TurnComplete",
-    "WorkerResult",
 ]

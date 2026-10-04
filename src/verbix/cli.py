@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 from pathlib import Path
@@ -17,13 +18,15 @@ from verbix.core.events import (
 from verbix.ipc.client import VerbixClient
 from verbix.ipc.server import VerbixServer
 from verbix.provider.client import ProviderClient
-from verbix.runtime.tasks import TaskRuntime
+from verbix.runtime.runtime import Runtime
 from verbix.voice.capture import PTTCapture
 from verbix.voice.pipeline import VoicePipeline
 from verbix.voice.player import AudioPlayer
 from verbix.voice.pocket_tts import PocketTTSEngine
 from verbix.voice.sinks import SubprocessAudioSink
 from verbix.voice.stt import FasterWhisperSTT
+ 
+logger = logging.getLogger(__name__)
 
 
 def load_env(env_path: Path | None = None) -> None:
@@ -141,8 +144,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_runtime(args: argparse.Namespace) -> TaskRuntime:
-    """Builds and initializes a TaskRuntime from parsed command-line arguments."""
+def build_runtime(args: argparse.Namespace) -> Runtime:
+    """Builds and initializes the Runtime from parsed command-line arguments."""
     api_key = (
         args.api_key
         or os.environ.get("OPENROUTER_API_KEY")
@@ -164,60 +167,86 @@ def build_runtime(args: argparse.Namespace) -> TaskRuntime:
         api_key=api_key,
         max_tokens=args.max_tokens,
     )
-    runtime = TaskRuntime(
+    return Runtime(
         workspace=workspace,
         provider=provider,
-        receptionist_model=args.receptionist_model,
-        worker_model=args.worker_model,
-        isolate_worktrees=args.isolate_worktrees,
-        allow_network=args.allow_network,
     )
-    runtime.create_receptionist()
-    return runtime
 
 
 class CliPrinter:
-    """Renders thought, deltas, and tools to stdout, tracking delivered text."""
+    """Renders the conversation as one assistant voice.
+
+    Assistant replies go to stdout under a ``verbix:`` prefix; thought and tool
+    diagnostics go to stderr so stdout stays a clean transcript. Tracking the
+    delivered text lets the runtime trim history on barge-in and decide whether
+    a completion was actually voiced.
+    """
+
+    SPEAKER = "verbix: "
 
     def __init__(self) -> None:
         self.in_thought = False
         self._delivered: list[str] = []
+        self._prefix_open = False
+        self._wrote_text = False
+
+    def _open_prefix(self) -> None:
+        if not self._prefix_open:
+            sys.stdout.write("\r\033[K" + self.SPEAKER)
+            sys.stdout.flush()
+            self._prefix_open = True
 
     async def emit(self, event: AgentEvent) -> None:
         if isinstance(event, ThoughtDelta):
             if not self.in_thought:
-                sys.stdout.write("\n[thought] ")
+                sys.stderr.write("\n[thought] ")
                 self.in_thought = True
-            sys.stdout.write(event.thought)
-            sys.stdout.flush()
+            sys.stderr.write(event.thought)
+            sys.stderr.flush()
         elif isinstance(event, TextDelta):
             if self.in_thought:
-                sys.stdout.write("\n")
+                sys.stderr.write("\n")
                 self.in_thought = False
+            self._open_prefix()
             sys.stdout.write(event.text)
             sys.stdout.flush()
             self._delivered.append(event.text)
+            self._wrote_text = True
         elif isinstance(event, ToolCallStarted):
             if self.in_thought:
-                sys.stdout.write("\n")
+                sys.stderr.write("\n")
                 self.in_thought = False
-            sys.stdout.write(f"\n[tool: {event.tool_name}({event.arguments})]\n")
-            sys.stdout.flush()
+            if self._wrote_text:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                self._prefix_open = False
+                self._wrote_text = False
+            sys.stderr.write(f"[tool: {event.tool_name}({event.arguments})]\n")
+            sys.stderr.flush()
         elif isinstance(event, ToolCallFinished):
             status = "error" if event.is_error else "ok"
             preview = event.observation.strip()
             if len(preview) > 120:
                 preview = preview[:120] + "..."
-            sys.stdout.write(f"[{event.call_id} -> {status}: {preview}]\n")
-            sys.stdout.flush()
+            sys.stderr.write(f"[{event.call_id} -> {status}: {preview}]\n")
+            sys.stderr.flush()
         elif isinstance(event, TurnComplete):
             if self.in_thought:
-                sys.stdout.write("\n")
+                sys.stderr.write("\n")
                 self.in_thought = False
-            if not self._delivered and event.final_text.strip():
-                sys.stdout.write(f"\n{event.final_text}\n")
+            final = event.final_text.strip()
+            if final and final not in "".join(self._delivered):
+                self._open_prefix()
+                sys.stdout.write(final)
                 sys.stdout.flush()
-                self._delivered.append(event.final_text)
+                self._delivered.append(final)
+                self._wrote_text = True
+            if self._wrote_text:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            self._prefix_open = False
+            self._wrote_text = False
+            self._delivered.clear()
 
     def delivered_text(self) -> str:
         return "".join(self._delivered)
@@ -225,6 +254,8 @@ class CliPrinter:
     def reset_delivered(self) -> None:
         self.in_thought = False
         self._delivered.clear()
+        self._prefix_open = False
+        self._wrote_text = False
 
 
 async def async_main(args: argparse.Namespace) -> int:
@@ -292,12 +323,13 @@ async def async_main(args: argparse.Namespace) -> int:
         sink = SubprocessAudioSink(sample_rate=24000, audio_format="f32")
         player = AudioPlayer(tts=tts, sink=sink)
         capture = PTTCapture()
+        printer = CliPrinter()
         pipeline = VoicePipeline(
-            runtime=runtime, stt=stt, player=player, capture=capture
+            runtime=runtime, stt=stt, player=player, capture=capture, printer=printer
         )
 
         sys.stdout.write(
-            f"Verbix Voice Mode (model: {args.model}, workspace: {runtime.workspace})\n"
+            f"verbix voice mode (model: {args.model}, workspace: {runtime.workspace})\n"
         )
         sys.stdout.write(
             "Toggle Mode: Press [Enter] to start recording, speak, then press [Enter] to stop.\n"
@@ -309,7 +341,7 @@ async def async_main(args: argparse.Namespace) -> int:
         loop = asyncio.get_running_loop()
         try:
             while True:
-                sys.stdout.write("verbix [Enter=Toggle voice / type prompt]> ")
+                sys.stdout.write("you> ")
                 sys.stdout.flush()
                 line = await loop.run_in_executor(None, sys.stdin.readline)
                 if not line:
@@ -340,6 +372,14 @@ async def async_main(args: argparse.Namespace) -> int:
                                 "[No speech detected or audio too short]\n"
                             )
                         sys.stdout.flush()
+                        active_task = getattr(pipeline, "_active_voice_task", None)
+                        if active_task:
+                            try:
+                                await active_task
+                            except asyncio.CancelledError:
+                                pass
+                            except Exception:
+                                logger.exception("Active voice task failed")
                 else:
                     await pipeline.execute_voice_turn(text)
         except (KeyboardInterrupt, asyncio.CancelledError):
@@ -352,19 +392,18 @@ async def async_main(args: argparse.Namespace) -> int:
     printer = CliPrinter()
     runtime.wake_output = printer
 
+    def _cli_on_wake(speech: str) -> None:
+        if not args.prompt:
+            sys.stdout.write("you> ")
+            sys.stdout.flush()
+
+    runtime.on_wake = _cli_on_wake
+
     if args.prompt:
         try:
             await runtime.submit(args.prompt, printer)
-            # Wait until all background tasks and wake turns have finished and announced
-            while (
-                runtime.list_active_tasks()
-                or not runtime.is_idle
-                or any(
-                    not t.announced
-                    for t in runtime.list_all_tasks()
-                    if not t.is_running
-                )
-            ):
+            # Wait until all background tasks and wake turns have finished
+            while runtime.list_active_tasks() or not runtime.is_idle:
                 await asyncio.sleep(0.1)
             sys.stdout.write("\n")
             sys.stdout.flush()
@@ -374,14 +413,14 @@ async def async_main(args: argparse.Namespace) -> int:
 
     # Interactive REPL mode
     sys.stdout.write(
-        f"Verbix Receptionist (model: {args.model}, workspace: {runtime.workspace})\n"
+        f"verbix (model: {args.model}, workspace: {runtime.workspace})\n"
     )
     sys.stdout.write("Type 'exit' or 'quit' to end session.\n\n")
     sys.stdout.flush()
 
     while True:
         try:
-            sys.stdout.write("verbix> ")
+            sys.stdout.write("you> ")
             sys.stdout.flush()
             loop = asyncio.get_running_loop()
             line = await loop.run_in_executor(None, sys.stdin.readline)
@@ -395,8 +434,6 @@ async def async_main(args: argparse.Namespace) -> int:
 
             printer.reset_delivered()
             await runtime.submit(prompt, printer)
-            sys.stdout.write("\n")
-            sys.stdout.flush()
         except (KeyboardInterrupt, asyncio.CancelledError):
             sys.stdout.write("\n")
             continue

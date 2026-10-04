@@ -1,0 +1,226 @@
+from unittest.mock import MagicMock
+
+import pytest
+
+from verbix.core.events import TextDelta
+from verbix.provider.models import Finish as ProviderFinish
+from verbix.provider.models import TextDelta as ProviderTextDelta
+from verbix.runtime.runtime import Runtime
+
+
+@pytest.fixture
+def mock_provider():
+    provider = MagicMock()
+
+    async def fake_stream(messages, tools=None, reasoning_effort=None):
+        last_msg = messages[-1].content if messages else ""
+        if "prime" in last_msg.lower():
+            yield ProviderTextDelta(text="2, 3, 5, 7, 11 are primes.")
+            yield ProviderFinish(reason="stop")
+        elif "[background task completed]" in last_msg.lower():
+            yield ProviderTextDelta(text="The prime calculation finished: 2, 3, 5, 7, 11.")
+            yield ProviderFinish(reason="stop")
+        else:
+            yield ProviderTextDelta(text="Hello! How can I help?")
+            yield ProviderFinish(reason="stop")
+
+    provider.stream = fake_stream
+    return provider
+
+
+@pytest.mark.asyncio
+async def test_runtime_spawn_and_completion_loop(mock_provider, tmp_path):
+    woken = []
+
+    async def on_wake(speech_text):
+        woken.append(speech_text)
+
+    runtime = Runtime(
+        workspace=tmp_path,
+        provider=mock_provider,
+        buffer_window=0.05,
+        on_wake=on_wake,
+    )
+
+    # Spawn worker
+    task_id = await runtime.spawn("calculate prime numbers")
+    assert task_id == "task-1"
+    assert task_id in runtime.tasks
+
+    # Verify task is running or completed
+    task = runtime.tasks[task_id]
+    await task.wait()
+    assert task.status == "completed"
+    assert task.result is not None
+    assert "primes" in task.result
+
+    # Wait for completion buffer flush and foreground wake
+    import asyncio
+    await asyncio.sleep(0.1)
+
+    assert len(woken) == 1
+    assert "prime" in woken[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_and_cancel(mock_provider, tmp_path):
+    runtime = Runtime(
+        workspace=tmp_path,
+        provider=mock_provider,
+        buffer_window=0.05,
+    )
+
+    # Status with no tasks
+    empty_status = runtime.status()
+    assert "no active" in empty_status.lower()
+
+    # Cancel with no tasks
+    empty_cancel = await runtime.cancel()
+    assert "no active" in empty_cancel.lower()
+
+    # Spawn a slow task
+    slow_provider = MagicMock()
+
+    async def hanging_stream(messages, tools=None, reasoning_effort=None):
+        import asyncio
+        while True:
+            yield TextDelta(text="working...")
+            await asyncio.sleep(0.01)
+
+    slow_provider.stream = hanging_stream
+    runtime.provider = slow_provider
+
+    t1 = await runtime.spawn("slow task 1")
+    import asyncio
+    await asyncio.sleep(0.02)
+
+    # Status shows active task
+    st = runtime.status()
+    assert t1 in st
+    assert "slow task 1" in st
+
+    # Single active task cancel with no args
+    c_res = await runtime.cancel()
+    assert "Cancelled" in c_res
+    assert t1 in c_res
+    assert runtime.tasks[t1].status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_dual_emission_spoken_ack_and_tool_call(tmp_path):
+    from verbix.provider.models import ToolCallDelta as ProviderToolCallDelta
+
+    dual_provider = MagicMock()
+    turn_counter = 0
+
+    async def dual_stream(messages, tools=None, reasoning_effort=None):
+        nonlocal turn_counter
+        turn_counter += 1
+        if turn_counter == 1:
+            # Dual-emission: spoken acknowledgment + tool call in SAME turn
+            yield ProviderTextDelta(text="On it, calculating primes now.")
+            yield ProviderToolCallDelta(
+                index=0,
+                call_id="call_spawn_1",
+                name="spawn",
+                arguments_delta='{"objective": "calculate primes"}',
+            )
+            yield ProviderFinish(reason="tool_calls")
+        else:
+            yield ProviderTextDelta(text="Background worker is on the job.")
+            yield ProviderFinish(reason="stop")
+
+    dual_provider.stream = dual_stream
+    runtime = Runtime(workspace=tmp_path, provider=dual_provider)
+
+    events = []
+    async for ev in runtime.step("Calculate primes in background"):
+        events.append(ev)
+
+    # Verify speech was emitted
+    spoken_deltas = [e.text for e in events if isinstance(e, TextDelta)]
+    assert "On it, calculating primes now." in spoken_deltas
+
+    # Verify spawn tool was executed and task was created
+    assert "task-1" in runtime.tasks
+    assert runtime.tasks["task-1"].description == "calculate primes"
+
+
+@pytest.mark.asyncio
+async def test_runtime_prompt_grounding(mock_provider, tmp_path):
+    import platform
+    runtime = Runtime(workspace=tmp_path, provider=mock_provider)
+    assert f"Host operating system: {platform.system()}" in runtime.system_prompt
+    assert f"The working directory is {tmp_path.resolve()}" in runtime.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_runtime_direct_worker_announcement(tmp_path):
+    provider = MagicMock()
+    stream_calls = 0
+
+    async def fake_stream(messages, tools=None, reasoning_effort=None):
+        nonlocal stream_calls
+        stream_calls += 1
+        # Worker execution
+        yield ProviderTextDelta(text="Calculation finished: 42.")
+        yield ProviderFinish(reason="stop")
+
+    provider.stream = fake_stream
+
+    emitted_events = []
+    class FakeOutput:
+        async def emit(self, event):
+            emitted_events.append(event)
+
+    output = FakeOutput()
+    runtime = Runtime(workspace=tmp_path, provider=provider, buffer_window=0.02)
+    runtime.wake_output = output
+
+    # Spawn worker
+    task_id = await runtime.spawn("find the answer")
+    task = runtime.tasks[task_id]
+    await task.wait()
+    assert task.status == "completed"
+
+    import asyncio
+    await asyncio.sleep(0.05)
+
+    # 1. Direct announcement must be emitted without a second LLM stream call
+    from verbix.core.events import TurnComplete
+    turn_completes = [e for e in emitted_events if isinstance(e, TurnComplete)]
+    assert len(turn_completes) == 1
+    assert "Calculation finished: 42." in turn_completes[0].final_text
+
+    # 2. Worker answer was committed to foreground history
+    history_msgs = runtime.foreground.history.messages
+    assert any(m.role == "assistant" and "Calculation finished: 42." in m.content for m in history_msgs)
+
+    # 3. Provider stream was called ONLY ONCE by the worker, NOT a second time by the receptionist!
+    assert stream_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_status_includes_completed_task_result(tmp_path):
+    mock_provider = MagicMock()
+    runtime = Runtime(workspace=tmp_path, provider=mock_provider)
+    from verbix.runtime.worker import WorkerTask
+    t = WorkerTask(id="task-1", description="check time", session=runtime.foreground)
+    t._status = "completed"
+    t._result = "The current time is 12:45 AM."
+    runtime.tasks["task-1"] = t
+
+    # General status listing
+    general_status = runtime.status()
+    assert "task-1" in general_status
+    assert "completed" in general_status
+    assert "The current time is 12:45 AM." in general_status
+
+    # Specific task status query
+    task_status = runtime.status(task_id="task-1")
+    assert "The current time is 12:45 AM." in task_status
+
+    # Specific full status query
+    task_full_status = runtime.status(task_id="task-1", full=True)
+    assert "The current time is 12:45 AM." in task_full_status
+

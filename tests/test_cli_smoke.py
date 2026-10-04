@@ -1,0 +1,43 @@
+
+import pytest
+
+from verbix.cli import CliPrinter, build_parser, build_runtime
+from verbix.core.events import TextDelta, ToolCallStarted, TurnComplete
+from verbix.runtime.runtime import Runtime
+
+
+def test_build_runtime(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-123")
+    parser = build_parser()
+    args = parser.parse_args(["--workspace", str(tmp_path)])
+    runtime = build_runtime(args)
+    assert isinstance(runtime, Runtime)
+    assert runtime.workspace == tmp_path.resolve()
+
+
+@pytest.mark.asyncio
+async def test_cli_printer_renders_standalone_turn_complete(capsys):
+    printer = CliPrinter()
+    # 1. First turn: streaming text followed by tool call
+    await printer.emit(TextDelta(text="I am checking the current time for you."))
+    await printer.emit(
+        ToolCallStarted(
+            call_id="call_1",
+            tool_name="spawn",
+            arguments={"objective": "time"},
+        )
+    )
+    await printer.emit(
+        TurnComplete(final_text="I am checking the current time for you.")
+    )
+
+    captured = capsys.readouterr()
+    assert "verbix: I am checking the current time for you." in captured.out
+
+    # 2. Standalone completion: worker finishes and flushes announcement
+    await printer.emit(TurnComplete(final_text="The current time is 12:45 AM."))
+    captured_announcement = capsys.readouterr()
+    assert (
+        "verbix: The current time is 12:45 AM."
+        in captured_announcement.out
+    )

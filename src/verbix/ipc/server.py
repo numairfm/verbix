@@ -17,7 +17,6 @@ from verbix.core.events import (
 from verbix.ipc.protocol import IPCEvent, IPCRequest, IPCResponse
 
 if TYPE_CHECKING:
-    from verbix.runtime.tasks import TaskRuntime
     from verbix.voice.pipeline import VoicePipeline
 
 logger = logging.getLogger(__name__)
@@ -78,7 +77,7 @@ class VerbixServer:
 
     def __init__(
         self,
-        runtime: TaskRuntime,
+        runtime: Any,
         pipeline: VoicePipeline | None = None,
         socket_path: Path | None = None,
         host: str | None = None,
@@ -284,21 +283,6 @@ class VerbixServer:
                     id=request.id,
                     status="ok" if ok else "error",
                     data={"cancelled": ok},
-                )
-            writer.write(resp.to_jsonl())
-            await writer.drain()
-
-        elif action == "steer":
-            if not request.task_id or not request.instruction:
-                resp = IPCResponse(
-                    id=request.id,
-                    status="error",
-                    error="Missing 'task_id' or 'instruction'",
-                )
-            else:
-                ok = await self.runtime.steer_task(request.task_id, request.instruction)
-                resp = IPCResponse(
-                    id=request.id, status="ok" if ok else "error", data={"steered": ok}
                 )
             writer.write(resp.to_jsonl())
             await writer.drain()

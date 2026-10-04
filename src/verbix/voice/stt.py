@@ -223,9 +223,25 @@ class LiveSTTSession:
                     "VAD tail check error, falling back to full transcribe: %s", e
                 )
 
-        # If speech was detected in the tail (e.g. final word), never drop it: transcribe full buffer
-        if len(self.buf) > 320:
-            return await self.stt.transcribe(
-                bytes(self.buf), sample_rate=self.sample_rate
-            )
+        # Speech detected in the untranscribed tail: transcribe only the tail
+        # and append it. Re-running the whole utterance here was the finalize
+        # latency regression; finalize cost must scale with the tail, not the
+        # full recording.
+        if not self.latest_text:
+            # No background progress to build on: one full pass is the only
+            # correct fallback.
+            if len(self.buf) > 320:
+                return await self.stt.transcribe(
+                    bytes(self.buf), sample_rate=self.sample_rate
+                )
+            return ""
+
+        tail_pcm = bytes(self.buf[self.last_transcribed_len :])
+        if len(tail_pcm) <= 320:  # < 10 ms
+            return self.latest_text
+        tail_text = (
+            await self.stt.transcribe(tail_pcm, sample_rate=self.sample_rate)
+        ).strip()
+        if tail_text:
+            return f"{self.latest_text} {tail_text}".strip()
         return self.latest_text

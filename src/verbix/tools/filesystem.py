@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +57,9 @@ class FileReadTool:
                     is_error=True,
                 )
 
-            lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+            raw = target.read_bytes()
+            context.file_versions[str(target)] = hashlib.sha256(raw).hexdigest()
+            lines = raw.decode("utf-8", errors="replace").splitlines()
             start_line = max(1, int(args.get("start_line", 1)))
             end_line = args.get("end_line")
             if end_line is not None:
@@ -97,10 +100,31 @@ class FileWriteTool:
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         path_str = args.get("path", "")
         content = args.get("content", "")
+        if not isinstance(content, str):
+            content = str(content)
         try:
             target = resolve_contained_path(path_str, context.workspace)
+            key = str(target)
+            if target.exists():
+                recorded = context.file_versions.get(key)
+                if recorded is None:
+                    return ToolResult(
+                        f"error: refusing to overwrite '{path_str}' because this "
+                        "session has not read it; call file_read first",
+                        is_error=True,
+                    )
+                current = hashlib.sha256(target.read_bytes()).hexdigest()
+                if current != recorded:
+                    return ToolResult(
+                        f"error: '{path_str}' changed since this session read it; "
+                        "call file_read again and re-apply your change",
+                        is_error=True,
+                    )
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
+            context.file_versions[key] = hashlib.sha256(
+                content.encode("utf-8")
+            ).hexdigest()
             return ToolResult(
                 f"Successfully wrote {len(content)} characters to '{path_str}'"
             )
@@ -142,7 +166,23 @@ class FileEditTool:
                     f"error: file not found at '{path_str}'", is_error=True
                 )
 
-            current = target.read_text(encoding="utf-8")
+            key = str(target)
+            raw = target.read_bytes()
+            recorded = context.file_versions.get(key)
+            if recorded is None:
+                return ToolResult(
+                    f"error: refusing to edit '{path_str}' because this session "
+                    "has not read it; call file_read first",
+                    is_error=True,
+                )
+            if hashlib.sha256(raw).hexdigest() != recorded:
+                return ToolResult(
+                    f"error: '{path_str}' changed since this session read it; "
+                    "call file_read again and re-apply your change",
+                    is_error=True,
+                )
+
+            current = raw.decode("utf-8")
             count = current.count(old_str)
             if count == 0:
                 return ToolResult(
@@ -156,6 +196,9 @@ class FileEditTool:
 
             updated = current.replace(old_str, new_str, 1)
             target.write_text(updated, encoding="utf-8")
+            context.file_versions[key] = hashlib.sha256(
+                updated.encode("utf-8")
+            ).hexdigest()
             return ToolResult(f"Successfully replaced 1 occurrence in '{path_str}'")
         except ValueError as e:
             return ToolResult(f"error: {e}", is_error=True)

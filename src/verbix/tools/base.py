@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -16,7 +16,18 @@ class ToolResult:
 
 @dataclass(frozen=True)
 class ToolContext:
+    """Workspace plus the per-session file-version log used to detect stale writes.
+
+    ``file_versions`` maps an absolute resolved path to the sha256 of the bytes
+    this session last observed for it (via ``file_read`` or its own writes).
+    A session-scoped context lets ``file_write``/``file_edit`` refuse to clobber
+    a change another worker made after this session last saw the file.
+    """
+
     workspace: Path
+    file_versions: dict[str, str] = field(
+        default_factory=dict, compare=False, hash=False
+    )
 
 
 class Tool(Protocol):

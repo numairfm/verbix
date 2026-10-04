@@ -29,11 +29,21 @@ class ToolRegistry:
     def _call_handler(
         self, handler: Callable[..., Any], args: dict[str, Any], **kwargs: Any
     ) -> Any:
-        if kwargs:
-            try:
-                return handler(args, **kwargs)
-            except TypeError:
-                return handler(args)
+        if not kwargs:
+            return handler(args)
+        try:
+            sig = inspect.signature(handler)
+            params = sig.parameters.values()
+            has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
+            if has_var_kw:
+                accepted_kwargs = kwargs
+            else:
+                accepted_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+        except (ValueError, TypeError):
+            accepted_kwargs = {}
+
+        if accepted_kwargs:
+            return handler(args, **accepted_kwargs)
         return handler(args)
 
     def execute(self, name: str, args: dict[str, Any], **kwargs: Any) -> Any:
@@ -47,7 +57,10 @@ class ToolRegistry:
                 asyncio.get_running_loop()
             except RuntimeError:
                 return asyncio.run(res)
-            return res
+            res.close()
+            raise RuntimeError(
+                f"Cannot execute async tool '{name}' synchronously while an event loop is running. Use 'await aexecute()' instead."
+            )
         return res
 
     async def aexecute(self, name: str, args: dict[str, Any], **kwargs: Any) -> Any:

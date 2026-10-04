@@ -63,6 +63,44 @@ async def test_tool_registry_async_handler():
     assert result == 5
 
 
+def test_tool_registry_does_not_swallow_internal_type_error():
+    reg = ToolRegistry()
+    call_count = 0
+
+    def bad_handler(args: dict[str, Any]) -> str:
+        nonlocal call_count
+        call_count += 1
+        raise TypeError("internal handler bug")
+
+    reg.register(
+        "bad",
+        {"type": "function", "function": {"name": "bad"}},
+        bad_handler,
+    )
+
+    with pytest.raises(TypeError, match="internal handler bug"):
+        reg.execute("bad", {"x": 1}, extra="unused")
+
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_registry_sync_execute_async_in_running_loop_raises():
+    reg = ToolRegistry()
+
+    async def async_fn(args: dict[str, Any]) -> str:
+        return "async done"
+
+    reg.register(
+        "async_tool",
+        {"type": "function", "function": {"name": "async_tool"}},
+        async_fn,
+    )
+
+    with pytest.raises(RuntimeError, match="Cannot execute async tool 'async_tool' synchronously"):
+        reg.execute("async_tool", {})
+
+
 class MockStreamChunk:
     def __init__(
         self,
@@ -233,13 +271,19 @@ async def test_litellm_model_query_stream_authentication_error():
         )
 
         model = LitellmModel(model_name="test-model")
-        with pytest.raises(litellm.exceptions.AuthenticationError):
+        with pytest.raises(litellm.exceptions.AuthenticationError) as exc_info:
             _ = [
                 e
                 async for e in model.query_stream(
                     [{"role": "user", "content": "hi"}]
                 )
             ]
+        assert "You can set your API key in environment variables or provider config." in exc_info.value.message
+
+
+def test_tool_call_delta_reexported_in_core():
+    from verbix.core import ToolCallDelta as CoreToolCallDelta
+    assert CoreToolCallDelta is ToolCallDelta
 
 
 def test_litellm_model_config():

@@ -145,6 +145,7 @@ class LitellmModel:
                 ),
             )
         except litellm.exceptions.AuthenticationError as e:
+            e.message += " You can set your API key in environment variables or provider config."
             logger.error(f"Authentication failed for model {self.config.model_name}: {e}")
             raise
 
@@ -218,6 +219,7 @@ class LitellmModel:
                             arguments_delta=args_delta or "",
                         )
         except litellm.exceptions.AuthenticationError as e:
+            e.message += " You can set your API key in environment variables or provider config."
             logger.error(f"Authentication failed during stream for model {self.config.model_name}: {e}")
             raise
 

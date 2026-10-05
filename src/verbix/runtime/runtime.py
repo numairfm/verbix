@@ -548,6 +548,8 @@ class Runtime:
         )
 
         def _on_finish(t: WorkerTask) -> None:
+            if t.status == "cancelled":
+                return
             self.buffer.push(t.id, t.result or "Task completed.")
 
         worker_task.on_completed(_on_finish)

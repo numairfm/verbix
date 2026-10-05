@@ -107,6 +107,48 @@ async def test_runtime_status_and_cancel(mock_provider, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_runtime_cancelled_task_does_not_fire_announcer(tmp_path):
+    import asyncio
+
+    provider = MagicMock()
+
+    async def fake_stream(messages, tools=None, reasoning_effort=None):
+        last_msg = messages[-1]["content"] if isinstance(messages[-1], dict) else getattr(messages[-1], "content", "")
+        if "[Background task completion update" in last_msg:
+            yield ProviderTextDelta(text="Task cancelled.")
+            yield ProviderFinish(reason="stop")
+        else:
+            while True:
+                yield ProviderTextDelta(text="working...")
+                await asyncio.sleep(0.01)
+
+    provider.stream = fake_stream
+
+    emitted_events = []
+    class FakeOutput:
+        async def emit(self, event):
+            emitted_events.append(event)
+
+    output = FakeOutput()
+    runtime = Runtime(workspace=tmp_path, provider=provider, buffer_window=0.02)
+    runtime.wake_output = output
+
+    task_id = await runtime.spawn("task to be cancelled")
+    await asyncio.sleep(0.02)
+
+    # Cancel the task
+    cancel_res = await runtime.cancel(task_id)
+    assert "Cancelled" in cancel_res
+    assert runtime.tasks[task_id].status == "cancelled"
+
+    # Wait beyond buffer window
+    await asyncio.sleep(0.06)
+
+    # Announcer must NOT have emitted any events
+    assert len(emitted_events) == 0
+
+
+@pytest.mark.asyncio
 async def test_dual_emission_spoken_ack_and_tool_call(tmp_path):
     from verbix.provider.models import ToolCallDelta as ProviderToolCallDelta
 

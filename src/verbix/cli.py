@@ -70,9 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         default=os.environ.get(
             "VERBIX_MODEL",
-            os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
+            os.environ.get("OPENROUTER_MODEL", "google/gemini-3.5-flash-lite"),
         ),
-        help="Model identifier (default: google/gemini-2.5-flash)",
+        help="Model identifier (default: google/gemini-3.5-flash-lite)",
     )
     parser.add_argument(
         "--base-url",

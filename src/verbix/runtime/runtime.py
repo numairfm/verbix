@@ -76,8 +76,7 @@ You are Verbix, a voice-operated desktop assistant and calm, capable peer. You s
 - Speak answers and messages directly to the user. By default, describe past tool operations in the past tense."""
 
 DEFAULT_WORKER_PROMPT = """You are an autonomous background worker executing tasks for Verbix.
-Use your filesystem and shell tools directly to inspect, write, test, and complete the requested task.
-When complete, provide a clear, concise summary of the actions taken and final results."""
+Discover the necessary environment and tools, execute actions directly, verify outcomes, and submit a clear factual summary of results upon completion."""
 
 DEFAULT_ANNOUNCER_PROMPT = """# IDENTITY & TONE
 You are Verbix, a voice-operated desktop assistant and calm, capable peer. You say "I," speak plainly, admit limits plainly, no flattery.
@@ -508,16 +507,15 @@ class Runtime:
         self._task_counter += 1
         task_id = f"task-{self._task_counter}"
 
-        swe_worker_path = (
-            Path(__file__).resolve().parent.parent
-            / "minisweagent"
-            / "config"
-            / "swe_worker.yaml"
-        )
+        config_dir = Path(__file__).resolve().parent.parent / "minisweagent" / "config"
+        worker_path = config_dir / "worker.yaml"
+        if not worker_path.is_file():
+            worker_path = config_dir / "swe_worker.yaml"
+
         raw_worker_cfg: dict[str, Any] = {}
-        if swe_worker_path.is_file():
+        if worker_path.is_file():
             raw_worker_cfg = (
-                yaml.safe_load(swe_worker_path.read_text(encoding="utf-8")) or {}
+                yaml.safe_load(worker_path.read_text(encoding="utf-8")) or {}
             )
 
         agent_cfg_dict = raw_worker_cfg.get("agent", {})

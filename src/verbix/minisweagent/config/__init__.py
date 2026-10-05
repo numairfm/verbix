@@ -25,6 +25,10 @@ def get_config_path(config_spec: str | Path) -> Path:
         if candidate.exists():
             return candidate
 
+    # Legacy alias fallback: swe_worker -> worker
+    if config_spec in ("swe_worker", "swe_worker.yaml"):
+        return get_config_path("worker.yaml")
+
     raise FileNotFoundError(f"Could not find config file for {config_spec} (tried: {candidates})")
 
 

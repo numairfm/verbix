@@ -139,3 +139,24 @@ async def test_worker_task_extracts_final_result_not_intermediate_scratchpad():
     assert task.status == "completed"
     assert task.result == "The dependencies are pytest, litellm."
     assert "analyzing the codebase" not in (task.result or "")
+
+
+def test_worker_task_status_timestamps():
+    import re
+    session = MagicMock()
+    session.messages = []
+    task = WorkerTask(id="task-5", description="quick task", session=session)
+    task._status = "running"
+    task._created_at = 1000000.0
+    task._finished_at = 1000015.0
+
+    running_status = task.get_status()
+    assert re.search(r"running for \d+s", running_status)
+    assert "started at " in running_status
+
+    task._status = "completed"
+    task._result = "Done"
+    completed_status = task.get_status()
+    assert "completed in 15s" in completed_status
+    assert "started at " in completed_status
+    assert "finished at " in completed_status

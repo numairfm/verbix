@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 from unittest.mock import Mock, NonCallableMock
 
@@ -148,9 +149,17 @@ class WorkerTask:
         elif hasattr(session, "messages"):
             msgs = session.messages
 
-        elapsed = int(time.time() - self._created_at)
+        start_str = datetime.fromtimestamp(self._created_at).astimezone().strftime("%H:%M:%S")
+        if self.status == "running":
+            elapsed = int(time.time() - self._created_at)
+            status_desc = f"running for {elapsed}s, started at {start_str}"
+        else:
+            finish_time = self._finished_at or time.time()
+            duration = int(finish_time - self._created_at)
+            finish_str = datetime.fromtimestamp(finish_time).astimezone().strftime("%H:%M:%S")
+            status_desc = f"{self.status} in {duration}s, started at {start_str}, finished at {finish_str}"
 
-        header = f"{self.id}: '{self.description}' ({self.status}, running for {elapsed}s)"
+        header = f"{self.id}: '{self.description}' ({status_desc})"
         if self.result:
             header += f"\nResult: {self.result}"
         if not msgs:

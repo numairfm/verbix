@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import platform
+import time
 from collections.abc import AsyncIterator, Callable, Coroutine
 from datetime import datetime
 from pathlib import Path
@@ -583,12 +584,17 @@ class Runtime:
         if active:
             lines.append("Active tasks:")
             for t in active:
-                lines.append(f"- {t.id}: '{t.description}' (running)")
+                start_str = datetime.fromtimestamp(t._created_at).astimezone().strftime("%H:%M:%S")
+                elapsed = int(time.time() - t._created_at)
+                lines.append(f"- {t.id}: '{t.description}' (running for {elapsed}s, started at {start_str})")
         if recent_done:
             lines.append("Recently completed:")
             for t in recent_done:
+                finish_time = t._finished_at or time.time()
+                duration = int(finish_time - t._created_at)
+                finish_str = datetime.fromtimestamp(finish_time).astimezone().strftime("%H:%M:%S")
                 res_suffix = f": {t.result}" if t.result else ""
-                lines.append(f"- {t.id}: '{t.description}' ({t.status}{res_suffix})")
+                lines.append(f"- {t.id}: '{t.description}' ({t.status} in {duration}s at {finish_str}{res_suffix})")
 
         return "\n".join(lines)
 

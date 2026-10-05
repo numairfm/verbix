@@ -31,13 +31,14 @@ async def test_cli_printer_renders_standalone_turn_complete(capsys):
         TurnComplete(final_text="I am checking the current time for you.")
     )
 
+    import re
     captured = capsys.readouterr()
-    assert "verbix: I am checking the current time for you." in captured.out
+    assert re.search(r"\[\d{2}:\d{2}:\d{2}\] verbix: I am checking the current time for you\.", captured.out)
 
     # 2. Standalone completion: worker finishes and flushes announcement
     await printer.emit(TurnComplete(final_text="The current time is 12:45 AM."))
     captured_announcement = capsys.readouterr()
-    assert (
-        "verbix: The current time is 12:45 AM."
-        in captured_announcement.out
+    assert re.search(
+        r"\[\d{2}:\d{2}:\d{2}\] verbix: The current time is 12:45 AM\.",
+        captured_announcement.out,
     )

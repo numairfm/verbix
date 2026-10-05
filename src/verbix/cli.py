@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -210,7 +211,8 @@ class CliPrinter:
 
     def _open_prefix(self) -> None:
         if not self._prefix_open:
-            sys.stdout.write("\r\033[K" + self.SPEAKER)
+            now_str = datetime.now().astimezone().strftime("%H:%M:%S")
+            sys.stdout.write(f"\r\033[K[{now_str}] {self.SPEAKER}")
             sys.stdout.flush()
             self._prefix_open = True
 
@@ -360,7 +362,8 @@ async def async_main(args: argparse.Namespace) -> int:
         loop = asyncio.get_running_loop()
         try:
             while True:
-                sys.stdout.write("you> ")
+                now_str = datetime.now().astimezone().strftime("%H:%M:%S")
+                sys.stdout.write(f"[{now_str}] you> ")
                 sys.stdout.flush()
                 line = await loop.run_in_executor(None, sys.stdin.readline)
                 if not line:
@@ -413,7 +416,8 @@ async def async_main(args: argparse.Namespace) -> int:
 
     def _cli_on_wake(speech: str) -> None:
         if not args.prompt:
-            sys.stdout.write("you> ")
+            now_str = datetime.now().astimezone().strftime("%H:%M:%S")
+            sys.stdout.write(f"[{now_str}] you> ")
             sys.stdout.flush()
 
     runtime.on_wake = _cli_on_wake
@@ -439,7 +443,8 @@ async def async_main(args: argparse.Namespace) -> int:
 
     while True:
         try:
-            sys.stdout.write("you> ")
+            now_str = datetime.now().astimezone().strftime("%H:%M:%S")
+            sys.stdout.write(f"[{now_str}] you> ")
             sys.stdout.flush()
             loop = asyncio.get_running_loop()
             line = await loop.run_in_executor(None, sys.stdin.readline)

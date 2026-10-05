@@ -115,3 +115,27 @@ async def test_worker_task_get_status_reading_history():
     assert "task-3" in full
     assert "run tests" in full
     assert "14 passed" in full
+
+
+@pytest.mark.asyncio
+async def test_worker_task_extracts_final_result_not_intermediate_scratchpad():
+    session = MagicMock()
+    async def fake_step_stream(desc):
+        yield TextDelta(text="I will start by analyzing the codebase...")
+        yield TurnComplete(final_text="")
+
+    session.step_stream = fake_step_stream
+    session.messages = [
+        {"role": "user", "content": "list dependencies"},
+        {"role": "assistant", "content": "I will start by analyzing the codebase...", "tool_calls": [{"id": "c1"}]},
+        {"role": "tool", "content": "pyproject.toml found"},
+        {"role": "assistant", "content": "The dependencies are pytest, litellm."},
+    ]
+
+    task = WorkerTask(id="task-4", description="list dependencies", session=session)
+    task.start()
+    await task.wait()
+
+    assert task.status == "completed"
+    assert task.result == "The dependencies are pytest, litellm."
+    assert "analyzing the codebase" not in (task.result or "")

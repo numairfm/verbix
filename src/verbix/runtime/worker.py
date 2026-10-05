@@ -87,8 +87,18 @@ class WorkerTask:
                         last = res[-1]
                         if isinstance(last, dict):
                             self._result = last.get("content")
-                        elif hasattr(last, "content"):
-                            self._result = last.content
+            if not self._result:
+                msgs = getattr(session, "messages", None)
+                if not msgs and hasattr(session, "history"):
+                    msgs = getattr(session.history, "messages", None)
+                if msgs:
+                    for m in reversed(msgs):
+                        role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+                        tool_calls = m.get("tool_calls") if isinstance(m, dict) else getattr(m, "tool_calls", None)
+                        content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
+                        if role == "assistant" and not tool_calls and content and content.strip():
+                            self._result = content.strip()
+                            break
 
             if not self._result and accumulated_text:
                 self._result = "".join(accumulated_text).strip()

@@ -11,7 +11,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 try:
-    from pocket_tts import TTSModel
+    from pocket_tts import TTSModel  # pyright: ignore[reportMissingImports]
 except ImportError:
     TTSModel = None  # type: ignore[assignment, misc]
 

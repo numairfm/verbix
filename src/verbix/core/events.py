@@ -20,6 +20,14 @@ class ThoughtDelta(AgentEvent):
 
 
 @dataclass(frozen=True)
+class ToolCallDelta(AgentEvent):
+    index: int = 0
+    call_id: str | None = None
+    name: str | None = None
+    arguments_delta: str = ""
+
+
+@dataclass(frozen=True)
 class ToolCallStarted(AgentEvent):
     call_id: str
     tool_name: str

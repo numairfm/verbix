@@ -4,18 +4,51 @@ import asyncio
 import platform
 from collections.abc import AsyncIterator, Callable, Coroutine
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
+from unittest.mock import Mock, NonCallableMock
 
-from verbix.core.agent import AgentSession
-from verbix.core.events import AgentEvent, TurnComplete
+import yaml
+
+from verbix.core.events import (
+    AgentEvent,
+)
+from verbix.core.events import (
+    TextDelta as CoreTextDelta,
+)
+from verbix.core.events import (
+    ThoughtDelta as CoreThoughtDelta,
+)
+from verbix.core.events import (
+    ToolCallDelta as CoreToolCallDelta,
+)
+from verbix.core.events import (
+    TurnComplete as CoreTurnComplete,
+)
+from verbix.core.models import CanonicalMessage, CanonicalToolCall
+from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent
+from verbix.minisweagent.environments.local import LocalEnvironment
+from verbix.minisweagent.models.litellm_model import LitellmModel
+from verbix.minisweagent.tools.registry import ToolRegistry
+from verbix.provider.models import (
+    Finish as ProviderFinish,
+)
+from verbix.provider.models import (
+    TextDelta as ProviderTextDelta,
+)
+from verbix.provider.models import (
+    ThoughtDelta as ProviderThoughtDelta,
+)
+from verbix.provider.models import (
+    ToolCallDelta as ProviderToolCallDelta,
+)
+from verbix.provider.models import (
+    ToolDefinition,
+    ToolFunction,
+)
 from verbix.runtime.buffer import CompletionBuffer
 from verbix.runtime.tools import CancelTool, SpawnTool, StatusTool
 from verbix.runtime.worker import WorkerTask
-from verbix.tools.bash import BashTool
-from verbix.tools.filesystem import FileEditTool, FileReadTool, FileWriteTool
-
-if TYPE_CHECKING:
-    from verbix.provider.client import ProviderClient
+from verbix.tools.base import ToolContext
 
 DEFAULT_VERBIX_PROMPT = """You are Verbix, a voice-operated assistant and calm, capable peer. You say "I," speak plainly, admit limits honestly, and avoid flattery.
 
@@ -33,21 +66,246 @@ Use your filesystem and shell tools directly to inspect, write, test, and comple
 When complete, provide a clear, concise summary of the actions taken and final results."""
 
 
+class DefaultAgentHistoryProxy:
+    """Provides backwards-compatible .messages and .append_assistant() on top of DefaultAgent.messages."""
+
+    def __init__(self, agent: DefaultAgent) -> None:
+        self._agent = agent
+
+    @property
+    def messages(self) -> list[CanonicalMessage]:
+        result: list[CanonicalMessage] = []
+        for m in self._agent.messages:
+            if isinstance(m, CanonicalMessage):
+                result.append(m)
+            elif isinstance(m, dict):
+                role = m.get("role", "user")
+                content = m.get("content") or ""
+                tc_list: list[CanonicalToolCall] | None = None
+                raw_tcs = m.get("tool_calls")
+                if raw_tcs:
+                    tc_list = []
+                    for tc in raw_tcs:
+                        fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                        tc_list.append(
+                            CanonicalToolCall(
+                                id=tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
+                                name=fn.get("name", tc.get("name", "")) if isinstance(tc, dict) else getattr(tc, "name", ""),
+                                arguments=fn.get("arguments", tc.get("arguments", "")) if isinstance(tc, dict) else getattr(tc, "arguments", ""),
+                            )
+                        )
+                result.append(
+                    CanonicalMessage(
+                        role=role if role in ("system", "user", "assistant", "tool") else "user",
+                        content=content,
+                        tool_calls=tc_list,
+                        tool_call_id=m.get("tool_call_id"),
+                        name=m.get("name"),
+                    )
+                )
+        return result
+
+    def append_assistant(
+        self,
+        content: str,
+        thought: str | None = None,
+        tool_calls: list[Any] | None = None,
+    ) -> None:
+        msg: dict[str, Any] = {"role": "assistant", "content": content}
+        if thought:
+            msg["thought"] = thought
+        if tool_calls:
+            msg["tool_calls"] = [
+                {
+                    "id": tc.id if hasattr(tc, "id") else tc.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": tc.name if hasattr(tc, "name") else tc.get("name", ""),
+                        "arguments": tc.arguments if hasattr(tc, "arguments") else tc.get("arguments", ""),
+                    },
+                }
+                for tc in tool_calls
+            ]
+        self._agent.messages.append(msg)
+
+
+class ProviderStreamAdapter:
+    """Adapts a legacy ProviderClient or stream-based provider to MiniSWEAgent's query_stream."""
+
+    def __init__(self, provider: Any) -> None:
+        self.provider = provider
+        if hasattr(provider, "config"):
+            self.config = provider.config
+
+    def get_template_vars(self) -> dict[str, Any]:
+        if hasattr(self.provider, "get_template_vars") and callable(self.provider.get_template_vars):
+            res = self.provider.get_template_vars()
+            if isinstance(res, dict):
+                return res
+        return {}
+
+    def format_message(self, role: str, content: str, **kwargs: Any) -> dict[str, Any]:
+        if hasattr(self.provider, "format_message") and callable(self.provider.format_message):
+            res = self.provider.format_message(role=role, content=content, **kwargs)
+            if isinstance(res, dict):
+                return res
+        return {"role": role, "content": content, **kwargs}
+
+    async def query_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[AgentEvent]:
+        converted_messages: list[CanonicalMessage] = []
+        for m in messages:
+            if isinstance(m, CanonicalMessage):
+                converted_messages.append(m)
+            elif isinstance(m, dict):
+                role = m.get("role", "user")
+                if role not in ("system", "user", "assistant", "tool"):
+                    role = "user"
+                tc_list: list[CanonicalToolCall] | None = None
+                raw_tcs = m.get("tool_calls")
+                if raw_tcs:
+                    tc_list = []
+                    for tc in raw_tcs:
+                        fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                        tc_list.append(
+                            CanonicalToolCall(
+                                id=tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", ""),
+                                name=fn.get("name", tc.get("name", "")) if isinstance(tc, dict) else getattr(tc, "name", ""),
+                                arguments=fn.get("arguments", tc.get("arguments", "")) if isinstance(tc, dict) else getattr(tc, "arguments", ""),
+                            )
+                        )
+                converted_messages.append(
+                    CanonicalMessage(
+                        role=role,
+                        content=m.get("content") or "",
+                        tool_calls=tc_list,
+                        tool_call_id=m.get("tool_call_id"),
+                        name=m.get("name"),
+                    )
+                )
+            else:
+                converted_messages.append(m)
+
+        converted_tools: list[ToolDefinition] | None = None
+        if tools:
+            converted_tools = []
+            for t in tools:
+                if isinstance(t, ToolDefinition):
+                    converted_tools.append(t)
+                elif isinstance(t, dict):
+                    fn = t.get("function", {})
+                    name = fn.get("name", t.get("name", ""))
+                    desc = fn.get("description", t.get("description", ""))
+                    params = fn.get("parameters", t.get("parameters", {}))
+                    converted_tools.append(
+                        ToolDefinition(
+                            type=t.get("type", "function"),
+                            function=ToolFunction(
+                                name=name,
+                                description=desc,
+                                parameters=params,
+                            ),
+                        )
+                    )
+
+        accumulated_text: list[str] = []
+        finish_reason: str | None = None
+        has_tool_calls = False
+
+        try:
+            stream_gen = self.provider.stream(
+                converted_messages,
+                tools=converted_tools,
+                **kwargs,
+            )
+        except TypeError:
+            stream_gen = self.provider.stream(converted_messages)
+
+        async for event in stream_gen:
+            if isinstance(event, ProviderTextDelta):
+                accumulated_text.append(event.text)
+                yield CoreTextDelta(text=event.text)
+            elif isinstance(event, CoreTextDelta):
+                accumulated_text.append(event.text)
+                yield event
+            elif isinstance(event, ProviderThoughtDelta):
+                yield CoreThoughtDelta(thought=event.thought)
+            elif isinstance(event, CoreThoughtDelta):
+                yield event
+            elif isinstance(event, ProviderToolCallDelta):
+                has_tool_calls = True
+                yield CoreToolCallDelta(
+                    index=event.index,
+                    call_id=event.call_id,
+                    name=event.name,
+                    arguments_delta=event.arguments_delta,
+                )
+            elif isinstance(event, CoreToolCallDelta):
+                has_tool_calls = True
+                yield event
+            elif isinstance(event, ProviderFinish):
+                finish_reason = event.reason
+            elif isinstance(event, CoreTurnComplete):
+                yield event
+                return
+            elif isinstance(event, AgentEvent):
+                yield event
+
+        full_text = "".join(accumulated_text)
+        if full_text and finish_reason != "tool_calls" and not has_tool_calls:
+            yield CoreTurnComplete(final_text=full_text)
+
+
+def adapt_provider(provider: Any) -> Any:
+    if isinstance(provider, (LitellmModel, ProviderStreamAdapter)):
+        return provider
+    if "query_stream" in getattr(provider, "__dict__", {}):
+        return provider
+    if hasattr(type(provider), "query_stream") and not isinstance(provider, (Mock, NonCallableMock)):
+        return provider
+    if hasattr(provider, "stream"):
+        return ProviderStreamAdapter(provider)
+    return provider
+
+
 class Runtime:
     """Core Verbix runtime orchestrating the foreground agent and independent background workers."""
 
     def __init__(
         self,
         workspace: Path,
-        provider: ProviderClient,
+        provider: Any,
         system_prompt: str | None = None,
         worker_system_prompt: str | None = None,
         buffer_window: float = 0.3,
         on_wake: Callable[[str], Coroutine[Any, Any, None] | None] | None = None,
+        worker_model: Any = None,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         self.provider = provider
-        base_prompt = system_prompt or DEFAULT_VERBIX_PROMPT
+        self.worker_model = worker_model
+
+        # Load voice.yaml configuration
+        config_path = (
+            Path(__file__).resolve().parent.parent
+            / "minisweagent"
+            / "config"
+            / "voice.yaml"
+        )
+        raw_voice_cfg: dict[str, Any] = {}
+        if config_path.is_file():
+            raw_voice_cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        agent_cfg_dict = raw_voice_cfg.get("agent", {})
+
+        base_prompt = (
+            system_prompt
+            or agent_cfg_dict.get("system_template")
+            or DEFAULT_VERBIX_PROMPT
+        )
         grounding = (
             f"\n- Host operating system: {platform.system()}. Shell: bash."
             f"\n- The working directory is {self.workspace}."
@@ -80,13 +338,38 @@ class Runtime:
             StatusTool(self),
             CancelTool(self),
         ]
-        self.foreground = AgentSession(
-            session_id="verbix-foreground",
-            system_prompt=self.system_prompt,
-            provider=self.provider,
-            workspace=self.workspace,
-            tools=self.foreground_tools,
+        registry = ToolRegistry()
+        for tool in self.foreground_tools:
+            definition = {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters_schema,
+                },
+            }
+
+            def _make_handler(t: Any) -> Callable[..., Any]:
+                async def _handler(args: dict[str, Any], **kwargs: Any) -> str:
+                    ctx = ToolContext(workspace=self.workspace)
+                    res = await t.execute(args, ctx)
+                    return res.observation
+
+                return _handler
+
+            registry.register(tool.name, definition, _make_handler(tool))
+
+        agent_cfg_dict["system_template"] = self.system_prompt
+        agent_cfg_dict["system_prompt"] = self.system_prompt
+        fg_config = AgentConfig(**agent_cfg_dict)
+
+        self.foreground = DefaultAgent(
+            model=adapt_provider(self.provider),
+            env=None,
+            tools=registry,
+            config=fg_config,
         )
+        self.foreground.history = DefaultAgentHistoryProxy(self.foreground)
 
     @property
     def is_idle(self) -> bool:
@@ -113,7 +396,8 @@ class Runtime:
     async def step(self, user_text: str | None = None) -> AsyncIterator[AgentEvent]:
         """Executes a foreground conversation turn with Verbix."""
         async with self._turn_lock:
-            async for event in self.foreground.step(user_text):
+            self.foreground.model = adapt_provider(self.provider)
+            async for event in self.foreground.step_stream(user_text):
                 yield event
 
     async def submit(self, user_text: str, output: Any = None) -> str:
@@ -126,7 +410,7 @@ class Runtime:
                     res = output.emit(event)
                     if asyncio.iscoroutine(res):
                         await res
-                if isinstance(event, TurnComplete) and event.final_text:
+                if isinstance(event, CoreTurnComplete) and event.final_text:
                     final_text = event.final_text
         finally:
             self._active_turn_task = None
@@ -142,24 +426,42 @@ class Runtime:
         self._task_counter += 1
         task_id = f"task-{self._task_counter}"
 
-        worker_tools = [
-            FileReadTool(),
-            FileWriteTool(),
-            FileEditTool(),
-            BashTool(),
-        ]
-        worker_session = AgentSession(
-            session_id=f"worker-{task_id}",
-            system_prompt=self.worker_system_prompt,
-            provider=self.provider,
-            workspace=self.workspace,
-            tools=worker_tools,
+        swe_worker_path = (
+            Path(__file__).resolve().parent.parent
+            / "minisweagent"
+            / "config"
+            / "swe_worker.yaml"
         )
+        raw_worker_cfg: dict[str, Any] = {}
+        if swe_worker_path.is_file():
+            raw_worker_cfg = (
+                yaml.safe_load(swe_worker_path.read_text(encoding="utf-8")) or {}
+            )
+
+        agent_cfg_dict = raw_worker_cfg.get("agent", {})
+        if self.worker_system_prompt != DEFAULT_WORKER_PROMPT:
+            agent_cfg_dict["system_template"] = self.worker_system_prompt
+            agent_cfg_dict["system_prompt"] = self.worker_system_prompt
+
+        worker_config = AgentConfig(**agent_cfg_dict)
+
+        env_cfg_dict = raw_worker_cfg.get("environment", {})
+        env_extra = env_cfg_dict.get("env", {})
+        env = LocalEnvironment(cwd=str(self.workspace), env=env_extra)
+
+        model_to_use = adapt_provider(self.worker_model or self.provider)
+        worker_agent = DefaultAgent(
+            model=model_to_use,
+            env=env,
+            tools=None,
+            config=worker_config,
+        )
+        worker_agent.history = DefaultAgentHistoryProxy(worker_agent)
 
         worker_task = WorkerTask(
             id=task_id,
             description=task,
-            session=worker_session,
+            session=worker_agent,
         )
 
         def _on_finish(t: WorkerTask) -> None:
@@ -245,11 +547,11 @@ class Runtime:
         announcement = " ".join(results)
 
         # 1. Commit into foreground conversation history as assistant speech
-        self.foreground.history.append_assistant(content=announcement)
+        self.foreground.messages.append({"role": "assistant", "content": announcement})
 
         # 2. Directly deliver to wake_output (TTS player & CLI printer)
         if self.wake_output and hasattr(self.wake_output, "emit"):
-            res = self.wake_output.emit(TurnComplete(final_text=announcement))
+            res = self.wake_output.emit(CoreTurnComplete(final_text=announcement))
             if asyncio.iscoroutine(res):
                 await res
 

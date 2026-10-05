@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from verbix.core.events import (
     AgentEvent,
@@ -17,7 +18,7 @@ from verbix.core.events import (
 )
 from verbix.ipc.client import VerbixClient
 from verbix.ipc.server import VerbixServer
-from verbix.provider.client import ProviderClient
+from verbix.minisweagent.models.litellm_model import LitellmModel, LitellmModelConfig
 from verbix.runtime.runtime import Runtime
 from verbix.voice.capture import PTTCapture
 from verbix.voice.pipeline import VoicePipeline
@@ -161,15 +162,33 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
     if not workspace.is_dir():
         raise ValueError(f"Workspace directory '{workspace}' does not exist.")
 
-    provider = ProviderClient(
-        base_url=args.base_url,
-        model=args.model,
-        api_key=api_key,
-        max_tokens=args.max_tokens,
+    model_kwargs: dict[str, Any] = {}
+    if getattr(args, "max_tokens", None):
+        model_kwargs["max_tokens"] = args.max_tokens
+    if getattr(args, "base_url", None):
+        model_kwargs["api_base"] = args.base_url
+    if api_key:
+        model_kwargs["api_key"] = api_key
+
+    receptionist_model_name = getattr(args, "receptionist_model", None) or args.model
+    fg_config = LitellmModelConfig(
+        model_name=receptionist_model_name,
+        model_kwargs=model_kwargs,
     )
+    foreground_model = LitellmModel(config_class=lambda **kw: fg_config)
+
+    worker_model = None
+    if getattr(args, "worker_model", None):
+        worker_config = LitellmModelConfig(
+            model_name=args.worker_model,
+            model_kwargs=model_kwargs,
+        )
+        worker_model = LitellmModel(config_class=lambda **kw: worker_config)
+
     return Runtime(
         workspace=workspace,
-        provider=provider,
+        provider=foreground_model,
+        worker_model=worker_model,
     )
 
 

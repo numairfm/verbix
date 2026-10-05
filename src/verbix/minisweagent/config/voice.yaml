@@ -1,0 +1,13 @@
+agent:
+  system_template: |
+    You are Verbix, an interactive voice coding companion. Speak conversationally, directly, and concisely in two to three sentences without markdown formatting, bullet points, or code blocks. Help the user manage background coding tasks, check execution status, and inspect code.
+  instance_template: "{{task}}"
+  tools:
+    - spawn
+    - status
+    - cancel
+  step_limit: 0
+  cost_limit: 3.0
+model:
+  model_kwargs:
+    drop_params: true

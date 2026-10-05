@@ -100,6 +100,67 @@ async def test_agent_step_stream_executes_tool_registry_tool():
 
 
 @pytest.mark.asyncio
+async def test_agent_step_stream_executes_parallel_tool_calls():
+    tools = ToolRegistry()
+    tools.register(
+        "spawn",
+        {"type": "function", "function": {"name": "spawn"}},
+        lambda args: f"task-{args.get('task_name')}-started",
+    )
+
+    mock_model = MagicMock()
+    call_count = 0
+
+    async def mock_stream(messages, tools=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # Emit two tool calls in the same streaming turn (parallel tool calling)
+            yield ToolCallDelta(
+                index=0,
+                call_id="call_spawn_1",
+                name="spawn",
+                arguments_delta='{"task_name": "task-a"}',
+            )
+            yield ToolCallDelta(
+                index=1,
+                call_id="call_spawn_2",
+                name="spawn",
+                arguments_delta='{"task_name": "task-b"}',
+            )
+        else:
+            yield TextDelta(text="Both tasks spawned.")
+            yield TurnComplete(final_text="Both tasks spawned.")
+
+    mock_model.query_stream = mock_stream
+
+    agent = DefaultAgent(
+        model=mock_model,
+        tools=tools,
+        tools_list=["spawn"],
+        system_prompt="You are Verbix.",
+    )
+    events = [e async for e in agent.step_stream("start task-a and task-b")]
+
+    started_events = [e for e in events if isinstance(e, ToolCallStarted)]
+    assert len(started_events) == 2
+    assert started_events[0].call_id == "call_spawn_1"
+    assert started_events[0].arguments == {"task_name": "task-a"}
+    assert started_events[1].call_id == "call_spawn_2"
+    assert started_events[1].arguments == {"task_name": "task-b"}
+
+    finished_events = [e for e in events if isinstance(e, ToolCallFinished)]
+    assert len(finished_events) == 2
+    assert finished_events[0].observation == "task-task-a-started"
+    assert finished_events[1].observation == "task-task-b-started"
+
+    # Both tool observations are in message history
+    assert any(m.get("content") == "task-task-a-started" for m in agent.messages)
+    assert any(m.get("content") == "task-task-b-started" for m in agent.messages)
+
+
+
+@pytest.mark.asyncio
 async def test_agent_step_stream_executes_env_tool():
     mock_env = MagicMock()
     mock_env.execute.return_value = {

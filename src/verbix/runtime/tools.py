@@ -36,9 +36,7 @@ class SpawnTool:
             return ToolResult("error: 'objective' is required to spawn work.", is_error=True)
 
         task_id = await self.runtime.spawn(objective)
-        return ToolResult(
-            f"{task_id} accepted. Confirm starting in one short sentence and call no further tools."
-        )
+        return ToolResult(f"{task_id} started in background.")
 
 
 class StatusTool:

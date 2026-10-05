@@ -32,7 +32,7 @@ async def test_spawn_tool_execution(dummy_runtime):
     # Valid objective argument
     res = await tool.execute({"objective": "build binary"}, ctx)
     assert res.is_error is False
-    assert res.observation == "task-1 accepted. Confirm starting in one short sentence and call no further tools."
+    assert res.observation == "task-1 started in background."
     dummy_runtime.spawn.assert_awaited_once_with("build binary")
 
 

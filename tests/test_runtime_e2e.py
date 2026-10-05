@@ -287,3 +287,56 @@ async def test_runtime_buffer_flush_failure_does_not_blurt_raw_markdown(tmp_path
     assert len(on_wake_called) == 0
 
 
+@pytest.mark.asyncio
+async def test_runtime_announcer_clean_history(tmp_path):
+    provider = MagicMock()
+
+    async def fake_stream(messages, tools=None, reasoning_effort=None):
+        last_msg = messages[-1].content if messages else ""
+        if "[Background task completion update" in last_msg:
+            # Announcer synthesis turn (must receive NO tools!)
+            assert tools is None or len(tools) == 0
+            yield ProviderTextDelta(text="Task finished: all 42 items processed.")
+            yield ProviderFinish(reason="stop")
+        else:
+            # Worker execution
+            yield ProviderTextDelta(text="Calculation complete: 42.")
+            yield ProviderFinish(reason="stop")
+
+    provider.stream = fake_stream
+
+    emitted_events = []
+    class FakeOutput:
+        async def emit(self, event):
+            emitted_events.append(event)
+
+    output = FakeOutput()
+    runtime = Runtime(workspace=tmp_path, provider=provider, buffer_window=0.02)
+    runtime.wake_output = output
+
+    # 1. Announcer exists and has ZERO tools
+    assert hasattr(runtime, "announcer")
+    assert runtime.announcer is not None
+    assert runtime.announcer.tools is None or len(runtime.announcer.tools.get_definitions()) == 0
+
+    task_id = await runtime.spawn("process items")
+    task = runtime.tasks[task_id]
+    await task.wait()
+    assert task.status == "completed"
+
+    import asyncio
+    await asyncio.sleep(0.05)
+
+    # 2. Spoken announcement delivered to wake_output
+    from verbix.core.events import TurnComplete
+    turn_completes = [e for e in emitted_events if isinstance(e, TurnComplete)]
+    assert len(turn_completes) == 1
+    assert "Task finished: all 42 items processed." in turn_completes[0].final_text
+
+    # 3. Companion history contains ONLY the assistant speech, NEVER internal wake prompt
+    msgs = runtime.foreground.messages
+    assert not any(isinstance(m, dict) and "[Background task completion update" in str(m.get("content", "")) for m in msgs)
+    assert any(isinstance(m, dict) and m.get("role") == "assistant" and "Task finished: all 42 items processed." in str(m.get("content", "")) for m in msgs)
+
+
+

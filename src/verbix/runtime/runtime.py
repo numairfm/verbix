@@ -66,6 +66,11 @@ DEFAULT_WORKER_PROMPT = """You are an autonomous background worker executing tas
 Use your filesystem and shell tools directly to inspect, write, test, and complete the requested task.
 When complete, provide a clear, concise summary of the actions taken and final results."""
 
+DEFAULT_ANNOUNCER_PROMPT = """You are Verbix's voice announcer. Your only job is to announce background task completion results directly to the user in spoken, conversational prose.
+- Write for listening: lead with the answer and speak in plain, continuous conversational prose. Never use markdown syntax, asterisks, bullet points (* or -), backticks, code blocks, tables, headings, or numbered lists.
+- Be concise. Give the shortest response that completely satisfies the update; when the task produced detailed results, explain them clearly without technical syntax.
+- Never call or mention tools. Speak answers and messages directly to the user."""
+
 
 class DefaultAgentHistoryProxy:
     """Provides backwards-compatible .messages and .append_assistant() on top of DefaultAgent.messages."""
@@ -372,6 +377,30 @@ class Runtime:
         )
         self.foreground.history = DefaultAgentHistoryProxy(self.foreground)
 
+        # Dedicated tool-less announcer for background completion synthesis
+        announcer_path = (
+            Path(__file__).resolve().parent.parent
+            / "minisweagent"
+            / "config"
+            / "announcer.yaml"
+        )
+        raw_announcer_cfg: dict[str, Any] = {}
+        if announcer_path.is_file():
+            raw_announcer_cfg = (
+                yaml.safe_load(announcer_path.read_text(encoding="utf-8")) or {}
+            )
+        announcer_cfg_dict = raw_announcer_cfg.get("agent", {})
+        if not announcer_cfg_dict.get("system_template"):
+            announcer_cfg_dict["system_template"] = DEFAULT_ANNOUNCER_PROMPT
+        announcer_cfg_dict["tools"] = []
+        announcer_config = AgentConfig(**announcer_cfg_dict)
+        self.announcer = DefaultAgent(
+            model=adapt_provider(self.provider),
+            env=None,
+            tools=None,
+            config=announcer_config,
+        )
+
     @property
     def is_idle(self) -> bool:
         """Returns True if no foreground turn is actively running."""
@@ -541,7 +570,7 @@ class Runtime:
         )
 
     async def _on_buffer_flush(self, batch: list[tuple[str, str]]) -> None:
-        """Synthesizes background worker results via foreground companion and delivers to output."""
+        """Synthesizes background worker results via dedicated announcer and delivers to output."""
         items = [f"- {task_id}: {result.strip()}" for task_id, result in batch if result.strip()]
         if not items:
             return
@@ -552,8 +581,8 @@ class Runtime:
         async with self._turn_lock:
             final_text = ""
             try:
-                self.foreground.model = adapt_provider(self.provider)
-                async for event in self.foreground.step_stream(wake_prompt):
+                self.announcer.model = adapt_provider(self.provider)
+                async for event in self.announcer.step_stream(wake_prompt):
                     if self.wake_output and hasattr(self.wake_output, "emit"):
                         res = self.wake_output.emit(event)
                         if asyncio.iscoroutine(res):
@@ -564,7 +593,9 @@ class Runtime:
                 logger.exception("Failed to synthesize background task completion announcement")
                 return
 
-            if self.on_wake and final_text:
-                wake_res = self.on_wake(final_text)
-                if asyncio.iscoroutine(wake_res):
-                    await wake_res
+            if final_text:
+                self.foreground.messages.append({"role": "assistant", "content": final_text})
+                if self.on_wake:
+                    wake_res = self.on_wake(final_text)
+                    if asyncio.iscoroutine(wake_res):
+                        await wake_res

@@ -162,9 +162,15 @@ async def test_runtime_direct_worker_announcement(tmp_path):
     async def fake_stream(messages, tools=None, reasoning_effort=None):
         nonlocal stream_calls
         stream_calls += 1
-        # Worker execution
-        yield ProviderTextDelta(text="Calculation finished: 42.")
-        yield ProviderFinish(reason="stop")
+        last_msg = messages[-1].content if messages else ""
+        if "[Background task completion update" in last_msg:
+            # Receptionist synthesis turn
+            yield ProviderTextDelta(text="I've finished the task: the answer is 42.")
+            yield ProviderFinish(reason="stop")
+        else:
+            # Worker execution
+            yield ProviderTextDelta(text="Calculation finished: 42.")
+            yield ProviderFinish(reason="stop")
 
     provider.stream = fake_stream
 
@@ -186,18 +192,18 @@ async def test_runtime_direct_worker_announcement(tmp_path):
     import asyncio
     await asyncio.sleep(0.05)
 
-    # 1. Direct announcement must be emitted without a second LLM stream call
+    # 1. Synthesized announcement must be emitted through wake_output
     from verbix.core.events import TurnComplete
     turn_completes = [e for e in emitted_events if isinstance(e, TurnComplete)]
     assert len(turn_completes) == 1
-    assert "Calculation finished: 42." in turn_completes[0].final_text
+    assert "I've finished the task: the answer is 42." in turn_completes[0].final_text
 
-    # 2. Worker answer was committed to foreground history
+    # 2. Synthesized answer was committed to foreground history
     history_msgs = runtime.foreground.history.messages
-    assert any(m.role == "assistant" and "Calculation finished: 42." in m.content for m in history_msgs)
+    assert any(m.role == "assistant" and "I've finished the task: the answer is 42." in m.content for m in history_msgs)
 
-    # 3. Provider stream was called ONLY ONCE by the worker, NOT a second time by the receptionist!
-    assert stream_calls == 1
+    # 3. Provider stream was called twice: once by worker, once by foreground synthesis
+    assert stream_calls == 2
 
 
 @pytest.mark.asyncio
@@ -235,4 +241,49 @@ async def test_runtime_uses_miniswe_agent(tmp_path):
     assert isinstance(runtime.foreground, DefaultAgent)
     assert hasattr(runtime.foreground, "config")
     assert hasattr(runtime.foreground, "step_stream")
+
+
+@pytest.mark.asyncio
+async def test_runtime_buffer_flush_failure_does_not_blurt_raw_markdown(tmp_path):
+    provider = MagicMock()
+
+    async def fake_stream(messages, tools=None, reasoning_effort=None):
+        last_msg = messages[-1].content if messages else ""
+        if "[Background task completion update" in last_msg:
+            # Synthesis fails (e.g. LLM provider error after retries)
+            raise RuntimeError("API connection error")
+        else:
+            # Worker execution succeeds
+            yield ProviderTextDelta(text="# Markdown Result\n- Item 1\n- Item 2")
+            yield ProviderFinish(reason="stop")
+
+    provider.stream = fake_stream
+
+    emitted_events = []
+    class FakeOutput:
+        async def emit(self, event):
+            emitted_events.append(event)
+
+    output = FakeOutput()
+    on_wake_called = []
+    runtime = Runtime(
+        workspace=tmp_path,
+        provider=provider,
+        buffer_window=0.02,
+        on_wake=lambda text: on_wake_called.append(text),
+    )
+    runtime.wake_output = output
+
+    task_id = await runtime.spawn("run task")
+    task = runtime.tasks[task_id]
+    await task.wait()
+    assert task.status == "completed"
+
+    import asyncio
+    await asyncio.sleep(0.05)
+
+    # Failed synthesis should log and be silent, never emitting raw markdown to wake_output or on_wake
+    assert len(emitted_events) == 0
+    assert len(on_wake_called) == 0
+
 

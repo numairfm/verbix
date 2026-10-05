@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal, cast
 
 import litellm
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 litellm.suppress_debug_info = True
 logging.getLogger("LiteLLM").setLevel(logging.ERROR)
@@ -41,7 +41,7 @@ logger = logging.getLogger("litellm_model")
 class LitellmModelConfig(BaseModel):
     model_name: str
     """Model name. Recommended to include provider, e.g. `anthropic/claude-3-5-sonnet`."""
-    model_kwargs: dict[str, Any] = {}
+    model_kwargs: dict[str, Any] = Field(default_factory=lambda: {"num_retries": 3})
     """Additional arguments passed to the API."""
     litellm_model_registry: Path | str | None = os.getenv("LITELLM_MODEL_REGISTRY_PATH")
     """Model registry for cost tracking and model metadata."""
@@ -81,6 +81,7 @@ class LitellmModel:
     def _query(self, messages: list[dict[str, Any]], **kwargs: Any) -> Any:
         kwargs_dict = dict(self.config.model_kwargs)
         kwargs_dict.update(kwargs)
+        kwargs_dict.setdefault("num_retries", 3)
         tools = kwargs_dict.pop("tools", [BASH_TOOL])
         try:
             return litellm.completion(
@@ -134,6 +135,7 @@ class LitellmModel:
         prepared_messages = self._prepare_messages_for_api(messages)
         call_kwargs = dict(self.config.model_kwargs)
         call_kwargs.update(kwargs)
+        call_kwargs.setdefault("num_retries", 3)
         if tools is not None:
             call_kwargs["tools"] = tools
 

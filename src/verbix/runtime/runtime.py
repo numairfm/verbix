@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import platform
 from collections.abc import AsyncIterator, Callable, Coroutine
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Any
 from unittest.mock import Mock, NonCallableMock
 
 import yaml
+
+logger = logging.getLogger("verbix.runtime")
 
 from verbix.core.events import (
     AgentEvent,
@@ -50,16 +53,14 @@ from verbix.runtime.tools import CancelTool, SpawnTool, StatusTool
 from verbix.runtime.worker import WorkerTask
 from verbix.tools.base import ToolContext
 
-DEFAULT_VERBIX_PROMPT = """You are Verbix, a voice-operated assistant and calm, capable peer. You say "I," speak plainly, admit limits honestly, and avoid flattery.
-
-- Your answers are spoken aloud. Write for listening: lead with the answer and speak in plain, continuous conversational prose. Never use markdown, bullet points, asterisks, backticks, or code syntax.
-- Be concise. Give the direct answer without narrating internal steps or tool mechanics.
-- Answer conversational and general knowledge questions directly.
-- Delegate tasks requiring shell commands, file tools, or multi-step execution with spawn; base work tools live on workers only.
+DEFAULT_VERBIX_PROMPT = """You are Verbix, a voice-operated desktop assistant and calm, capable peer. You say "I," speak plainly, admit limits plainly, no flattery.
+- Your answers are spoken aloud. Write for listening: lead with the answer and speak in plain, continuous conversational prose. Never use markdown syntax, asterisks, bullet points (* or -), backticks, code blocks, tables, headings, or numbered lists.
+- Be concise. Give the shortest response that completely satisfies the user's request; when they ask for detail, a story, or a report, their request sets the length. Speak only the answer or status asked for; internal execution artifacts and unrequested instructions stay unspoken.
 - When a turn calls tools, begin with one short spoken sentence stating what you are starting.
-- When spawn accepts work, confirm starting in one brief sentence; background workers announce terminal results upon completion. Preserve all clauses and requested phrasing in the objective.
+- When spawn accepts work, confirm starting in one brief sentence and call no further tools; background workers announce terminal results upon completion.
 - Inspect active background work with status only when the user explicitly asks how work is going.
-- Stop background work with cancel."""
+- Stop background work with cancel.
+- Speak answers and messages directly to the user. By default, describe past tool operations in the past tense."""
 
 DEFAULT_WORKER_PROMPT = """You are an autonomous background worker executing tasks for Verbix.
 Use your filesystem and shell tools directly to inspect, write, test, and complete the requested task.
@@ -540,23 +541,30 @@ class Runtime:
         )
 
     async def _on_buffer_flush(self, batch: list[tuple[str, str]]) -> None:
-        """Directly announces completed worker results and records them in history."""
-        results = [result.strip() for _, result in batch if result.strip()]
-        if not results:
+        """Synthesizes background worker results via foreground companion and delivers to output."""
+        items = [f"- {task_id}: {result.strip()}" for task_id, result in batch if result.strip()]
+        if not items:
             return
-        announcement = " ".join(results)
+        wake_prompt = (
+            "[Background task completion update. Announce the completed results directly to the user in spoken conversational prose:]\n"
+            + "\n".join(items)
+        )
+        async with self._turn_lock:
+            final_text = ""
+            try:
+                self.foreground.model = adapt_provider(self.provider)
+                async for event in self.foreground.step_stream(wake_prompt):
+                    if self.wake_output and hasattr(self.wake_output, "emit"):
+                        res = self.wake_output.emit(event)
+                        if asyncio.iscoroutine(res):
+                            await res
+                    if isinstance(event, CoreTurnComplete) and event.final_text:
+                        final_text = event.final_text
+            except Exception:
+                logger.exception("Failed to synthesize background task completion announcement")
+                return
 
-        # 1. Commit into foreground conversation history as assistant speech
-        self.foreground.messages.append({"role": "assistant", "content": announcement})
-
-        # 2. Directly deliver to wake_output (TTS player & CLI printer)
-        if self.wake_output and hasattr(self.wake_output, "emit"):
-            res = self.wake_output.emit(CoreTurnComplete(final_text=announcement))
-            if asyncio.iscoroutine(res):
-                await res
-
-        # 3. Notify any registered on_wake callback
-        if self.on_wake:
-            wake_res = self.on_wake(announcement)
-            if asyncio.iscoroutine(wake_res):
-                await wake_res
+            if self.on_wake and final_text:
+                wake_res = self.on_wake(final_text)
+                if asyncio.iscoroutine(wake_res):
+                    await wake_res

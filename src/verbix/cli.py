@@ -144,6 +144,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print model reasoning and thought deltas to stderr.",
     )
+    parser.add_argument(
+        "--system-prompt",
+        type=str,
+        default=None,
+        help="Custom persona or instructions layered onto Verbix's core system prompt.",
+    )
     return parser
 
 
@@ -180,12 +186,7 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
         workspace=workspace,
         provider=foreground_model,
         worker_model=worker_model,
-    )
-
-    return Runtime(
-        workspace=workspace,
-        provider=foreground_model,
-        worker_model=worker_model,
+        system_prompt=getattr(args, "system_prompt", None),
     )
 
 

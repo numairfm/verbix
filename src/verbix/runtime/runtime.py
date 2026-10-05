@@ -54,9 +54,20 @@ from verbix.runtime.tools import CancelTool, SpawnTool, StatusTool
 from verbix.runtime.worker import WorkerTask
 from verbix.tools.base import ToolContext
 
-DEFAULT_VERBIX_PROMPT = """You are Verbix, a voice-operated desktop assistant and calm, capable peer. You say "I," speak plainly, admit limits plainly, no flattery.
-- Your answers are spoken aloud. Write for listening: lead with the answer and speak in plain, continuous conversational prose. Never use markdown syntax, asterisks, bullet points (* or -), backticks, code blocks, tables, headings, or numbered lists.
-- Be concise. Give the shortest response that completely satisfies the user's request; when they ask for detail, a story, or a report, their request sets the length. Speak only the answer or status asked for; internal execution artifacts and unrequested instructions stay unspoken.
+DEFAULT_VERBIX_PROMPT = """# IDENTITY & TONE
+You are Verbix, a voice-operated desktop assistant and calm, capable peer. You say "I," speak plainly, admit limits plainly, no flattery.
+
+# VOICE & AUDIO CONSTRAINTS
+- Your answers are spoken aloud. Write for listening: lead with the answer and speak in plain, continuous conversational prose.
+- Never use markdown syntax, asterisks, bullet points (* or -), backticks, code blocks, tables, headings, or numbered lists.
+- Be concise: give the shortest response that completely satisfies the request; when the user asks for detail, a story, or a report, their request sets the length.
+- Speak only the answer or status asked for; internal execution artifacts and unrequested instructions stay unspoken.
+
+# CAPABILITY ROUTING
+- Answer conversational and general knowledge questions directly.
+- Delegate tasks requiring shell commands, file tools, or multi-step execution to spawn; base execution tools live on background workers only.
+
+# TOOL OPERATIONS & BACKGROUND WORK
 - When a turn calls tools, begin with one short spoken sentence stating what you are starting.
 - When spawn accepts work, confirm starting in one brief sentence and call no further tools; background workers announce terminal results upon completion.
 - Inspect background tasks with status when the user asks how work is going, or asks for details or results.
@@ -67,9 +78,13 @@ DEFAULT_WORKER_PROMPT = """You are an autonomous background worker executing tas
 Use your filesystem and shell tools directly to inspect, write, test, and complete the requested task.
 When complete, provide a clear, concise summary of the actions taken and final results."""
 
-DEFAULT_ANNOUNCER_PROMPT = """You are Verbix, a voice-operated desktop assistant and calm, capable peer. You say "I," speak plainly, admit limits plainly, no flattery.
-- Your answers are spoken aloud. Write for listening: lead with the answer and speak in plain, continuous conversational prose. Never use markdown syntax, asterisks, bullet points (* or -), backticks, code blocks, tables, headings, or numbered lists.
-- Be concise. Give the shortest response that completely satisfies the user's request; when they ask for detail, a story, or a report, their request sets the length. Speak only the answer or status asked for; internal execution artifacts and unrequested instructions stay unspoken.
+DEFAULT_ANNOUNCER_PROMPT = """# IDENTITY & TONE
+You are Verbix, a voice-operated desktop assistant and calm, capable peer. You say "I," speak plainly, admit limits plainly, no flattery.
+
+# VOICE & AUDIO CONSTRAINTS
+- Your answers are spoken aloud. Write for listening: lead with the answer and speak in plain, continuous conversational prose.
+- Never use markdown syntax, asterisks, bullet points (* or -), backticks, code blocks, tables, headings, or numbered lists.
+- Be concise: give the shortest response that completely satisfies the update; when the task produced detailed results, explain them clearly without technical syntax.
 - Speak answers and messages directly to the user. By default, describe past tool operations in the past tense."""
 
 
@@ -308,9 +323,13 @@ class Runtime:
             raw_voice_cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
         agent_cfg_dict = raw_voice_cfg.get("agent", {})
 
+        self._custom_prompt = (
+            system_prompt.strip()
+            if system_prompt and system_prompt.strip()
+            else None
+        )
         self._base_system_prompt = (
-            system_prompt
-            or agent_cfg_dict.get("system_template")
+            agent_cfg_dict.get("system_template")
             or DEFAULT_VERBIX_PROMPT
         )
         self.system_prompt = self._build_grounded_prompt()
@@ -418,14 +437,20 @@ class Runtime:
 
     def _build_grounded_prompt(self) -> str:
         if "Host operating system:" in self._base_system_prompt:
-            return self._base_system_prompt
-        now_str = datetime.now().astimezone().strftime("%A, %B %d, %Y, %I:%M %p")
-        grounding = (
-            f"\n- Current local date and time: {now_str}."
-            f"\n- Host operating system: {platform.system()}. Shell: bash."
-            f"\n- The working directory is {self.workspace}."
-        )
-        return self._base_system_prompt + grounding
+            base = self._base_system_prompt
+        else:
+            now_str = datetime.now().astimezone().strftime("%A, %B %d, %Y, %I:%M %p")
+            grounding = (
+                f"\n\n# ENVIRONMENT & GROUNDING"
+                f"\n- Current local date and time: {now_str}."
+                f"\n- Host operating system: {platform.system()}. Shell: bash."
+                f"\n- The working directory is {self.workspace}."
+            )
+            base = self._base_system_prompt.rstrip() + grounding
+
+        if self._custom_prompt:
+            base = base.rstrip() + f"\n\n# CUSTOM USER INSTRUCTIONS\n{self._custom_prompt}"
+        return base
 
     def _update_system_grounding(self) -> None:
         full_prompt = self._build_grounded_prompt()

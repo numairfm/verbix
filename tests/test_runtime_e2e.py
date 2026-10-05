@@ -150,8 +150,28 @@ async def test_dual_emission_spoken_ack_and_tool_call(tmp_path):
 async def test_runtime_prompt_grounding(mock_provider, tmp_path):
     import platform
     runtime = Runtime(workspace=tmp_path, provider=mock_provider)
+    assert "# IDENTITY & TONE" in runtime.system_prompt
+    assert "# VOICE & AUDIO CONSTRAINTS" in runtime.system_prompt
+    assert "# CAPABILITY ROUTING" in runtime.system_prompt
+    assert "# TOOL OPERATIONS & BACKGROUND WORK" in runtime.system_prompt
+    assert "# ENVIRONMENT & GROUNDING" in runtime.system_prompt
+    assert "Current local date and time:" in runtime.system_prompt
     assert f"Host operating system: {platform.system()}" in runtime.system_prompt
     assert f"The working directory is {tmp_path.resolve()}" in runtime.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_runtime_layered_custom_system_prompt(mock_provider, tmp_path):
+    custom = "Speak like a 1920s radio announcer, see?"
+    runtime = Runtime(workspace=tmp_path, provider=mock_provider, system_prompt=custom)
+    # Core invariants must remain intact
+    assert "# IDENTITY & TONE" in runtime.system_prompt
+    assert "# VOICE & AUDIO CONSTRAINTS" in runtime.system_prompt
+    assert "# ENVIRONMENT & GROUNDING" in runtime.system_prompt
+    # Custom instructions must be layered cleanly at the bottom
+    assert "# CUSTOM USER INSTRUCTIONS" in runtime.system_prompt
+    assert "Speak like a 1920s radio announcer, see?" in runtime.system_prompt
+
 
 
 @pytest.mark.asyncio

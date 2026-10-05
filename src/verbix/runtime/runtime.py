@@ -402,8 +402,13 @@ class Runtime:
                 yaml.safe_load(announcer_path.read_text(encoding="utf-8")) or {}
             )
         announcer_cfg_dict = raw_announcer_cfg.get("agent", {})
-        if not announcer_cfg_dict.get("system_template"):
-            announcer_cfg_dict["system_template"] = DEFAULT_ANNOUNCER_PROMPT
+        self._base_announcer_prompt = (
+            announcer_cfg_dict.get("system_template")
+            or DEFAULT_ANNOUNCER_PROMPT
+        )
+        announcer_cfg_dict["system_template"] = self._build_grounded_prompt(
+            self._base_announcer_prompt
+        )
         announcer_cfg_dict["tools"] = []
         announcer_config = AgentConfig(**announcer_cfg_dict)
         self.announcer = DefaultAgent(
@@ -435,9 +440,12 @@ class Runtime:
             except asyncio.QueueFull:
                 pass
 
-    def _build_grounded_prompt(self) -> str:
-        if "Host operating system:" in self._base_system_prompt:
-            base = self._base_system_prompt
+    def _build_grounded_prompt(self, base_prompt: str | None = None) -> str:
+        prompt_to_use = (
+            base_prompt if base_prompt is not None else self._base_system_prompt
+        )
+        if "Host operating system:" in prompt_to_use:
+            base = prompt_to_use
         else:
             now_str = datetime.now().astimezone().strftime("%A, %B %d, %Y, %I:%M %p")
             grounding = (
@@ -446,7 +454,7 @@ class Runtime:
                 f"\n- Host operating system: {platform.system()}. Shell: bash."
                 f"\n- The working directory is {self.workspace}."
             )
-            base = self._base_system_prompt.rstrip() + grounding
+            base = prompt_to_use.rstrip() + grounding
 
         if self._custom_prompt:
             base = base.rstrip() + f"\n\n# CUSTOM USER INSTRUCTIONS\n{self._custom_prompt}"
@@ -458,6 +466,12 @@ class Runtime:
         self.foreground.config.system_template = full_prompt
         if self.foreground.messages and self.foreground.messages[0].get("role") == "system":
             self.foreground.messages[0]["content"] = full_prompt
+
+    def _update_announcer_grounding(self) -> None:
+        full_prompt = self._build_grounded_prompt(self._base_announcer_prompt)
+        self.announcer.config.system_template = full_prompt
+        if self.announcer.messages and self.announcer.messages[0].get("role") == "system":
+            self.announcer.messages[0]["content"] = full_prompt
 
     async def step(self, user_text: str | None = None) -> AsyncIterator[AgentEvent]:
         """Executes a foreground conversation turn with Verbix."""
@@ -618,6 +632,8 @@ class Runtime:
         async with self._turn_lock:
             final_text = ""
             try:
+                self._update_announcer_grounding()
+                self.announcer.messages = []
                 self.announcer.model = adapt_provider(self.provider)
                 async for event in self.announcer.step_stream(wake_prompt):
                     if self.wake_output and hasattr(self.wake_output, "emit"):

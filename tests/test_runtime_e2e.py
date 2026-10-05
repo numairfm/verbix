@@ -173,6 +173,19 @@ async def test_runtime_layered_custom_system_prompt(mock_provider, tmp_path):
     assert "Speak like a 1920s radio announcer, see?" in runtime.system_prompt
 
 
+@pytest.mark.asyncio
+async def test_runtime_announcer_layered_custom_system_prompt(mock_provider, tmp_path):
+    custom = "Speak like a caveman"
+    runtime = Runtime(workspace=tmp_path, provider=mock_provider, system_prompt=custom)
+    # Announcer must retain voice constraints and tone
+    assert "# IDENTITY & TONE" in runtime.announcer.config.system_template
+    assert "# VOICE & AUDIO CONSTRAINTS" in runtime.announcer.config.system_template
+    assert "# ENVIRONMENT & GROUNDING" in runtime.announcer.config.system_template
+    # Announcer must inherit custom user instructions
+    assert "# CUSTOM USER INSTRUCTIONS" in runtime.announcer.config.system_template
+    assert "Speak like a caveman" in runtime.announcer.config.system_template
+
+
 
 @pytest.mark.asyncio
 async def test_runtime_direct_worker_announcement(tmp_path):

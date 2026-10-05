@@ -139,6 +139,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Send voice toggle event to running Verbix daemon over IPC socket.",
     )
+    parser.add_argument(
+        "--show-thoughts",
+        action="store_true",
+        help="Print model reasoning and thought deltas to stderr.",
+    )
     return parser
 
 
@@ -195,7 +200,8 @@ class CliPrinter:
 
     SPEAKER = "verbix: "
 
-    def __init__(self) -> None:
+    def __init__(self, show_thoughts: bool = False) -> None:
+        self.show_thoughts = show_thoughts
         self.in_thought = False
         self._delivered: list[str] = []
         self._prefix_open = False
@@ -209,11 +215,12 @@ class CliPrinter:
 
     async def emit(self, event: AgentEvent) -> None:
         if isinstance(event, ThoughtDelta):
-            if not self.in_thought:
-                sys.stderr.write("\n[thought] ")
-                self.in_thought = True
-            sys.stderr.write(event.thought)
-            sys.stderr.flush()
+            if self.show_thoughts:
+                if not self.in_thought:
+                    sys.stderr.write("\n[thought] ")
+                    self.in_thought = True
+                sys.stderr.write(event.thought)
+                sys.stderr.flush()
         elif isinstance(event, TextDelta):
             if self.in_thought:
                 sys.stderr.write("\n")
@@ -334,7 +341,7 @@ async def async_main(args: argparse.Namespace) -> int:
         sink = SubprocessAudioSink(sample_rate=24000, audio_format="f32")
         player = AudioPlayer(tts=tts, sink=sink)
         capture = PTTCapture()
-        printer = CliPrinter()
+        printer = CliPrinter(show_thoughts=getattr(args, "show_thoughts", False))
         pipeline = VoicePipeline(
             runtime=runtime, stt=stt, player=player, capture=capture, printer=printer
         )
@@ -400,7 +407,7 @@ async def async_main(args: argparse.Namespace) -> int:
         return 0
 
     # Text CLI Mode: single foreground queue with immediate completion printing
-    printer = CliPrinter()
+    printer = CliPrinter(show_thoughts=getattr(args, "show_thoughts", False))
     runtime.wake_output = printer
 
     def _cli_on_wake(speech: str) -> None:

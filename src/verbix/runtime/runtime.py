@@ -4,6 +4,7 @@ import asyncio
 import logging
 import platform
 from collections.abc import AsyncIterator, Callable, Coroutine
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, NonCallableMock
@@ -307,20 +308,12 @@ class Runtime:
             raw_voice_cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
         agent_cfg_dict = raw_voice_cfg.get("agent", {})
 
-        base_prompt = (
+        self._base_system_prompt = (
             system_prompt
             or agent_cfg_dict.get("system_template")
             or DEFAULT_VERBIX_PROMPT
         )
-        grounding = (
-            f"\n- Host operating system: {platform.system()}. Shell: bash."
-            f"\n- The working directory is {self.workspace}."
-        )
-        self.system_prompt = (
-            base_prompt
-            if "Host operating system:" in base_prompt
-            else base_prompt + grounding
-        )
+        self.system_prompt = self._build_grounded_prompt()
         self.worker_system_prompt = worker_system_prompt or DEFAULT_WORKER_PROMPT
         self.on_wake = on_wake
         self.wake_output: Any = None
@@ -423,9 +416,28 @@ class Runtime:
             except asyncio.QueueFull:
                 pass
 
+    def _build_grounded_prompt(self) -> str:
+        if "Host operating system:" in self._base_system_prompt:
+            return self._base_system_prompt
+        now_str = datetime.now().astimezone().strftime("%A, %B %d, %Y, %I:%M %p")
+        grounding = (
+            f"\n- Current local date and time: {now_str}."
+            f"\n- Host operating system: {platform.system()}. Shell: bash."
+            f"\n- The working directory is {self.workspace}."
+        )
+        return self._base_system_prompt + grounding
+
+    def _update_system_grounding(self) -> None:
+        full_prompt = self._build_grounded_prompt()
+        self.system_prompt = full_prompt
+        self.foreground.config.system_template = full_prompt
+        if self.foreground.messages and self.foreground.messages[0].get("role") == "system":
+            self.foreground.messages[0]["content"] = full_prompt
+
     async def step(self, user_text: str | None = None) -> AsyncIterator[AgentEvent]:
         """Executes a foreground conversation turn with Verbix."""
         async with self._turn_lock:
+            self._update_system_grounding()
             self.foreground.model = adapt_provider(self.provider)
             async for event in self.foreground.step_stream(user_text):
                 yield event

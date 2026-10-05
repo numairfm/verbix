@@ -246,6 +246,71 @@ async def test_agent_step_stream_catches_submitted_cleanly():
     assert turn_completes[0].final_text == "Bug fix implemented and verified."
 
 
+@pytest.mark.asyncio
+async def test_agent_step_stream_finish_tool_execution():
+    from verbix.minisweagent.tools.registry import ToolRegistry
+    from verbix.runtime.tools import FinishTool
+
+    mock_env = MagicMock()
+    mock_env.execute.return_value = {"output": "83 passed in 7.2s", "returncode": 0}
+
+    mock_model = MagicMock()
+    turns_yielded = 0
+
+    async def mock_stream(messages, tools=None):
+        nonlocal turns_yielded
+        turns_yielded += 1
+        if turns_yielded == 1:
+            yield ToolCallDelta(
+                index=0,
+                call_id="call_bash_1",
+                name="bash",
+                arguments_delta='{"command": "uv run pytest"}',
+            )
+        elif turns_yielded == 2:
+            yield ToolCallDelta(
+                index=0,
+                call_id="call_finish_1",
+                name="finish",
+                arguments_delta='{"summary": "All 83 tests passed in 7.2 seconds."}',
+            )
+
+    mock_model.query_stream = mock_stream
+
+    registry = ToolRegistry()
+    finish_tool = FinishTool()
+    registry.register(
+        finish_tool.name,
+        {
+            "type": "function",
+            "function": {
+                "name": finish_tool.name,
+                "description": finish_tool.description,
+                "parameters": finish_tool.parameters_schema,
+            },
+        },
+        finish_tool.execute,
+    )
+
+    agent = DefaultAgent(
+        model=mock_model,
+        env=mock_env,
+        tools=registry,
+        tools_list=["bash", "finish"],
+        system_prompt="Execute tests.",
+    )
+    events = [e async for e in agent.step_stream("run tests")]
+
+    assert mock_env.execute.called
+    finished_calls = [e for e in events if isinstance(e, ToolCallFinished)]
+    assert any(e.call_id == "call_finish_1" for e in finished_calls)
+
+    turn_completes = [e for e in events if isinstance(e, TurnComplete)]
+    assert len(turn_completes) == 1
+    assert turn_completes[0].final_text == "All 83 tests passed in 7.2 seconds."
+
+
+
 def test_agent_yaml_configs():
     voice_cfg_dict = get_config_from_spec("voice")
     assert "agent" in voice_cfg_dict

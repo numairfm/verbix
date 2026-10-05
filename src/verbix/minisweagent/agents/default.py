@@ -208,18 +208,6 @@ class DefaultAgent:
                     and f"exit code: {returncode}" not in obs.lower()
                 ):
                     obs = f"[Returncode: {returncode}]\n{obs}".strip()
-
-                # Check if output contains completion token if not already raised by env
-                lines = obs.lstrip().splitlines(keepends=True)
-                if lines and lines[0].strip() == "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" and not is_err:
-                    submission = "".join(lines[1:]).strip()
-                    raise Submitted(
-                        {
-                            "role": "exit",
-                            "content": submission,
-                            "extra": {"exit_status": "Submitted", "submission": submission},
-                        }
-                    )
                 return obs, is_err
             except Submitted:
                 raise
@@ -370,6 +358,26 @@ class DefaultAgent:
                     args = tc["args"]
 
                     yield ToolCallStarted(call_id=call_id, tool_name=name, arguments=args)
+
+                    if name == "finish":
+                        summary = str(args.get("summary", "")).strip() if isinstance(args, dict) else str(args).strip()
+                        obs = f"Task completed: {summary}" if summary else "Task completed."
+                        if self.tools is not None and "finish" in self.tools._handlers:
+                            try:
+                                res = await self.tools.aexecute("finish", args)
+                                obs = res if isinstance(res, str) else str(res)
+                            except Exception:  # noqa: BLE001
+                                pass
+                        tool_msg: dict[str, Any] = {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "name": name,
+                            "content": obs,
+                        }
+                        self.add_messages(tool_msg)
+                        yield ToolCallFinished(call_id=call_id, observation=obs, is_error=False)
+                        yield TurnComplete(final_text=summary)
+                        return
 
                     try:
                         obs, is_err = await self._execute_tool(name, args)

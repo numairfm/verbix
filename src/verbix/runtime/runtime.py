@@ -51,7 +51,7 @@ from verbix.provider.models import (
     ToolFunction,
 )
 from verbix.runtime.buffer import CompletionBuffer
-from verbix.runtime.tools import CancelTool, SpawnTool, StatusTool
+from verbix.runtime.tools import CancelTool, FinishTool, SpawnTool, StatusTool
 from verbix.runtime.worker import WorkerTask
 from verbix.tools.base import ToolContext
 
@@ -536,10 +536,25 @@ class Runtime:
         env = LocalEnvironment(cwd=str(self.workspace), env=env_extra, timeout=timeout)
 
         model_to_use = adapt_provider(self.worker_model or self.provider)
+        worker_tools = ToolRegistry()
+        finish_tool = FinishTool()
+        worker_tools.register(
+            finish_tool.name,
+            {
+                "type": "function",
+                "function": {
+                    "name": finish_tool.name,
+                    "description": finish_tool.description,
+                    "parameters": finish_tool.parameters_schema,
+                },
+            },
+            finish_tool.execute,
+        )
+
         worker_agent = DefaultAgent(
             model=model_to_use,
             env=env,
-            tools=None,
+            tools=worker_tools,
             config=worker_config,
         )
         worker_agent.history = DefaultAgentHistoryProxy(worker_agent)

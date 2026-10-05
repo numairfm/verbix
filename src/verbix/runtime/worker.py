@@ -103,6 +103,13 @@ class WorkerTask:
 
             if not self._result and accumulated_text:
                 self._result = "".join(accumulated_text).strip()
+            if not self._result and msgs:
+                for m in reversed(msgs):
+                    role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+                    content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
+                    if role in ("tool", "observation") and content and content.strip():
+                        self._result = content.strip()
+                        break
             if not self._result:
                 self._result = "Task finished without output."
             self._status = "completed"

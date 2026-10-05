@@ -255,11 +255,18 @@ def test_agent_yaml_configs():
     assert "cancel" in voice_agent.tools
     assert "Verbix" in voice_agent.system_template
 
-    swe_cfg_dict = get_config_from_spec("swe_worker")
-    assert "agent" in swe_cfg_dict
-    swe_agent = AgentConfig(**swe_cfg_dict["agent"])
-    assert "bash" in swe_agent.tools
-    assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in swe_agent.instance_template
+    # Worker config
+    worker_cfg_dict = get_config_from_spec("worker")
+    assert "agent" in worker_cfg_dict
+    worker_agent = AgentConfig(**worker_cfg_dict["agent"])
+    assert "bash" in worker_agent.tools
+    assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in worker_agent.instance_template
+
+    # Legacy swe_worker alias
+    legacy_cfg_dict = get_config_from_spec("swe_worker")
+    assert "agent" in legacy_cfg_dict
+    legacy_agent = AgentConfig(**legacy_cfg_dict["agent"])
+    assert "bash" in legacy_agent.tools
 
 
 @pytest.mark.asyncio

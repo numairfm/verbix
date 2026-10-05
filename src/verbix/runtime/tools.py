@@ -46,7 +46,7 @@ class StatusTool:
 
     name: str = "status"
     description: str = (
-        "Inspects active background tasks. If task_id is omitted, lists all active tasks. "
+        "Inspects background tasks. If task_id is omitted, lists tasks. "
         "Set full=true to inspect complete history."
     )
 
@@ -60,7 +60,7 @@ class StatusTool:
             "properties": {
                 "task_id": {
                     "type": "string",
-                    "description": "Optional ID of the task to inspect. Omit to list active tasks.",
+                    "description": "Optional ID of the task to inspect. Omit to list tasks.",
                 },
                 "full": {
                     "type": "boolean",

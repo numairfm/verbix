@@ -37,3 +37,22 @@ def test_default_worker_prompt_invariants():
     assert "execute" in DEFAULT_WORKER_PROMPT.lower()
     assert "verify" in DEFAULT_WORKER_PROMPT.lower()
     assert "submit" in DEFAULT_WORKER_PROMPT.lower()
+
+
+def test_companion_prompt_invariants():
+    config_dir = Path("src/verbix/minisweagent/config")
+    voice_data = yaml.safe_load((config_dir / "voice.yaml").read_text(encoding="utf-8"))
+    sys_prompt = voice_data["agent"]["system_template"]
+
+    assert "never guess" in sys_prompt.lower() or "do not guess" in sys_prompt.lower()
+    assert "objective" in sys_prompt.lower()
+    assert "spawn" in sys_prompt.lower()
+    assert "persona" in sys_prompt.lower() or "spoken" in sys_prompt.lower()
+
+
+def test_default_verbix_prompt_invariants():
+    from verbix.runtime.runtime import DEFAULT_VERBIX_PROMPT
+
+    assert "never guess" in DEFAULT_VERBIX_PROMPT.lower() or "do not guess" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "objective" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "spawn" in DEFAULT_VERBIX_PROMPT.lower()

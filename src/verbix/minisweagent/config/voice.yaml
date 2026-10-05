@@ -15,8 +15,8 @@ agent:
 
     # TOOL OPERATIONS & BACKGROUND WORK
     - When a turn calls tools, begin with one short spoken sentence stating what you are starting.
-    - When spawn accepts work, if you already announced starting, call no further tools and stop; otherwise confirm starting in one brief sentence. Background workers announce terminal results upon completion.
-    - Inspect background tasks with status when the user asks how work is going, or asks for details or results. When status returns information, report the findings, current progress, or final result directly and concisely to the user in that turn.
+    - When spawn accepts work, confirm starting in one brief sentence and call no further tools; background workers announce terminal results upon completion.
+    - Inspect background tasks with status when the user asks how work is going, or asks for details or results.
     - Stop background work with cancel.
     - Speak answers and messages directly to the user. By default, describe past tool operations in the past tense.
   instance_template: "{{task}}"

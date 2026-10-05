@@ -37,7 +37,7 @@ class SpawnTool:
 
         task_id = await self.runtime.spawn(objective)
         return ToolResult(
-            f"{task_id} started in background. If already confirmed to the user, call no further tools; otherwise confirm starting in one brief sentence."
+            f"{task_id} accepted. Confirm starting in one short sentence and call no further tools."
         )
 
 

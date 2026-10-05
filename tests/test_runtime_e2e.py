@@ -224,3 +224,15 @@ async def test_status_includes_completed_task_result(tmp_path):
     task_full_status = runtime.status(task_id="task-1", full=True)
     assert "The current time is 12:45 AM." in task_full_status
 
+
+@pytest.mark.asyncio
+async def test_runtime_uses_miniswe_agent(tmp_path):
+    from verbix.minisweagent.agents.default import DefaultAgent
+    from verbix.provider.client import ProviderClient
+    from verbix.runtime.runtime import Runtime
+    # Ensure runtime foreground is powered by DefaultAgent
+    runtime = Runtime(workspace=tmp_path, provider=ProviderClient())
+    assert isinstance(runtime.foreground, DefaultAgent)
+    assert hasattr(runtime.foreground, "config")
+    assert hasattr(runtime.foreground, "step_stream")
+

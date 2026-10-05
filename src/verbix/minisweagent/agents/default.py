@@ -99,6 +99,7 @@ class DefaultAgent:
 
 
         self.messages: list[dict[str, Any]] = []
+        self.history: Any = None
         self.model = model
         self.env = env
         self.tools = registry

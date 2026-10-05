@@ -30,8 +30,8 @@ class ProviderClient:
 
     def __init__(
         self,
-        base_url: str,
-        model: str,
+        base_url: str = "https://openrouter.ai/api/v1",
+        model: str = "google/gemini-3.5-flash-lite",
         api_key: str | None = None,
         timeout: float = 60.0,
         max_tokens: int | None = 2048,

@@ -13,7 +13,7 @@ from verbix.minisweagent.utils.serialize import recursive_merge
 class LocalEnvironmentConfig(BaseModel):
     cwd: str = ""
     env: dict[str, str] = {}
-    timeout: int = 30
+    timeout: int = 600
 
 
 class LocalEnvironment:

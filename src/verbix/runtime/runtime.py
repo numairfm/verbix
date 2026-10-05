@@ -529,7 +529,8 @@ class Runtime:
 
         env_cfg_dict = raw_worker_cfg.get("environment", {})
         env_extra = env_cfg_dict.get("env", {})
-        env = LocalEnvironment(cwd=str(self.workspace), env=env_extra)
+        timeout = int(env_cfg_dict.get("timeout", 600))
+        env = LocalEnvironment(cwd=str(self.workspace), env=env_extra, timeout=timeout)
 
         model_to_use = adapt_provider(self.worker_model or self.provider)
         worker_agent = DefaultAgent(

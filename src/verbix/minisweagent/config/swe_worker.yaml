@@ -54,6 +54,7 @@ agent:
   step_limit: 0
   cost_limit: 3.0
 environment:
+  timeout: 600
   env:
     PAGER: cat
     MANPAGER: cat

@@ -18,7 +18,8 @@ def test_worker_prompt_contains_zero_examples_and_has_invariants():
     config_dir = Path("src/verbix/minisweagent/config")
     worker_yaml = config_dir / "worker.yaml"
     assert worker_yaml.is_file()
-    worker_data = yaml.safe_load(worker_yaml.read_text(encoding="utf-8"))
+    raw_text = worker_yaml.read_text(encoding="utf-8")
+    worker_data = yaml.safe_load(raw_text)
     prompt = worker_data["agent"]["instance_template"] + " " + worker_data["agent"]["system_template"]
 
     # Assert zero command examples
@@ -26,19 +27,29 @@ def test_worker_prompt_contains_zero_examples_and_has_invariants():
     for ex in forbidden_examples:
         assert ex not in prompt, f"Forbidden example found in worker prompt: {ex}"
 
-    # Assert general execution invariants
+    # Assert tools include bash and finish
+    tools = worker_data["agent"].get("tools", [])
+    assert "bash" in tools, "worker must have bash tool"
+    assert "finish" in tools, "worker must have finish tool"
+
+    # Assert execution invariants
     assert "Discover" in prompt
     assert "Execute" in prompt
     assert "Verify" in prompt
-    assert "Submit" in prompt
-    assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in prompt
+    assert "finish" in prompt
+
+    # Assert zero benchmark submission token references anywhere in worker.yaml
+    assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in raw_text, (
+        "worker.yaml must not contain legacy benchmark token COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+    )
 
 
 def test_default_worker_prompt_invariants():
     assert "Discover" in DEFAULT_WORKER_PROMPT
     assert "execute" in DEFAULT_WORKER_PROMPT.lower()
     assert "verify" in DEFAULT_WORKER_PROMPT.lower()
-    assert "submit" in DEFAULT_WORKER_PROMPT.lower()
+    assert "finish" in DEFAULT_WORKER_PROMPT.lower()
+    assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in DEFAULT_WORKER_PROMPT
 
 
 def test_companion_prompt_invariants():

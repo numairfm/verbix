@@ -7,23 +7,15 @@ agent:
     Please execute this task: {{task}}
 
     ## Execution Invariants:
-    1. Discover: Inspect the relevant environment, system state, files, or available tools to determine how to accomplish the objective.
-    2. Execute: Carry out the required actions directly using your available tools. Do not stop at planning or hypothetical answers—perform the actual work.
-    3. Verify: Check the outcome of your actions (e.g., process status, outputs, exit codes, or state changes) to confirm the objective was met.
-    4. Submit: When the task is complete, issue the submission command with a concise factual summary of the actions taken and final results:
-       ```bash
-       echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT
-       echo "<clear, concise summary of actions taken and final results>"
-       ```
-       You may also output:
-       ```bash
-       echo "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT: <clear, concise summary of actions taken and final results>"
-       ```
-       Do not stop working until you have issued this submission command.
+    1. Discover: Inspect the relevant environment, system state, files, or available tools using the 'bash' tool to determine how to accomplish the objective.
+    2. Execute: Carry out the required actions directly using the 'bash' tool. Do not stop at planning or hypothetical answers—perform the actual work.
+    3. Verify: Check the outcome of your actions (e.g., process status, outputs, exit codes, or state changes) using 'bash' to confirm the objective was met.
+    4. Complete: When the task is complete and verified, call the 'finish' tool with an information-dense factual summary of actions taken, exact numbers/metrics, exit codes, and verification evidence.
+       Never call 'finish' before executing and verifying the work.
 
     ## Command Execution Rules:
-    - Every action is executed via the 'bash' tool.
-    - Each response MUST include at least one bash tool call until you finish and submit.
+    - Use the 'bash' tool for inspection, execution, and verification.
+    - When finished and verified, call the 'finish' tool with your debrief.
     - Do not output conversational placeholders or ask if you should proceed. You are autonomous: make decisions and execute.
 
     <system_information>
@@ -31,6 +23,7 @@ agent:
     </system_information>
   tools:
     - bash
+    - finish
   step_limit: 0
   cost_limit: 3.0
 environment:
@@ -61,7 +54,7 @@ model:
     {%- endif -%}
   format_error_template: |
     {% if finish_reason is defined and (finish_reason == "length" or (finish_reason == "tool_calls" and not has_tool_calls)) -%}
-    Your previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a tool call, so it was cut off. Respond more concisely and finish with exactly one bash tool call. If you need to think more, do so briefly.
+    Your previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a tool call, so it was cut off. Respond more concisely and finish with a valid tool call. If you need to think more, do so briefly.
     {%- else -%}
     Tool call error:
 
@@ -71,16 +64,13 @@ model:
 
     Here is general guidance on how to submit correct toolcalls:
 
-    Every response needs to use the 'bash' tool at least once to execute commands.
-
-    Call the bash tool with your command as the argument:
+    Use the 'bash' tool to execute commands:
     - Tool: bash
     - Arguments: {"command": "your_command_here"}
 
-    If you want to end the task, please issue the following command:
-    `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`
-    followed by:
-    `echo "<summary of actions taken and final results>"`
+    When your task is complete and verified, call the 'finish' tool:
+    - Tool: finish
+    - Arguments: {"summary": "<information-dense factual debrief of actions, metrics, and verification results>"}
     {%- endif %}
   model_kwargs:
     drop_params: true

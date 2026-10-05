@@ -24,7 +24,11 @@ class SpawnTool:
             "properties": {
                 "objective": {
                     "type": "string",
-                    "description": "The complete task for the worker to execute, preserving all clauses and requested phrasing.",
+                    "description": (
+                        "The high-level goal and verification criteria for the background worker to accomplish. "
+                        "State what needs to be done. Never guess or insert specific shell commands, package managers, "
+                        "or file paths unless explicitly provided by the user."
+                    ),
                 },
             },
             "required": ["objective"],

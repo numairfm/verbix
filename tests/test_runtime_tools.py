@@ -36,6 +36,14 @@ async def test_spawn_tool_execution(dummy_runtime):
     dummy_runtime.spawn.assert_awaited_once_with("build binary")
 
 
+def test_spawn_tool_schema_enforces_intent_invariant(dummy_runtime):
+    tool = SpawnTool(dummy_runtime)
+    schema = tool.parameters_schema
+    desc = schema["properties"]["objective"]["description"]
+    assert "high-level goal" in desc.lower() or "intent" in desc.lower()
+    assert "never guess" in desc.lower() or "do not guess" in desc.lower()
+
+
 @pytest.mark.asyncio
 async def test_status_tool_execution(dummy_runtime):
     tool = StatusTool(dummy_runtime)

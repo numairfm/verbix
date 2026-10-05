@@ -372,4 +372,43 @@ async def test_runtime_announcer_clean_history(tmp_path):
     assert any(isinstance(m, dict) and m.get("role") == "assistant" and "Task finished: all 42 items processed." in str(m.get("content", "")) for m in msgs)
 
 
+@pytest.mark.asyncio
+async def test_runtime_announcer_multiple_flushes_never_exceeds_limits(tmp_path):
+    provider = MagicMock()
+    call_idx = 0
+
+    async def fake_stream(messages, tools=None, reasoning_effort=None):
+        nonlocal call_idx
+        call_idx += 1
+        yield ProviderTextDelta(text=f"Announcement number {call_idx}.")
+        yield ProviderFinish(reason="stop")
+
+    provider.stream = fake_stream
+
+    emitted_events = []
+    class FakeOutput:
+        async def emit(self, event):
+            emitted_events.append(event)
+
+    output = FakeOutput()
+    runtime = Runtime(workspace=tmp_path, provider=provider)
+    runtime.wake_output = output
+
+    # Flush 1
+    await runtime._on_buffer_flush([("task-1", "Result 1")])
+    # Flush 2
+    await runtime._on_buffer_flush([("task-2", "Result 2")])
+    # Flush 3
+    await runtime._on_buffer_flush([("task-3", "Result 3")])
+
+    from verbix.core.events import TurnComplete
+    turn_completes = [e for e in emitted_events if isinstance(e, TurnComplete)]
+    assert len(turn_completes) == 3
+    assert turn_completes[0].final_text == "Announcement number 1."
+    assert turn_completes[1].final_text == "Announcement number 2."
+    assert turn_completes[2].final_text == "Announcement number 3."
+    assert not any(e.final_text == "LimitsExceeded" for e in turn_completes)
+
+
+
 

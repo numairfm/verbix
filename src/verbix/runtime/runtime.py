@@ -634,8 +634,18 @@ class Runtime:
             try:
                 self._update_announcer_grounding()
                 self.announcer.messages = []
+                self.announcer.n_calls = 0
+                self.announcer.cost = 0.0
                 self.announcer.model = adapt_provider(self.provider)
                 async for event in self.announcer.step_stream(wake_prompt):
+                    if isinstance(event, CoreTurnComplete) and event.final_text in (
+                        "LimitsExceeded",
+                        "TimeExceeded",
+                    ):
+                        logger.warning(
+                            "Announcer step aborted with %s", event.final_text
+                        )
+                        continue
                     if self.wake_output and hasattr(self.wake_output, "emit"):
                         res = self.wake_output.emit(event)
                         if asyncio.iscoroutine(res):

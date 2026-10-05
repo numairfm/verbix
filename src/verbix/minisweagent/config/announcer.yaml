@@ -10,7 +10,7 @@ agent:
     - Speak answers and messages directly to the user. By default, describe past tool operations in the past tense.
   instance_template: "{{task}}"
   tools: []
-  step_limit: 1
+  step_limit: 0
   cost_limit: 3.0
 model:
   model_kwargs:

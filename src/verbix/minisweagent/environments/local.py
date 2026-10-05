@@ -6,7 +6,6 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from verbix.minisweagent.exceptions import Submitted
 from verbix.minisweagent.utils.serialize import recursive_merge
 
 
@@ -24,63 +23,21 @@ class LocalEnvironment:
     def execute(self, action: dict, cwd: str = "", *, timeout: int | None = None) -> dict[str, Any]:
         """Execute a command in the local environment and return the result as a dict."""
         command = action.get("command", "")
-        self._check_command_finished(command)
         cwd = cwd or self.config.cwd or os.getcwd()
         try:
             result = _run(command, cwd, os.environ | self.config.env, timeout or self.config.timeout)
-            output = {"output": result.stdout, "returncode": result.returncode, "exception_info": ""}
+            return {"output": result.stdout, "returncode": result.returncode, "exception_info": ""}
         except Exception as e:  # noqa: BLE001
             raw_output = getattr(e, "output", None)
             raw_output = (
                 raw_output.decode("utf-8", errors="replace") if isinstance(raw_output, bytes) else (raw_output or "")
             )
-            output = {
+            return {
                 "output": raw_output,
                 "returncode": -1,
                 "exception_info": f"An error occurred while executing the command: {e}",
                 "extra": {"exception_type": type(e).__name__, "exception": str(e)},
             }
-        self._check_finished(output)
-        return output
-
-    def _check_command_finished(self, command: str) -> None:
-        """Raises Submitted if the command itself directly signals completion with summary text."""
-        lines = command.strip().splitlines(keepends=True)
-        if not lines:
-            return
-        marker = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
-        first_line = lines[0].strip()
-        if marker in first_line:
-            rest = first_line.split(marker, 1)[1].strip(" '\"").lstrip(": \t")
-            body = "".join(lines[1:]).strip()
-            submission = f"{rest}\n{body}".strip() if rest else body
-            raise Submitted(
-                {
-                    "role": "exit",
-                    "content": submission,
-                    "extra": {"exit_status": "Submitted", "submission": submission},
-                }
-            )
-
-    def _check_finished(self, output: dict) -> None:
-        """Raises Submitted if the output indicates task completion."""
-        raw_output = output.get("output", "").lstrip()
-        lines = raw_output.splitlines(keepends=True)
-        if not lines:
-            return
-        marker = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
-        first_line = lines[0].strip()
-        if marker in first_line and output.get("returncode", 0) == 0:
-            rest = first_line.split(marker, 1)[1].strip().lstrip(": \t")
-            body = "".join(lines[1:]).strip()
-            submission = f"{rest}\n{body}".strip() if rest else body
-            raise Submitted(
-                {
-                    "role": "exit",
-                    "content": submission,
-                    "extra": {"exit_status": "Submitted", "submission": submission},
-                }
-            )
 
     def get_template_vars(self, **kwargs) -> dict[str, Any]:
         return recursive_merge(self.config.model_dump(), platform.uname()._asdict(), dict(os.environ), kwargs)

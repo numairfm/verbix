@@ -10,17 +10,19 @@ def test_local_environment_echo(tmp_path):
     assert res["returncode"] == 0
     assert "hello world" in res["output"]
 
-def test_local_environment_submission(tmp_path):
+def test_local_environment_submission_token_is_not_intercepted(tmp_path):
     env = LocalEnvironment(cwd=str(tmp_path), timeout=5)
-    with pytest.raises(Submitted) as exc_info:
-        env.execute({"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\nDone!"})
-    assert "Done!" in exc_info.value.messages[0]["content"]
+    # The command should execute normally without raising Submitted
+    res = env.execute({"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\necho 'Done!'"})
+    assert res["returncode"] == 0
+    assert "Done!" in res["output"]
 
 
-def test_local_environment_submission_inline(tmp_path):
+
+def test_local_environment_submission_inline_is_not_intercepted(tmp_path):
     env = LocalEnvironment(cwd=str(tmp_path), timeout=5)
-    with pytest.raises(Submitted) as exc_info:
-        env.execute({"command": "echo 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT: All 72 tests passed'"})
-    assert "All 72 tests passed" in exc_info.value.messages[0]["content"]
-    assert exc_info.value.messages[0].get("extra", {}).get("submission") == "All 72 tests passed"
+    res = env.execute({"command": "echo 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT: All 72 tests passed'"})
+    assert res["returncode"] == 0
+    assert "All 72 tests passed" in res["output"]
+
 

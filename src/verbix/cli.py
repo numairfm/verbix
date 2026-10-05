@@ -70,9 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         default=os.environ.get(
             "VERBIX_MODEL",
-            os.environ.get("OPENROUTER_MODEL", "google/gemini-3.5-flash-lite"),
+            os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash"),
         ),
-        help="Model identifier (default: google/gemini-3.5-flash-lite)",
+        help="Model identifier (default: google/gemini-2.5-flash)",
     )
     parser.add_argument(
         "--base-url",
@@ -145,6 +145,45 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_litellm_model(
+    model: str,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    max_tokens: int | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Resolves model name and kwargs for LiteLLM multi-provider dispatch."""
+    model_kwargs: dict[str, Any] = {}
+    if max_tokens:
+        model_kwargs["max_tokens"] = max_tokens
+    if api_key:
+        model_kwargs["api_key"] = api_key
+
+    model_name = model.strip()
+
+    # Gracefully fix legacy typo if present
+    if "gemini-3.5-flash-lite" in model_name:
+        model_name = model_name.replace("gemini-3.5-flash-lite", "gemini-2.5-flash")
+
+    # If base_url points to OpenRouter, or OpenRouter key is present:
+    is_openrouter = (base_url and "openrouter.ai" in base_url) or (
+        api_key and api_key.startswith("sk-or-")
+    )
+    if is_openrouter:
+        if not model_name.startswith("openrouter/"):
+            model_name = f"openrouter/{model_name}"
+        if base_url:
+            model_kwargs["api_base"] = base_url
+    elif base_url:
+        model_kwargs["api_base"] = base_url
+        if not any(
+            model_name.startswith(p + "/")
+            for p in ["openai", "anthropic", "gemini", "ollama", "openrouter"]
+        ):
+            model_kwargs["custom_llm_provider"] = "openai"
+
+    return model_name, model_kwargs
+
+
 def build_runtime(args: argparse.Namespace) -> Runtime:
     """Builds and initializes the Runtime from parsed command-line arguments."""
     api_key = (
@@ -162,26 +201,30 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
     if not workspace.is_dir():
         raise ValueError(f"Workspace directory '{workspace}' does not exist.")
 
-    model_kwargs: dict[str, Any] = {}
-    if getattr(args, "max_tokens", None):
-        model_kwargs["max_tokens"] = args.max_tokens
-    if getattr(args, "base_url", None):
-        model_kwargs["api_base"] = args.base_url
-    if api_key:
-        model_kwargs["api_key"] = api_key
-
-    receptionist_model_name = getattr(args, "receptionist_model", None) or args.model
+    receptionist_model_raw = getattr(args, "receptionist_model", None) or args.model
+    fg_model_name, fg_kwargs = resolve_litellm_model(
+        model=receptionist_model_raw,
+        base_url=getattr(args, "base_url", None),
+        api_key=api_key,
+        max_tokens=getattr(args, "max_tokens", None),
+    )
     fg_config = LitellmModelConfig(
-        model_name=receptionist_model_name,
-        model_kwargs=model_kwargs,
+        model_name=fg_model_name,
+        model_kwargs=fg_kwargs,
     )
     foreground_model = LitellmModel(config_class=lambda **kw: fg_config)
 
     worker_model = None
     if getattr(args, "worker_model", None):
+        worker_model_name, worker_kwargs = resolve_litellm_model(
+            model=args.worker_model,
+            base_url=getattr(args, "base_url", None),
+            api_key=api_key,
+            max_tokens=getattr(args, "max_tokens", None),
+        )
         worker_config = LitellmModelConfig(
-            model_name=args.worker_model,
-            model_kwargs=model_kwargs,
+            model_name=worker_model_name,
+            model_kwargs=worker_kwargs,
         )
         worker_model = LitellmModel(config_class=lambda **kw: worker_config)
 

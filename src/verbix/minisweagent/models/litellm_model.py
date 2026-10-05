@@ -11,6 +11,9 @@ from typing import Any, ClassVar, Literal, cast
 import litellm
 from pydantic import BaseModel
 
+litellm.suppress_debug_info = True
+logging.getLogger("LiteLLM").setLevel(logging.ERROR)
+
 from verbix.core.events import (
     AgentEvent,
     TextDelta,

@@ -160,10 +160,6 @@ def resolve_litellm_model(
 
     model_name = model.strip()
 
-    # Gracefully fix legacy typo if present
-    if "gemini-3.5-flash-lite" in model_name:
-        model_name = model_name.replace("gemini-3.5-flash-lite", "gemini-2.5-flash")
-
     # If base_url points to OpenRouter, or OpenRouter key is present:
     is_openrouter = (base_url and "openrouter.ai" in base_url) or (
         api_key and api_key.startswith("sk-or-")

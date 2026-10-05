@@ -43,30 +43,37 @@ class LocalEnvironment:
         self._check_finished(output)
         return output
 
-    def _check_command_finished(self, command: str):
+    def _check_command_finished(self, command: str) -> None:
         """Raises Submitted if the command itself directly signals completion with summary text."""
         lines = command.strip().splitlines(keepends=True)
-        if lines:
-            first_line = lines[0].strip()
-            if first_line in (
-                "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT",
-                "echo 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT'",
-                'echo "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"',
-            ):
-                submission = "".join(lines[1:]).strip()
-                raise Submitted(
-                    {
-                        "role": "exit",
-                        "content": submission,
-                        "extra": {"exit_status": "Submitted", "submission": submission},
-                    }
-                )
+        if not lines:
+            return
+        marker = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+        first_line = lines[0].strip()
+        if marker in first_line:
+            rest = first_line.split(marker, 1)[1].strip(" '\"").lstrip(": \t")
+            body = "".join(lines[1:]).strip()
+            submission = f"{rest}\n{body}".strip() if rest else body
+            raise Submitted(
+                {
+                    "role": "exit",
+                    "content": submission,
+                    "extra": {"exit_status": "Submitted", "submission": submission},
+                }
+            )
 
-    def _check_finished(self, output: dict):
+    def _check_finished(self, output: dict) -> None:
         """Raises Submitted if the output indicates task completion."""
-        lines = output.get("output", "").lstrip().splitlines(keepends=True)
-        if lines and lines[0].strip() == "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" and output["returncode"] == 0:
-            submission = "".join(lines[1:])
+        raw_output = output.get("output", "").lstrip()
+        lines = raw_output.splitlines(keepends=True)
+        if not lines:
+            return
+        marker = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
+        first_line = lines[0].strip()
+        if marker in first_line and output.get("returncode", 0) == 0:
+            rest = first_line.split(marker, 1)[1].strip().lstrip(": \t")
+            body = "".join(lines[1:]).strip()
+            submission = f"{rest}\n{body}".strip() if rest else body
             raise Submitted(
                 {
                     "role": "exit",

@@ -184,6 +184,8 @@ class WorkerTask:
                 role = _get_field(m, "role", "")
                 content = _get_field(m, "content", "")
                 tool_calls = _get_field(m, "tool_calls", None)
+                if role in ("system", "user"):
+                    continue
                 if tool_calls:
                     calls_list: list[str] = []
                     for tc in tool_calls:
@@ -196,7 +198,7 @@ class WorkerTask:
                     obs = content[:200] + ("..." if len(content) > 200 else "")
                     lines.append(f"- Tool result: {obs}")
                 elif content:
-                    lines.append(f"- {role.capitalize()}: {content}")
+                    lines.append(f"- Assistant: {content}")
             return "\n".join(lines)
 
         # Concise: extract last 2-3 action lines

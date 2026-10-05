@@ -558,4 +558,56 @@ async def test_bash_observation_includes_returncode_on_failure():
     assert "[Returncode: 1]" in finished[0].observation
 
 
+@pytest.mark.asyncio
+async def test_step_stream_suppresses_pre_tool_text_in_dual_emission():
+    tools = ToolRegistry()
+    tools.register(
+        "spawn",
+        {"type": "function", "function": {"name": "spawn"}},
+        lambda args: f"task-{args.get('task_name')}-started",
+    )
+
+    mock_model = MagicMock()
+    call_count = 0
+
+    async def mock_stream(messages, tools=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # Dual-emission in step 1: emits chatty pre-tool text AND tool call
+            yield TextDelta(text="Me run test now.")
+            yield ToolCallDelta(
+                index=0,
+                call_id="call_spawn_1",
+                name="spawn",
+                arguments_delta='{"task_name": "test-run"}',
+            )
+        else:
+            # Post-tool synthesis in step 2: single spoken utterance
+            yield TextDelta(text="Test worker started in background.")
+            yield TurnComplete(final_text="Test worker started in background.")
+
+    mock_model.query_stream = mock_stream
+    agent = DefaultAgent(
+        model=mock_model,
+        tools=tools,
+        tools_list=["spawn"],
+        system_prompt="You are Verbix.",
+    )
+
+    events = [e async for e in agent.step_stream("run tests")]
+
+    text_deltas = [e.text for e in events if isinstance(e, TextDelta)]
+    # Pre-tool text MUST NOT be yielded to the user
+    assert "Me run test now." not in text_deltas
+    # Post-tool text MUST be yielded
+    assert "Test worker started in background." in text_deltas
+
+    # Verify tool was still executed properly
+    finished = [e for e in events if isinstance(e, ToolCallFinished)]
+    assert len(finished) == 1
+    assert finished[0].observation == "task-test-run-started"
+
+
+
 

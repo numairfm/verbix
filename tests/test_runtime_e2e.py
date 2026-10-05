@@ -179,9 +179,10 @@ async def test_dual_emission_spoken_ack_and_tool_call(tmp_path):
     async for ev in runtime.step("Calculate primes in background"):
         events.append(ev)
 
-    # Verify speech was emitted
+    # Verify pre-tool text is suppressed and only post-tool speech was emitted
     spoken_deltas = [e.text for e in events if isinstance(e, TextDelta)]
-    assert "On it, calculating primes now." in spoken_deltas
+    assert "On it, calculating primes now." not in spoken_deltas
+    assert "Background worker is on the job." in spoken_deltas
 
     # Verify spawn tool was executed and task was created
     assert "task-1" in runtime.tasks

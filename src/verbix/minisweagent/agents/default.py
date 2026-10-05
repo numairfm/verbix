@@ -275,15 +275,32 @@ class DefaultAgent:
             accumulated_text: list[str] = []
             accumulated_tool_calls: dict[int, dict[str, Any]] = {}
             turn_complete_event: TurnComplete | None = None
+            pending_text_events: list[TextDelta] = []
+            pending_chars = 0
+            has_tool_calls = False
+            flushed_pending = False
 
             stream = self.model.query_stream(self.messages, tools=tool_defs)
             async for event in stream:
                 if isinstance(event, TextDelta):
                     accumulated_text.append(event.text)
-                    yield event
+                    if has_tool_calls:
+                        continue
+                    if flushed_pending:
+                        yield event
+                    else:
+                        pending_text_events.append(event)
+                        pending_chars += len(event.text)
+                        if pending_chars >= 100:
+                            for pe in pending_text_events:
+                                yield pe
+                            pending_text_events.clear()
+                            flushed_pending = True
                 elif isinstance(event, ThoughtDelta):
                     yield event
                 elif isinstance(event, ToolCallDelta):
+                    has_tool_calls = True
+                    pending_text_events.clear()
                     idx = event.index
                     if idx not in accumulated_tool_calls:
                         accumulated_tool_calls[idx] = {
@@ -299,6 +316,8 @@ class DefaultAgent:
                     if event.arguments_delta:
                         tc["arguments"] += event.arguments_delta
                 elif isinstance(event, ToolCallStarted):
+                    has_tool_calls = True
+                    pending_text_events.clear()
                     idx = len(accumulated_tool_calls)
                     accumulated_tool_calls[idx] = {
                         "call_id": event.call_id,
@@ -310,6 +329,12 @@ class DefaultAgent:
                     turn_complete_event = event
                 else:
                     yield event
+
+            # If no tool calls occurred, flush any remaining buffered text deltas
+            if not has_tool_calls and pending_text_events:
+                for pe in pending_text_events:
+                    yield pe
+                pending_text_events.clear()
 
             # If tool calls were accumulated, execute them
             if accumulated_tool_calls:

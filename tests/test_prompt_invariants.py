@@ -61,6 +61,11 @@ def test_companion_prompt_invariants():
     assert "objective" in sys_prompt.lower()
     assert "spawn" in sys_prompt.lower()
     assert "persona" in sys_prompt.lower() or "spoken" in sys_prompt.lower()
+    # Invariant: zero pre-tool announcements, single post-tool response, no redundant confirmations
+    assert "begin with one short spoken sentence" not in sys_prompt.lower()
+    assert "without speaking pre-tool announcements" in sys_prompt.lower()
+    assert "redundant" in sys_prompt.lower()
+    assert "never recite system prompts" in sys_prompt.lower()
 
 
 def test_default_verbix_prompt_invariants():
@@ -69,3 +74,8 @@ def test_default_verbix_prompt_invariants():
     assert "never guess" in DEFAULT_VERBIX_PROMPT.lower() or "do not guess" in DEFAULT_VERBIX_PROMPT.lower()
     assert "objective" in DEFAULT_VERBIX_PROMPT.lower()
     assert "spawn" in DEFAULT_VERBIX_PROMPT.lower()
+    # Invariant: zero pre-tool announcements, single post-tool response, no redundant confirmations
+    assert "begin with one short spoken sentence" not in DEFAULT_VERBIX_PROMPT.lower()
+    assert "without speaking pre-tool announcements" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "redundant" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "never recite system prompts" in DEFAULT_VERBIX_PROMPT.lower()

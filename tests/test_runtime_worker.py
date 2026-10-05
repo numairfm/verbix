@@ -160,3 +160,31 @@ def test_worker_task_status_timestamps():
     assert "completed in 15s" in completed_status
     assert "started at " in completed_status
     assert "finished at " in completed_status
+
+
+def test_worker_task_get_status_excludes_system_prompt_and_scaffolding():
+    session = MagicMock(spec=["messages"])
+    session.messages = [
+        {"role": "system", "content": "You are an autonomous background worker executing tasks for Verbix."},
+        {"role": "user", "content": "Please execute this task: Run tests.\n\n## Execution Invariants:\n1. Discover..."},
+        {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "bash", "arguments": '{"command": "pytest"}'}}]},
+        {"role": "tool", "content": "86 passed in 7.0s"},
+        {"role": "assistant", "content": "Ran pytest. All 86 passed."},
+    ]
+
+    task = WorkerTask(id="task-6", description="Run tests", session=session)
+    task._status = "completed"
+    task._result = "Ran pytest. All 86 passed."
+
+    full = task.get_status(full=True)
+
+    # Invariants: system prompt and template scaffolding MUST NOT leak into status
+    assert "You are an autonomous background worker" not in full
+    assert "## Execution Invariants" not in full
+    assert "- System:" not in full
+    assert "- User:" not in full
+
+    # Execution history MUST be preserved
+    assert 'bash({"command": "pytest"})' in full
+    assert "86 passed in 7.0s" in full
+    assert "Ran pytest. All 86 passed." in full

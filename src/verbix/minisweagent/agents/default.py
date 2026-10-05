@@ -366,7 +366,7 @@ class DefaultAgent:
                             try:
                                 res = await self.tools.aexecute("finish", args)
                                 obs = res if isinstance(res, str) else str(res)
-                            except Exception:  # noqa: BLE001
+                            except Exception:  # noqa: BLE001, S110
                                 pass
                         tool_msg: dict[str, Any] = {
                             "role": "tool",

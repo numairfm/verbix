@@ -1,7 +1,4 @@
-import pytest
-
 from verbix.minisweagent.environments.local import LocalEnvironment
-from verbix.minisweagent.exceptions import Submitted
 
 
 def test_local_environment_echo(tmp_path):

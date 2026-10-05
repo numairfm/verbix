@@ -88,6 +88,7 @@ class WorkerTask:
                         last = res[-1]
                         if isinstance(last, dict):
                             self._result = last.get("content")
+            msgs: list[Any] | None = None
             if not self._result:
                 msgs = getattr(session, "messages", None)
                 if not msgs and hasattr(session, "history"):

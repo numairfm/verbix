@@ -22,3 +22,6 @@ scratch/
 # Local editor and IDE config
 .commandcode/
 
+# Git worktrees (project-local isolation)
+.worktrees/
+

@@ -85,6 +85,7 @@ class VoicePipeline:
         """Stops recording, plays instant audible cue, finalizes STT, and starts receptionist turn."""
         self.runtime.user_active = False
         audio_bytes = await self.capture.stop_recording()
+        self.capture.on_chunk = None
 
         # Instant audible cue on capture stop
         asyncio.create_task(self._speech_output.play_cue())

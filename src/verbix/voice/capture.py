@@ -32,6 +32,11 @@ class PTTCapture:
         return None
 
     @property
+    def frame_bytes(self) -> int:
+        """Bytes per 20ms frame of S16 mono capture."""
+        return self.sample_rate * self.channels * 2 // 50
+
+    @property
     def is_recording(self) -> bool:
         return self._current_proc is not None and self._current_proc.returncode is None
 
@@ -78,7 +83,7 @@ class PTTCapture:
             buf = bytearray()
             assert proc.stdout is not None
             while True:
-                chunk = await proc.stdout.read(4096)
+                chunk = await proc.stdout.read(self.frame_bytes)
                 if not chunk:
                     break
                 buf.extend(chunk)

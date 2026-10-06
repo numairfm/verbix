@@ -408,6 +408,7 @@ class Runtime:
 
         agent_cfg_dict["system_template"] = self.system_prompt
         agent_cfg_dict["system_prompt"] = self.system_prompt
+        agent_cfg_dict["turn_scoped_limits"] = True
         fg_config = AgentConfig(**agent_cfg_dict)
 
         self.foreground = DefaultAgent(
@@ -470,16 +471,15 @@ class Runtime:
                 pass
 
     def _build_grounded_prompt(self, base_prompt: str | None = None) -> str:
+        """Build the static, cache-stable system prompt (no volatile clock content)."""
         prompt_to_use = (
             base_prompt if base_prompt is not None else self._base_system_prompt
         )
         if "Host operating system:" in prompt_to_use:
             base = prompt_to_use
         else:
-            now_str = datetime.now().astimezone().strftime("%A, %B %d, %Y, %I:%M %p")
             grounding = (
-                f"\n\n# ENVIRONMENT & GROUNDING"
-                f"\n- Current local date and time: {now_str}."
+                "\n\n# ENVIRONMENT & GROUNDING"
                 f"\n- Host operating system: {platform.system()}. Shell: bash."
                 f"\n- The working directory is {self.workspace}."
             )
@@ -489,24 +489,19 @@ class Runtime:
             base = base.rstrip() + f"\n\n# CUSTOM USER INSTRUCTIONS\n{self._custom_prompt}"
         return base
 
-    def _update_system_grounding(self) -> None:
-        full_prompt = self._build_grounded_prompt()
-        self.system_prompt = full_prompt
-        self.foreground.config.system_template = full_prompt
-        if self.foreground.messages and self.foreground.messages[0].get("role") == "system":
-            self.foreground.messages[0]["content"] = full_prompt
-
-    def _update_announcer_grounding(self) -> None:
-        full_prompt = self._build_grounded_prompt(self._base_announcer_prompt)
-        self.announcer.config.system_template = full_prompt
-        if self.announcer.messages and self.announcer.messages[0].get("role") == "system":
-            self.announcer.messages[0]["content"] = full_prompt
+    def _request_grounding(self) -> str:
+        """Volatile per-request grounding, prepended to the user message only."""
+        now_str = datetime.now().astimezone().strftime("%A, %B %d, %Y, %I:%M %p")
+        return f"[Current local date and time: {now_str}.]"
 
     async def step(self, user_text: str | None = None) -> AsyncIterator[AgentEvent]:
         """Executes a foreground conversation turn with Verbix."""
         async with self._turn_lock:
-            self._update_system_grounding()
+            # System prompt stays static (provider cache prefix); volatile
+            # grounding rides on the user message at request time only.
             self.foreground.model = adapt_provider(self.provider)
+            if user_text is not None:
+                user_text = f"{self._request_grounding()}\n{user_text}"
             async for event in self.foreground.step_stream(user_text):
                 yield event
 
@@ -691,13 +686,13 @@ class Runtime:
         if not items:
             return
         wake_prompt = (
+            f"{self._request_grounding()}\n"
             "[Background task completion update. Announce the completed results directly to the user in spoken conversational prose:]\n"
             + "\n".join(items)
         )
         async with self._turn_lock:
             final_text = ""
             try:
-                self._update_announcer_grounding()
                 self.announcer.messages = []
                 self.announcer.n_calls = 0
                 self.announcer.cost = 0.0

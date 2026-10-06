@@ -75,6 +75,7 @@ class LitellmModel:
 
     def __init__(self, *, config_class: Callable[..., Any] = LitellmModelConfig, **kwargs: Any) -> None:
         self.config = config_class(**kwargs)
+        self.last_stream_cost = 0.0
         if self.config.litellm_model_registry and Path(self.config.litellm_model_registry).is_file():
             litellm.utils.register_model(json.loads(Path(self.config.litellm_model_registry).read_text()))
 
@@ -136,6 +137,7 @@ class LitellmModel:
         call_kwargs = dict(self.config.model_kwargs)
         call_kwargs.update(kwargs)
         call_kwargs.setdefault("num_retries", 3)
+        call_kwargs.setdefault("stream_options", {"include_usage": True})
         if tools is not None:
             call_kwargs["tools"] = tools
 
@@ -156,9 +158,14 @@ class LitellmModel:
 
         accumulated_text: list[str] = []
         finish_reason: str | None = None
+        chunks: list[Any] = []
+        saw_usage = False
 
         try:
             async for chunk in response:
+                chunks.append(chunk)
+                if getattr(chunk, "usage", None):
+                    saw_usage = True
                 choices = getattr(chunk, "choices", None)
                 if choices is None and isinstance(chunk, dict):
                     choices = chunk.get("choices", [])
@@ -229,8 +236,21 @@ class LitellmModel:
             raise
 
         full_text = "".join(accumulated_text)
+        if saw_usage:
+            self._track_stream_cost(chunks, prepared_messages)
         if full_text and finish_reason != "tool_calls":
             yield TurnComplete(final_text=full_text)
+
+    def _track_stream_cost(self, chunks: list[Any], messages: list[dict[str, Any]]) -> None:
+        """Rebuild the full response from stream chunks and record its cost (never raises)."""
+        try:
+            full_response = litellm.stream_chunk_builder(chunks, messages=messages)
+            cost = litellm.cost_calculator.completion_cost(full_response, model=self.config.model_name)
+            if cost > 0:
+                self.last_stream_cost += cost
+                GLOBAL_MODEL_STATS.add(cost)
+        except Exception:  # noqa: BLE001
+            logger.debug("Streaming cost calculation failed", exc_info=True)
 
     def _calculate_cost(self, response: Any) -> dict[str, float]:
         try:

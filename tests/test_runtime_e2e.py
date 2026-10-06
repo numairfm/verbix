@@ -198,9 +198,15 @@ async def test_runtime_prompt_grounding(mock_provider, tmp_path):
     assert "# CAPABILITY ROUTING" in runtime.system_prompt
     assert "# TOOL OPERATIONS & BACKGROUND WORK" in runtime.system_prompt
     assert "# ENVIRONMENT & GROUNDING" in runtime.system_prompt
-    assert "Current local date and time:" in runtime.system_prompt
+    # Volatile clock content stays out of the cacheable system prompt ...
+    assert "Current local date and time:" not in runtime.system_prompt
     assert f"Host operating system: {platform.system()}" in runtime.system_prompt
     assert f"The working directory is {tmp_path.resolve()}" in runtime.system_prompt
+    # ... and rides on the user message at request time only.
+    events = [e async for e in runtime.step("hello")]
+    assert events
+    user_msgs = [m for m in runtime.foreground.messages if m.get("role") == "user"]
+    assert any("Current local date and time:" in (m.get("content") or "") for m in user_msgs)
 
 
 @pytest.mark.asyncio

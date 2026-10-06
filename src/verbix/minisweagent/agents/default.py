@@ -74,6 +74,21 @@ class AgentConfig(BaseModel):
                 data["system_prompt"] = data["system_template"]
         return data
 
+    turn_scoped_limits: bool = False
+    """Reset turn_calls/turn_cost at the start of each step_stream call (foreground agent)."""
+
+
+def cap_observation(text: str, max_chars: int = 10000) -> str:
+    """Bound a tool observation, keeping head+tail so large outputs can't flood history."""
+    if len(text) <= max_chars:
+        return text
+    keep = max(1, max_chars // 2)
+    return text[:keep] + f"\n... [elided {len(text) - max_chars} chars] ...\n" + text[-keep:]
+
+
+FOREGROUND_TOOL_NAMES = frozenset({"spawn", "status", "cancel"})
+"""Foreground (voice-loop) tools get the tight observation cap; worker tools get the wide one."""
+
 
 class DefaultAgent:
     """Unified agent supporting both synchronous execution and async streaming."""
@@ -111,6 +126,8 @@ class DefaultAgent:
         self.logger = logging.getLogger("agent")
         self.cost = 0.0
         self.n_calls = 0
+        self.turn_calls = 0
+        self.turn_cost = 0.0
         self.n_consecutive_format_errors = 0
         self._start_time = time.time()
         self._delivered_text: str = ""
@@ -181,6 +198,9 @@ class DefaultAgent:
 
         return definitions if definitions else None
 
+    def _observation_cap(self, name: str) -> int:
+        return 1500 if name in FOREGROUND_TOOL_NAMES else 10000
+
     async def _execute_tool(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
         """Execute a tool via ToolRegistry or environment, returning (observation, is_error)."""
         # 1. Check ToolRegistry first if available
@@ -188,7 +208,7 @@ class DefaultAgent:
             try:
                 res = await self.tools.aexecute(name, args)
                 obs = res if isinstance(res, str) else json.dumps(res)
-                return obs, False
+                return cap_observation(obs, max_chars=self._observation_cap(name)), False
             except Submitted:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -213,13 +233,18 @@ class DefaultAgent:
                     and f"exit code: {returncode}" not in obs.lower()
                 ):
                     obs = f"[Returncode: {returncode}]\n{obs}".strip()
-                return obs, is_err
+                return cap_observation(obs, max_chars=self._observation_cap(name)), is_err
             except Submitted:
                 raise
             except Exception as e:  # noqa: BLE001
                 return f"Error executing bash action: {e}", True
 
         return f"Error: Tool '{name}' is not registered or supported.", True
+
+    def _model_stream_cost(self) -> float:
+        """Cumulative streaming cost reported by the model, or 0.0 if it tracks none."""
+        cost = getattr(self.model, "last_stream_cost", 0.0)
+        return cost if isinstance(cost, (int, float)) else 0.0
 
     def _format_message(self, role: str, content: str, **kwargs: Any) -> dict[str, Any]:
         if hasattr(self.model, "format_message"):
@@ -233,6 +258,9 @@ class DefaultAgent:
 
     async def step_stream(self, user_input: str | None = None) -> AsyncIterator[AgentEvent]:
         """Stream an agent turn asynchronously, yielding AgentEvents and executing tools."""
+        if self.config.turn_scoped_limits:
+            self.turn_calls = 0
+            self.turn_cost = 0.0
         is_initial_turn = not any(m.get("role") == "user" for m in self.messages)
         # Initialize conversation messages if starting fresh
         if not self.messages and self.config.system_template:
@@ -248,8 +276,10 @@ class DefaultAgent:
 
         try:
             while True:
-                # Check limits
-                if 0 < self.config.step_limit <= self.n_calls or 0 < self.config.cost_limit <= self.cost:
+                # Check limits (turn-scoped when configured, global otherwise)
+                calls = self.turn_calls if self.config.turn_scoped_limits else self.n_calls
+                spent = self.turn_cost if self.config.turn_scoped_limits else self.cost
+                if 0 < self.config.step_limit <= calls or 0 < self.config.cost_limit <= spent:
                     exc = LimitsExceeded(
                         {
                             "role": "exit",
@@ -274,14 +304,17 @@ class DefaultAgent:
                     return
 
                 self.n_calls += 1
+                self.turn_calls += 1
                 tool_defs = self.get_tool_definitions()
                 self._delivered_text = ""
+                prev_stream_cost = self._model_stream_cost()
 
                 accumulated_tool_calls: dict[int, dict[str, Any]] = {}
                 turn_complete_event: TurnComplete | None = None
                 buffered_text_events: list[TextDelta] = []
                 has_tool_calls = False
 
+                # Single query_stream call site: pre-query hooks (e.g. compaction) go here.
                 stream = self.model.query_stream(self.messages, tools=tool_defs)
                 async for event in stream:
                     if isinstance(event, TextDelta):
@@ -321,6 +354,12 @@ class DefaultAgent:
                         turn_complete_event = event
                     else:
                         yield event
+
+                # Fold streaming usage cost (if the model tracked any) into both budgets.
+                stream_cost_delta = self._model_stream_cost() - prev_stream_cost
+                if stream_cost_delta:
+                    self.cost += stream_cost_delta
+                    self.turn_cost += stream_cost_delta
 
                 # Pure speech: emit buffered text now that no tool call preempted it.
                 # Tool turn: discard the buffer so pre-tool chatter is never spoken nor stored.

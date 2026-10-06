@@ -224,7 +224,12 @@ class DefaultAgent:
 
             action = args if isinstance(args, dict) else {"command": str(args)}
             try:
-                res = await asyncio.to_thread(self.env.execute, action)
+                # Prefer async process-group execution; type-level check so
+                # MagicMock envs (auto-attrs) keep the sync path in tests.
+                if hasattr(type(self.env), "aexecute"):
+                    res = await self.env.aexecute(action)
+                else:
+                    res = await asyncio.to_thread(self.env.execute, action)
                 obs = res.get("output", "") if isinstance(res, dict) else str(res)
                 returncode = res.get("returncode", 0) if isinstance(res, dict) else 0
                 is_err = returncode != 0

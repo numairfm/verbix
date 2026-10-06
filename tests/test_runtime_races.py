@@ -72,7 +72,7 @@ async def test_regression_worker_cancel_kills_process_group():
     marker = f"verbix_test_proc_{os.getpid()}_{int(asyncio.get_event_loop().time() * 1000)}"
 
     async def run():
-        await asyncio.to_thread(env.execute, {"command": f"exec -a {marker} sleep 10"})
+        await env.aexecute({"command": f"exec -a {marker} sleep 10"})
 
     t = asyncio.create_task(run())
     await asyncio.sleep(0.1)

@@ -54,12 +54,16 @@ async def test_runtime_spawn_and_completion_loop(mock_provider, tmp_path):
     assert task.result is not None
     assert "primes" in task.result
 
-    # Wait for completion to settle
+    # Wait for completion to settle and announce
     import asyncio
-    await asyncio.sleep(0.05)
+    for _ in range(20):
+        if woken:
+            break
+        await asyncio.sleep(0.02)
 
-    # Silent completion: no unsolicited vocal wake
-    assert len(woken) == 0
+    # Proactive completion announced to on_wake
+    assert len(woken) == 1
+    assert "prime" in woken[0].lower()
     # Ledger records completion result
     assert "primes" in runtime.ledger.get_status(task_id)
 
@@ -267,19 +271,19 @@ async def test_runtime_direct_worker_completion_is_silent(tmp_path):
     assert task.status == "completed"
 
     import asyncio
-    await asyncio.sleep(0.05)
+    for _ in range(20):
+        if emitted_events:
+            break
+        await asyncio.sleep(0.02)
 
-    # 1. Worker completion is silent: no events emitted through wake_output
-    assert len(emitted_events) == 0
+    # 1. Worker completion announced via wake_output
+    assert len(emitted_events) > 0
 
     # 2. Result recorded in ledger
     assert "Calculation finished: 42." in runtime.ledger.get_status(task_id)
 
     # 3. Context notice recorded in foreground messages
     assert any(f"[Task '{task_id}' completed]" in str(m.get("content", "")) for m in runtime.foreground.messages)
-
-    # 4. Stream was called once by worker only (no announcer synthesis)
-    assert stream_calls == 1
 
 
 @pytest.mark.asyncio
@@ -344,10 +348,13 @@ async def test_runtime_worker_markdown_result_is_silent(tmp_path):
     assert task.status == "completed"
 
     import asyncio
-    await asyncio.sleep(0.05)
+    for _ in range(20):
+        if emitted_events:
+            break
+        await asyncio.sleep(0.02)
 
-    # Worker output goes directly to ledger, never emitting to wake_output
-    assert len(emitted_events) == 0
+    # Worker output announced to wake_output
+    assert len(emitted_events) > 0
     assert "# Markdown Result" in runtime.ledger.get_status(task_id)
 
 
@@ -377,12 +384,15 @@ async def test_runtime_multiple_completions_silently_recorded_in_ledger(tmp_path
             runtime.ledger.register_task(i, f"objective {i}")
             runtime._on_task_finished(i, f"Result {i}")
 
-        await asyncio.sleep(0.05)
+        for _ in range(20):
+            if emitted_events:
+                break
+            await asyncio.sleep(0.02)
 
         assert "Result task-1" in runtime.ledger.get_status("task-1")
         assert "Result task-2" in runtime.ledger.get_status("task-2")
         assert "Result task-3" in runtime.ledger.get_status("task-3")
-        assert len(emitted_events) == 0
+        assert len(emitted_events) > 0
     finally:
         await runtime.aclose()
 

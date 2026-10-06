@@ -415,7 +415,9 @@ class Runtime:
         self.tasks: dict[str, WorkerTask] = {}
         self._task_counter: int = 0
         self._environments: list[LocalEnvironment] = []
-        self.floor = FloorArbiter()
+        self._pending_announcements: list[tuple[str, str]] = []
+        self._drain_lock = asyncio.Lock()
+        self.floor = FloorArbiter(on_change=self._on_floor_state_changed)
         self.ledger = TaskLedger()
         self._turn_handle: TurnHandle = TurnHandle()
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
@@ -649,8 +651,16 @@ class Runtime:
         worker_task.start()
         return task_id
 
+    def _on_floor_state_changed(self, prev_state: FloorState, new_state: FloorState) -> None:
+        if new_state == FloorState.IDLE and self._pending_announcements:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._drain_pending_announcements())
+            except RuntimeError:
+                pass
+
     def _on_task_finished(self, task_id: str, result: str) -> None:
-        """Silently records task completion into the ledger and context memory."""
+        """Records task completion into the ledger, context memory, and schedules announcement."""
         self.ledger.mark_completed(task_id, result)
         self._broadcast_event(
             "task_completed",
@@ -661,6 +671,37 @@ class Runtime:
                 "role": "user",
                 "content": f"[Task '{task_id}' completed]: {result}",
             })
+        self._pending_announcements.append((task_id, result))
+        if self.floor.is_idle:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._drain_pending_announcements())
+            except RuntimeError:
+                pass
+
+    async def _drain_pending_announcements(self) -> None:
+        """Speaks accumulated background completions via the single foreground companion."""
+        if not self.floor.is_idle or not self._pending_announcements:
+            return
+        async with self._drain_lock:
+            if not self.floor.is_idle or not self._pending_announcements:
+                return
+            batch = list(self._pending_announcements)
+            self._pending_announcements.clear()
+
+            items = [f"- Task '{tid}': {res.strip()}" for tid, res in batch if res.strip()]
+            if not items:
+                return
+            prompt = (
+                f"{self._request_grounding()}\n"
+                "[Background task update. In one brief, natural conversational prose sentence, "
+                "inform the user of these completed results:]\n" + "\n".join(items)
+            )
+            final_text = await self.submit(prompt, self.wake_output)
+            if final_text and self.on_wake:
+                wake_res = self.on_wake(final_text)
+                if asyncio.iscoroutine(wake_res):
+                    await wake_res
 
     def get_task_status_summary(self, task_id: str | None = None) -> str:
         """Ledger-backed status summary for the IPC server."""

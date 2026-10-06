@@ -33,6 +33,26 @@ def test_select_sink_rejects_unknown_kind():
         select_sink("bogus")
 
 
+def test_auto_falls_back_when_device_open_fails(monkeypatch):
+    import sys
+    import types
+
+    class ExplodingStream:
+        def __init__(self, *a, **k):
+            raise RuntimeError("No output device")
+
+        def start(self):
+            pass
+
+    fake_sd = types.ModuleType("sounddevice")
+    fake_sd.OutputStream = ExplodingStream
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+
+    assert select_sink("auto").__class__.__name__ == "SubprocessAudioSink"
+    with pytest.raises(RuntimeError, match="callback audio sink unavailable"):
+        select_sink("callback")
+
+
 def test_stop_applies_fade_then_silence(monkeypatch):
     import sys
     import types

@@ -2431,7 +2431,7 @@ requires-dist = [
     { name = "pocket-tts", marker = "extra == 'tts'", specifier = ">=3.3.0" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "sounddevice", marker = "extra == 'audio'" },
+    { name = "sounddevice", marker = "extra == 'audio'", specifier = ">=0.5.6" },
     { name = "tenacity", specifier = ">=9.0.0" },
     { name = "torch", marker = "extra == 'tts'", specifier = ">=2.5.0", index = "https://download.pytorch.org/whl/cpu" },
 ]

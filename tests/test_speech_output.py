@@ -17,14 +17,39 @@ async def test_emit_does_not_block_on_playback():
 
 @pytest.mark.asyncio
 async def test_interrupt_discards_stale_chunks():
-    out = SpeechOutput(tts=MockTextToSpeech(), sink=MockAudioSink(playback_delay=0.2))
+    tts = MockTextToSpeech()
+    sink = MockAudioSink(playback_delay=0.2)
+    out = SpeechOutput(tts=tts, sink=sink)
     await out.emit(TextDelta(text="First sentence here spoken. Second sentence here spoken."))
-    await asyncio.sleep(0.05)
+    for _ in range(100):
+        if tts.synthesized_texts:
+            break
+        await asyncio.sleep(0.01)
     out.interrupt()
-    n = len(out.sink.played_chunks)
+    n_texts, n_chunks = len(tts.synthesized_texts), len(sink.played_chunks)
     await out.emit(TextDelta(text="New sentence here spoken."))
-    await asyncio.sleep(0.3)
+    for _ in range(200):
+        if not out.is_playing and len(sink.played_chunks) >= n_chunks + 2:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.1)  # let any stale audio surface
     assert out.delivered_text().startswith("New")
+    assert len(sink.played_chunks) == n_chunks + 2  # only new-epoch audio
+    assert all("First" not in t and "Second" not in t for t in tts.synthesized_texts[n_texts:])
+
+
+@pytest.mark.asyncio
+async def test_backendless_turn_completes_silently(monkeypatch):
+    import shutil
+
+    from verbix.voice.sinks import SubprocessAudioSink
+
+    monkeypatch.setattr(shutil, "which", lambda *_a, **_k: None)
+    out = SpeechOutput(tts=MockTextToSpeech(), sink=SubprocessAudioSink())
+    await out.emit(TextDelta(text="Hello world. This is spoken aloud."))
+    await out.emit(TurnComplete(final_text="Hello world. This is spoken aloud."))
+    await asyncio.sleep(0.2)
+    assert not out.is_playing  # no backend, no crash, pump drained
 
 
 @pytest.mark.asyncio

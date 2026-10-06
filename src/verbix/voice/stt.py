@@ -23,14 +23,31 @@ _WATCHDOG_INTERVAL_S = 0.05
 
 
 def _default_vad(sample_rate: int) -> Callable[[bytes], bool]:
-    """Bundled Silero VAD via faster-whisper (no model download), with an
-    energy fallback if VAD raises on short or odd-sized inputs."""
+    """Bundled Silero VAD via faster-whisper (no model download).
+
+    Silero needs >= 512-sample (32ms) windows but capture feeds 20ms
+    chunks, so chunks accumulate until a full window is available; shorter
+    tails trust the energy pre-gate. Pure digital silence short-circuits
+    without touching VAD state.
+    """
+
+    import numpy as np
+
+    _pending = [np.zeros(0, dtype=np.float32)]
+    _WIN = 512  # 32ms @16kHz
+
+    def _window_speech(window: Any) -> bool:
+        try:
+            from faster_whisper.vad import get_speech_timestamps
+
+            return bool(get_speech_timestamps(window, sampling_rate=16000))
+        except (ImportError, OSError, RuntimeError, ValueError) as e:
+            logger.debug("VAD error, falling back to energy check: %s", e)
+            return bool((window != 0).any())
 
     def _is_speech(pcm: bytes) -> bool:
-        import numpy as np
-
         audio_int = np.frombuffer(pcm, dtype=np.int16)
-        if audio_int.size == 0:
+        if audio_int.size == 0 or not np.any(audio_int):
             return False
         audio_float = (audio_int.astype(np.float32) / 32768.0).astype(np.float32)
         if sample_rate != 16000 and len(audio_float) > 0:
@@ -40,13 +57,20 @@ def _default_vad(sample_rate: int) -> Callable[[bytes], bool]:
                 np.arange(len(audio_float)),
                 audio_float,
             ).astype(np.float32)
-        try:
-            from faster_whisper.vad import get_speech_timestamps
-
-            return bool(get_speech_timestamps(audio_float, sampling_rate=16000))
-        except (ImportError, OSError, RuntimeError, ValueError) as e:
-            logger.debug("VAD error, falling back to energy check: %s", e)
-            return bool(np.any(audio_int))
+        buf = (
+            np.concatenate([_pending[0], audio_float])
+            if len(_pending[0])
+            else audio_float
+        )
+        if len(buf) < _WIN:
+            _pending[0] = buf
+            return True
+        n_full = len(buf) // _WIN
+        speech = any(
+            _window_speech(buf[i * _WIN : (i + 1) * _WIN]) for i in range(n_full)
+        )
+        _pending[0] = buf[n_full * _WIN :]
+        return speech
 
     return _is_speech
 
@@ -188,6 +212,8 @@ class _Segment:
 class STTSession:
     """Incremental transcription session with VAD-committed segments.
 
+    `decode_fn` is `async def decode_fn(pcm: bytes, prompt: str = "") -> str`
+    (prompt carries the last 200 chars of committed text as context).
     `feed()` buffers speech chunks and evaluates segment boundaries on every
     call against `clock`: a pause >= 250ms commits the open segment, and
     buffered audio >= 12s force-commits at the lowest-energy frame of the last

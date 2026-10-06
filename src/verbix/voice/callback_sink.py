@@ -50,9 +50,10 @@ class CallbackAudioSink:
         channels: int = 1,
         audio_format: str = "f32",
     ) -> None:
+        assert channels == 1, "CallbackAudioSink is mono-only"
         try:
             import sounddevice as sd
-        except ImportError as e:
+        except (ImportError, OSError) as e:
             raise ImportError(
                 "CallbackAudioSink needs the optional 'audio' extra: "
                 "pip install verbix[audio]"
@@ -167,18 +168,27 @@ class CallbackAudioSink:
 
 
 def select_sink(kind: str = "auto", **kwargs: Any) -> Any:
-    """Pick an AudioSink: `callback` iff sounddevice imports, else subprocess."""
+    """Pick an AudioSink: `callback` iff a device opens, else subprocess.
+
+    `auto` falls back to subprocess on any failure (missing/broken
+    sounddevice, no output device); explicit `callback` raises a clean error.
+    """
     kind = (kind or "auto").lower()
     if kind == "subprocess":
         return SubprocessAudioSink(**kwargs)
     if kind == "callback":
-        return CallbackAudioSink(**kwargs)
+        try:
+            return CallbackAudioSink(**kwargs)
+        except ImportError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"callback audio sink unavailable: {e}") from e
     if kind == "auto":
         try:
-            import sounddevice  # noqa: F401
-        except ImportError:
+            return CallbackAudioSink(**kwargs)
+        except Exception as e:  # noqa: BLE001 - auto must fall back on any backend failure
+            logger.debug("callback sink unavailable, using subprocess: %s", e)
             return SubprocessAudioSink(**kwargs)
-        return CallbackAudioSink(**kwargs)
     raise ValueError(
         f"unknown audio sink: {kind!r} (expected auto|callback|subprocess)"
     )

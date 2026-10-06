@@ -53,7 +53,7 @@ class VoicePipeline:
             return await self.stop_recording_and_process()
 
         # 2. Playback / turn barge-in
-        if self._speech_output.is_playing or self.player.is_playing or not self.runtime.is_idle:
+        if self._speech_output.is_playing or not self.runtime.is_idle:
             self._speech_output.interrupt()
             await self.runtime.cancel_turn()
             self.runtime.user_active = True

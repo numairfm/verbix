@@ -92,10 +92,13 @@ class SpeechOutput:
 
     def interrupt(self) -> None:
         """Barge-in: silence audio now, discard everything not yet spoken."""
-        record_latency("interrupt_called")
+        playing = self.is_playing
+        if playing:
+            record_latency("interrupt_called")
         self._epoch += 1
         self.sink.stop()
-        record_latency("audio_silent")
+        if playing:
+            record_latency("audio_silent")
         if self._pump and not self._pump.done():
             self._pump.cancel()
         self._pump = None
@@ -143,10 +146,12 @@ class SpeechOutput:
 
     async def _run(self) -> None:
         current = asyncio.current_task()
+        epoch = self._epoch
         try:
-            await self.sink.play_stream(self._feed(self._epoch))
+            await self.sink.play_stream(self._feed(epoch))
         except asyncio.CancelledError:
-            self.sink.stop()
+            if self._epoch == epoch:
+                self.sink.stop()
             raise
         finally:
             if self._pump is current:

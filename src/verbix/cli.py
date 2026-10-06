@@ -306,6 +306,7 @@ async def async_main(args: argparse.Namespace) -> int:
         )
         pipeline: VoicePipeline | None = None
         tts: PocketTTSEngine | None = None
+        sink: Any = None
         if args.voice:
             stt = FasterWhisperSTT()
             tts = PocketTTSEngine()
@@ -337,6 +338,7 @@ async def async_main(args: argparse.Namespace) -> int:
             await runtime.aclose()
             if tts:
                 await tts.aclose()
+            getattr(sink, "close", lambda: None)()
         return 0
 
     if args.voice:
@@ -412,6 +414,7 @@ async def async_main(args: argparse.Namespace) -> int:
         finally:
             await runtime.aclose()
             await tts.aclose()
+            getattr(sink, "close", lambda: None)()
         return 0
 
     # Text CLI Mode: single foreground queue with immediate completion printing

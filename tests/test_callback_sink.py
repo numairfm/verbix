@@ -1,4 +1,5 @@
 import math
+from itertools import pairwise
 
 import pytest
 
@@ -79,3 +80,52 @@ def test_stop_applies_fade_then_silence(monkeypatch):
     out3 = np.zeros((240, 1), dtype=np.float32)
     sink._callback(out3, 240, None, None)
     assert float(out3.max()) == 0.0
+
+
+def _stubbed_sink(monkeypatch):
+    import sys
+    import types
+
+    class FakeStream:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    fake_sd = types.ModuleType("sounddevice")
+    fake_sd.OutputStream = FakeStream
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+
+    from verbix.voice.callback_sink import CallbackAudioSink
+
+    return CallbackAudioSink(sample_rate=24000)
+
+
+def test_short_tail_fades_fully_to_zero_without_jump(monkeypatch):
+    import numpy as np
+
+    sink = _stubbed_sink(monkeypatch)
+    sink._enqueue(np.ones(100, dtype=np.float32).tobytes())
+    sink.stop()
+    out = np.zeros((480, 1), dtype=np.float32)
+    sink._callback(out, 480, None, None)
+    head = [float(v) for v in out[:100, 0]]
+    assert math.isclose(head[0], 1.0, rel_tol=1e-6)
+    assert head[-1] == 0.0
+    assert all(b <= a for a, b in zip([1.0] + head, head))
+    assert max(a - b for a, b in pairwise(head)) < 0.05
+    assert float(out[100:].max()) == 0.0
+    assert sink.played_samples == 100
+
+    sink.stop()
+    out2 = np.zeros((240, 1), dtype=np.float32)
+    sink._callback(out2, 240, None, None)
+    assert float(out2.max()) == 0.0
+    assert sink.played_samples == 100

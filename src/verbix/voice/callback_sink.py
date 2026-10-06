@@ -102,11 +102,15 @@ class CallbackAudioSink:
             if self._stopping:
                 k = min(need, self._fade_left, len(self._pending))
                 taken = [self._pending.popleft() for _ in range(k)]
-                pos = self._fade_total - self._fade_left
-                denom = self._fade_total - 1 if self._fade_total > 1 else 1
-                taken = [v * (1.0 - (pos + j) / denom) for j, v in enumerate(taken)]
+                if self._fade_total > 1:
+                    pos = self._fade_total - self._fade_left
+                    denom = self._fade_total - 1
+                    taken = [v * (1.0 - (pos + j) / denom) for j, v in enumerate(taken)]
+                else:
+                    taken = [0.0] * k
                 self._fade_left -= k
-                self._pending.clear()
+                if self._fade_left == 0:
+                    self._pending.clear()
             else:
                 k = min(need, len(self._pending))
                 taken = [self._pending.popleft() for _ in range(k)]
@@ -120,7 +124,8 @@ class CallbackAudioSink:
         """Flag fade-out: callback emits a 10ms fade then silence."""
         with self._lock:
             self._stopping = True
-            self._fade_total = self._fade_len()
+            # ponytail: snapshot at stop so a short tail ramps fully 1->0 instead of jumping
+            self._fade_total = min(self._fade_len(), len(self._pending))
             self._fade_left = self._fade_total
 
     def close(self) -> None:

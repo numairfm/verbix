@@ -22,12 +22,6 @@ from verbix.ipc.client import VerbixClient
 from verbix.ipc.server import VerbixServer
 from verbix.minisweagent.models.litellm_model import LitellmModel, LitellmModelConfig
 from verbix.runtime.runtime import Runtime
-from verbix.voice.callback_sink import select_sink
-from verbix.voice.capture import PTTCapture
-from verbix.voice.pipeline import VoicePipeline
-from verbix.voice.player import AudioPlayer
-from verbix.voice.pocket_tts import PocketTTSEngine
-from verbix.voice.stt import FasterWhisperSTT
  
 logger = logging.getLogger(__name__)
 
@@ -283,7 +277,36 @@ class CliPrinter:
         self.in_thought = False
         self._delivered.clear()
         self._prefix_open = False
-        self._wrote_text = False
+def _build_voice_pipeline(
+    runtime: Runtime,
+    args: argparse.Namespace,
+    printer: CliPrinter | None = None,
+) -> tuple[Any, Any, Any]:
+    from verbix.voice.callback_sink import select_sink
+    from verbix.voice.capture import PTTCapture
+    from verbix.voice.pipeline import VoicePipeline
+    from verbix.voice.player import AudioPlayer
+    from verbix.voice.pocket_tts import PocketTTSEngine
+    from verbix.voice.stt import FasterWhisperSTT
+
+    stt = FasterWhisperSTT()
+    tts = PocketTTSEngine()
+    sink = select_sink(
+        getattr(args, "audio_sink", "auto"),
+        sample_rate=24000,
+        audio_format="f32",
+    )
+    player = AudioPlayer(tts=tts, sink=sink)
+    capture = PTTCapture()
+    kwargs = {"printer": printer} if printer is not None else {}
+    pipeline = VoicePipeline(
+        runtime=runtime,
+        stt=stt,
+        player=player,
+        capture=capture,
+        **kwargs,
+    )
+    return pipeline, tts, sink
 
 
 async def async_main(args: argparse.Namespace) -> int:
@@ -315,22 +338,11 @@ async def async_main(args: argparse.Namespace) -> int:
         socket_path = args.socket_path or (
             Path.home() / ".local" / "share" / "verbix" / "verbix.sock"
         )
-        pipeline: VoicePipeline | None = None
-        tts: PocketTTSEngine | None = None
+        pipeline: Any = None
+        tts: Any = None
         sink: Any = None
         if args.voice:
-            stt = FasterWhisperSTT()
-            tts = PocketTTSEngine()
-            sink = select_sink(
-                getattr(args, "audio_sink", "auto"),
-                sample_rate=24000,
-                audio_format="f32",
-            )
-            player = AudioPlayer(tts=tts, sink=sink)
-            capture = PTTCapture()
-            pipeline = VoicePipeline(
-                runtime=runtime, stt=stt, player=player, capture=capture
-            )
+            pipeline, tts, sink = _build_voice_pipeline(runtime, args)
 
         server = VerbixServer(
             runtime=runtime, pipeline=pipeline, socket_path=socket_path
@@ -353,17 +365,8 @@ async def async_main(args: argparse.Namespace) -> int:
         return 0
 
     if args.voice:
-        stt = FasterWhisperSTT()
-        tts = PocketTTSEngine()
-        sink = select_sink(
-            getattr(args, "audio_sink", "auto"), sample_rate=24000, audio_format="f32"
-        )
-        player = AudioPlayer(tts=tts, sink=sink)
-        capture = PTTCapture()
         printer = CliPrinter(show_thoughts=getattr(args, "show_thoughts", False))
-        pipeline = VoicePipeline(
-            runtime=runtime, stt=stt, player=player, capture=capture, printer=printer
-        )
+        pipeline, tts, sink = _build_voice_pipeline(runtime, args, printer=printer)
 
         sys.stdout.write(
             f"verbix voice mode (model: {args.model}, workspace: {runtime.workspace})\n"

@@ -1,3 +1,5 @@
+from typing import Any
+
 from verbix.voice.base import (
     AudioSink,
     MockAudioSink,
@@ -11,9 +13,19 @@ from verbix.voice.capture import PTTCapture
 from verbix.voice.output import SpeechOutput
 from verbix.voice.pipeline import VoicePipeline
 from verbix.voice.player import AudioPlayer
-from verbix.voice.pocket_tts import PocketTTSEngine
 from verbix.voice.sinks import SubprocessAudioSink
-from verbix.voice.stt import FasterWhisperSTT
+
+
+def __getattr__(name: str) -> Any:
+    if name == "PocketTTSEngine":
+        from verbix.voice.pocket_tts import PocketTTSEngine
+
+        return PocketTTSEngine
+    if name == "FasterWhisperSTT":
+        from verbix.voice.stt import FasterWhisperSTT
+
+        return FasterWhisperSTT
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "AudioPlayer",

@@ -25,3 +25,4 @@ scratch/
 # Git worktrees (project-local isolation)
 .worktrees/
 
+verbix-trace.jsonl

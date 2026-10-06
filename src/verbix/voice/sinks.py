@@ -97,6 +97,8 @@ class SubprocessAudioSink:
         """Streams raw PCM chunks into a single audio playback subprocess."""
         cmd = self._build_cmd()
         if not cmd:
+            async for _ in chunks:
+                pass
             return True
 
         self.stop()

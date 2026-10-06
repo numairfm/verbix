@@ -75,10 +75,8 @@ class SpeechOutput:
             if rest:
                 for s in _sentences(rest) or [rest]:
                     self._frames.put_nowait((self._epoch, "text", s))
-            if buf.strip() or rest:
-                self._ensure_pump()
-            elif self.is_playing:
-                self._frames.put_nowait((self._epoch, "end", ""))
+            self._frames.put_nowait((self._epoch, "end", ""))
+            self._ensure_pump()
 
     def _tail(self, final_text: str) -> str:
         f = (final_text or "").strip()
@@ -148,7 +146,16 @@ class SpeechOutput:
         current = asyncio.current_task()
         epoch = self._epoch
         try:
-            await self.sink.play_stream(self._feed(epoch))
+            while self._epoch == epoch and not self._frames.empty():
+                frames_before = self._frames.qsize()
+                await self.sink.play_stream(self._feed(epoch))
+                if self._frames.qsize() >= frames_before and not self._frames.empty():
+                    while not self._frames.empty():
+                        try:
+                            self._frames.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                    break
         except asyncio.CancelledError:
             if self._epoch == epoch:
                 self.sink.stop()
@@ -165,7 +172,9 @@ class SpeechOutput:
             if tag != self._epoch or tag != epoch:
                 return
             if kind == "end":
-                return
+                if self._frames.empty():
+                    return
+                continue
             if kind == "cue":
                 if first_write:
                     record_latency("sink_first_write")

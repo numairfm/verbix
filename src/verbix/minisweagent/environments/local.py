@@ -13,6 +13,7 @@ from verbix.minisweagent.utils.serialize import recursive_merge
 _HEAD_CAP = 500_000
 _TAIL_CAP = 500_000
 _KILL_GRACE_SECONDS = 2.0
+_POST_EXIT_DRAIN_SECONDS = 0.2
 
 
 class LocalEnvironmentConfig(BaseModel):
@@ -65,16 +66,27 @@ class LocalEnvironment:
         pgid = os.getpgid(proc.pid) if os.name == "posix" else proc.pid
         self._active_pgids.add(pgid)
         out = _CappedOutput()
+        drain_task = asyncio.create_task(_drain_stdout(proc, out))
         try:
             try:
-                await asyncio.wait_for(_drain_stdout(proc, out), timeout)
-                await proc.wait()
+                await asyncio.wait_for(proc.wait(), timeout)
             except TimeoutError:
+                drain_task.cancel()
                 await _kill_group(proc, pgid)
                 await _drain_stdout(proc, out)
                 raise subprocess.TimeoutExpired(command, timeout, output=out.text())
+            try:
+                # ponytail: shell exited; a grandchild may hold stdout open, so bound the tail drain and leave it — intentional daemons survive
+                await asyncio.wait_for(asyncio.shield(drain_task), _POST_EXIT_DRAIN_SECONDS)
+            except TimeoutError:
+                drain_task.cancel()
+                try:
+                    await drain_task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110
+                    pass
             return {"output": out.text(), "returncode": proc.returncode, "exception_info": ""}
         except asyncio.CancelledError:
+            drain_task.cancel()
             await _kill_group(proc, pgid)
             raise
         except Exception as e:  # noqa: BLE001
@@ -87,6 +99,14 @@ class LocalEnvironment:
             }
         finally:
             self._active_pgids.discard(pgid)
+
+    def kill_all(self) -> None:
+        """SIGKILL every tracked in-flight process group (shutdown path; fire-and-forget)."""
+        for pgid in list(self._active_pgids):
+            try:
+                os.killpg(pgid, signal.SIGKILL) if os.name == "posix" else None
+            except (ProcessLookupError, PermissionError):
+                pass
 
     def get_template_vars(self, **kwargs) -> dict[str, Any]:
         return recursive_merge(self.config.model_dump(), platform.uname()._asdict(), dict(os.environ), kwargs)

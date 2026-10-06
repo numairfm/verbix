@@ -71,6 +71,9 @@ class AnnouncerLoop:
                             res = await res
                     except Exception:
                         logger.exception("Announcer speak_fn failed")
+                        for task_id in batch:  # failure mid-batch: requeue, never drop
+                            self._queue.put_nowait(task_id)
+                        batch = []
                         continue
                     if res is not False:
                         for task_id in batch:
@@ -82,3 +85,6 @@ class AnnouncerLoop:
                 break
             except Exception:
                 logger.exception("Error in announcer loop")
+                for task_id in batch:  # never drop the in-flight batch
+                    self._queue.put_nowait(task_id)
+                batch = []

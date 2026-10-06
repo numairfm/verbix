@@ -44,6 +44,7 @@ class TaskLedger:
             return
         entry.status = "cancelled"
         entry.finished_at = time.time()
+        entry.delivery = "interrupted"
 
     def mark_heard(self, task_id: str) -> None:
         entry = self._tasks.get(task_id)

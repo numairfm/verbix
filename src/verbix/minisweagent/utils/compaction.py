@@ -14,9 +14,8 @@ from typing import Any
 
 ELIDED_OBSERVATION = "[status output elided]"
 MAX_TOOL_ARG_CHARS = 500
-WORKER_TRUNCATE_CHARS = 200
 FOREGROUND_KEEP_TURNS = 3
-WORKER_KEEP_STEPS = 8
+RESIDUAL_TRUNCATE_CHARS = 1000
 
 
 def estimate_tokens(messages: list[dict[str, Any]]) -> int:
@@ -55,9 +54,7 @@ def _atomic_units(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return units
 
 
-def compact_messages(
-    messages: list[dict[str, Any]], max_tokens: int, is_worker: bool = False
-) -> list[dict[str, Any]]:
+def compact_messages(messages: list[dict[str, Any]], max_tokens: int) -> list[dict[str, Any]]:
     """Deterministically fit messages into max_tokens without breaking tool-call pairs."""
     if estimate_tokens(messages) <= max_tokens:
         return messages
@@ -81,36 +78,35 @@ def compact_messages(
     # could never fire and Stage 3 would drop pairs instead of eliding them.
     # Unit granularity keeps every stage meaningful while never splitting pairs.
     groups = [list(u) for u in units]
-    keep = WORKER_KEEP_STEPS if is_worker else FOREGROUND_KEEP_TURNS
+    keep = FOREGROUND_KEEP_TURNS
 
     def assembled() -> list[dict[str, Any]]:
         return header + [m for g in groups for m in g]
 
-    # Stage 1 (foreground): elide tool observations older than the last 3 turns.
-    # Stage 2 (workers): gently truncate observations older than the last 8 steps.
-    # Either way, truncate tool arguments > 500 chars outside the recent window.
-    if not is_worker:
-        for g in groups[:-keep] if len(groups) > keep else []:
+    # Stage 1: elide tool observations older than the last 3 turns and truncate
+    # tool arguments > 500 chars outside the recent window.
+    for g in groups[:-keep] if len(groups) > keep else []:
+        for m in g:
+            if m.get("role") == "tool" and isinstance(m.get("content"), str):
+                m["content"] = ELIDED_OBSERVATION
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                _truncate_args(m["tool_calls"])
+    if estimate_tokens(assembled()) <= max_tokens:
+        return assembled()
+
+    # Stage 2: drop oldest groups entirely; header and pairing stay intact.
+    while len(groups) > 1 and estimate_tokens(assembled()) > max_tokens:
+        groups.pop(0)
+
+    # Stage 3: a single over-budget group is capped in place so we never return over budget.
+    if estimate_tokens(assembled()) > max_tokens:
+        for g in groups:
             for m in g:
                 if m.get("role") == "tool" and isinstance(m.get("content"), str):
                     m["content"] = ELIDED_OBSERVATION
                 if m.get("role") == "assistant" and m.get("tool_calls"):
                     _truncate_args(m["tool_calls"])
-    else:
-        for g in groups[:-keep] if len(groups) > keep else []:
-            for m in g:
-                if (
-                    m.get("role") == "tool"
-                    and isinstance(m.get("content"), str)
-                    and len(m["content"]) > WORKER_TRUNCATE_CHARS
-                ):
-                    m["content"] = m["content"][:WORKER_TRUNCATE_CHARS]
-                if m.get("role") == "assistant" and m.get("tool_calls"):
-                    _truncate_args(m["tool_calls"])
-    if estimate_tokens(assembled()) <= max_tokens:
-        return assembled()
-
-    # Stage 3: drop oldest groups entirely; header and pairing stay intact.
-    while len(groups) > 1 and estimate_tokens(assembled()) > max_tokens:
-        groups.pop(0)
+                content = m.get("content")
+                if isinstance(content, str) and len(content) > RESIDUAL_TRUNCATE_CHARS:
+                    m["content"] = content[:RESIDUAL_TRUNCATE_CHARS]
     return assembled()

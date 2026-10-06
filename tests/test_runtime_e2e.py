@@ -422,7 +422,9 @@ async def test_runtime_announcer_clean_history(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_runtime_announcer_multiple_flushes_never_exceeds_limits(tmp_path):
+async def test_runtime_announcer_multiple_announcements_never_exceeds_limits(tmp_path):
+    import asyncio
+
     provider = MagicMock()
     call_idx = 0
 
@@ -440,24 +442,44 @@ async def test_runtime_announcer_multiple_flushes_never_exceeds_limits(tmp_path)
             emitted_events.append(event)
 
     output = FakeOutput()
-    runtime = Runtime(workspace=tmp_path, provider=provider)
+    runtime = Runtime(workspace=tmp_path, provider=provider, buffer_window=0.02)
     runtime.wake_output = output
 
-    # Flush 1
-    await runtime._on_buffer_flush([("task-1", "Result 1")])
-    # Flush 2
-    await runtime._on_buffer_flush([("task-2", "Result 2")])
-    # Flush 3
-    await runtime._on_buffer_flush([("task-3", "Result 3")])
+    try:
+        # Three completions announced as separate loop batches (never one merged flush)
+        for i in ("task-1", "task-2", "task-3"):
+            runtime.ledger.register_task(i, f"objective {i}")
+            runtime.ledger.mark_completed(i, f"Result {i}")
+            runtime.announcer_loop.push(i)
+            await asyncio.sleep(0.15)
 
-    from verbix.core.events import TurnComplete
-    turn_completes = [e for e in emitted_events if isinstance(e, TurnComplete)]
-    assert len(turn_completes) == 3
-    assert turn_completes[0].final_text == "Announcement number 1."
-    assert turn_completes[1].final_text == "Announcement number 2."
-    assert turn_completes[2].final_text == "Announcement number 3."
-    assert not any(e.final_text == "LimitsExceeded" for e in turn_completes)
+        from verbix.core.events import TurnComplete
+        turn_completes = [e for e in emitted_events if isinstance(e, TurnComplete)]
+        assert len(turn_completes) == 3
+        assert turn_completes[0].final_text == "Announcement number 1."
+        assert turn_completes[1].final_text == "Announcement number 2."
+        assert turn_completes[2].final_text == "Announcement number 3."
+        assert not any(e.final_text == "LimitsExceeded" for e in turn_completes)
+    finally:
+        await runtime.aclose()
 
 
 
 
+
+
+@pytest.mark.asyncio
+async def test_cancel_turn_when_idle_leaves_history_unchanged(tmp_path):
+    runtime = Runtime(workspace=tmp_path, provider=mock_provider)
+    try:
+        runtime.foreground.messages.extend(
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "Hello! How can I help?"},
+            ]
+        )
+        before = [dict(m) for m in runtime.foreground.messages]
+        await runtime.cancel_turn()
+        assert runtime.foreground.messages == before
+    finally:
+        await runtime.aclose()

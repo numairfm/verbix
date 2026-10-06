@@ -60,8 +60,24 @@ def test_compact_messages_worker_truncates_old_steps():
             {"role": "assistant", "content": None, "tool_calls": [{"id": f"w{i}", "function": {"name": "bash", "arguments": "{}"}}]},
             {"role": "tool", "tool_call_id": f"w{i}", "content": "z" * 2000},
         ]
-    compacted = compact_messages(msgs, max_tokens=300, is_worker=True)
+    compacted = compact_messages(msgs, max_tokens=300)
     call_ids = {tc["id"] for m in compacted if m.get("tool_calls") for tc in m["tool_calls"]}
     result_ids = {m.get("tool_call_id") for m in compacted if m.get("role") == "tool"}
     assert result_ids <= call_ids
     assert compacted[0]["role"] == "system"
+
+
+def test_compact_messages_single_over_budget_group_is_capped():
+    from verbix.minisweagent.utils.compaction import estimate_tokens
+
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "function": {"name": "bash", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "y" * 20000},
+    ]
+    compacted = compact_messages(msgs, max_tokens=300)
+    assert estimate_tokens(compacted) <= 300
+    call_ids = {tc["id"] for m in compacted if m.get("tool_calls") for tc in m["tool_calls"]}
+    result_ids = {m.get("tool_call_id") for m in compacted if m.get("role") == "tool"}
+    assert result_ids <= call_ids

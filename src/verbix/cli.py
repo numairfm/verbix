@@ -324,6 +324,7 @@ async def async_main(args: argparse.Namespace) -> int:
                 await asyncio.sleep(1.0)
         finally:
             await server.stop()
+            await runtime.aclose()
             if tts:
                 await tts.aclose()
         return 0
@@ -397,6 +398,7 @@ async def async_main(args: argparse.Namespace) -> int:
         except (KeyboardInterrupt, asyncio.CancelledError):
             sys.stdout.write("\n")
         finally:
+            await runtime.aclose()
             await tts.aclose()
         return 0
 
@@ -420,8 +422,10 @@ async def async_main(args: argparse.Namespace) -> int:
                 await asyncio.sleep(0.1)
             sys.stdout.write("\n")
             sys.stdout.flush()
+            await runtime.aclose()
             return 0
         except asyncio.CancelledError:
+            await runtime.aclose()
             return 130
 
     # Interactive REPL mode
@@ -454,6 +458,7 @@ async def async_main(args: argparse.Namespace) -> int:
         except EOFError:
             break
 
+    await runtime.aclose()
     return 0
 
 

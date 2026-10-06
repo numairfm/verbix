@@ -415,6 +415,7 @@ class Runtime:
 
         self.tasks: dict[str, WorkerTask] = {}
         self._task_counter: int = 0
+        self._environments: list[LocalEnvironment] = []
         self.floor = FloorArbiter()
         self.ledger = TaskLedger()
         self._turn_handle: TurnHandle = TurnHandle()
@@ -549,8 +550,13 @@ class Runtime:
     async def step(self, user_text: str | None = None) -> AsyncIterator[AgentEvent]:
         """Executes a foreground conversation turn with Verbix."""
         async with self.floor.acquire(FloorState.FOREGROUND):
-            async for event in self._step_inner(user_text):
-                yield event
+            self._turn_handle = TurnHandle(task=asyncio.current_task(), kind="foreground",
+                delivered_text_provider=lambda: self.foreground._delivered_text)
+            try:
+                async for event in self._step_inner(user_text):
+                    yield event
+            finally:
+                self._turn_handle.task = None
 
     async def _step_inner(self, user_text: str | None = None) -> AsyncIterator[AgentEvent]:
         # System prompt stays static (provider cache prefix); volatile
@@ -593,7 +599,10 @@ class Runtime:
     async def cancel_turn(self) -> None:
         """Cancels an active foreground turn (e.g. on barge-in) and repairs history."""
         self.floor.request_interrupt()
+        had_active = self._turn_handle.task is not None and not self._turn_handle.task.done()
         self._turn_handle.cancel()
+        if not had_active:
+            return
         self.foreground.messages[:] = validate_and_repair_history(
             self.foreground.messages, delivered_text=self._turn_handle.delivered_text()
         )
@@ -670,6 +679,7 @@ class Runtime:
 
         worker_task.on_completed(_on_finish)
         self.tasks[task_id] = worker_task
+        self._environments.append(env)
         self.ledger.register_task(task_id, task)
         self._broadcast_event(
             "task_registered", {"task_id": task_id, "objective": task}
@@ -773,13 +783,6 @@ class Runtime:
             tuples.append((task_id, entry.result_summary if entry else ""))
         return await self._speak_batch(tuples)
 
-    async def _on_buffer_flush(self, batch: list[tuple[str, str]]) -> None:
-        """Direct flush entry point (floor acquired here)."""
-        async with self.floor.acquire(FloorState.ANNOUNCING):
-            if await self._speak_batch(batch):
-                for task_id, _ in batch:
-                    self.ledger.mark_heard(task_id)
-
     def _broadcast_wake_event(self, event: AgentEvent) -> None:
         """Broadcasts a wake-turn event to IPC subscribers as plain data."""
         payload: dict[str, Any] = {}
@@ -832,5 +835,11 @@ class Runtime:
         return False
 
     async def aclose(self) -> None:
-        """Teardown: stop the announcer loop."""
+        """Teardown: SIGKILL tracked in-flight process groups, then stop the announcer loop."""
+        for env in self._environments:
+            try:
+                env.kill_all()
+            except Exception:
+                logger.exception("Failed to kill worker process groups on shutdown")
+        self._environments.clear()
         await self.announcer_loop.stop()

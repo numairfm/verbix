@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+import select
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -185,6 +186,16 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
         worker_model=worker_model,
         system_prompt=getattr(args, "system_prompt", None),
     )
+
+
+def drain_stdin() -> None:
+    """Discards already-buffered stdin lines so stale Enters never become phantom commands."""
+    try:
+        while select.select([sys.stdin], [], [], 0)[0]:
+            if not os.read(sys.stdin.fileno(), 4096):
+                break
+    except (OSError, ValueError):
+        pass
 
 
 class CliPrinter:
@@ -370,6 +381,7 @@ async def async_main(args: argparse.Namespace) -> int:
                 now_str = datetime.now().astimezone().strftime("%H:%M:%S")
                 sys.stdout.write(f"[{now_str}] you> ")
                 sys.stdout.flush()
+                await loop.run_in_executor(None, drain_stdin)
                 line = await loop.run_in_executor(None, sys.stdin.readline)
                 if not line:
                     break
@@ -387,6 +399,7 @@ async def async_main(args: argparse.Namespace) -> int:
                             "[Recording mic... Press Enter when done speaking]\n"
                         )
                         sys.stdout.flush()
+                        await loop.run_in_executor(None, drain_stdin)
                         await loop.run_in_executor(None, sys.stdin.readline)
                         sys.stdout.write("[Capture stopped. Earcon cue playing...]\n")
                         sys.stdout.flush()

@@ -42,3 +42,31 @@ async def test_cli_printer_renders_standalone_turn_complete(capsys):
         r"\[\d{2}:\d{2}:\d{2}\] verbix: The current time is 12:45 AM\.",
         captured_announcement.out,
     )
+
+
+def test_drain_stdin_discards_stale_enters(monkeypatch):
+    import io
+    import os
+    import select
+
+    from verbix.cli import drain_stdin
+
+    r, w = os.pipe()
+    try:
+        os.write(w, b"\n\n")
+        monkeypatch.setattr("sys.stdin", io.TextIOWrapper(os.fdopen(os.dup(r), "rb")))
+        drain_stdin()
+        assert select.select([r], [], [], 0)[0] == []
+    finally:
+        os.close(r)
+        os.close(w)
+
+
+def test_drain_stdin_never_raises_on_non_selectable(monkeypatch, capsys):
+    import io
+
+    from verbix.cli import drain_stdin
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
+    drain_stdin()  # must not raise; StringIO has no fileno for select
+    capsys.readouterr()

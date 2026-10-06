@@ -4,40 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from verbix.core.events import TextDelta, TurnComplete
-from verbix.runtime.buffer import CompletionBuffer
 from verbix.runtime.worker import WorkerTask
-
-
-@pytest.mark.asyncio
-async def test_completion_buffer_batches_within_window():
-    flushed = []
-
-    async def on_flush(batch):
-        flushed.append(batch)
-
-    buf = CompletionBuffer(window_seconds=0.05, on_flush=on_flush)
-    buf.push("task-1", "Done 1")
-    await asyncio.sleep(0.01)
-    buf.push("task-2", "Done 2")
-    await asyncio.sleep(0.1)
-
-    assert len(flushed) == 1
-    assert flushed[0] == [("task-1", "Done 1"), ("task-2", "Done 2")]
-
-
-@pytest.mark.asyncio
-async def test_completion_buffer_flush_now():
-    flushed = []
-
-    async def on_flush(batch):
-        flushed.append(batch)
-
-    buf = CompletionBuffer(window_seconds=1.0, on_flush=on_flush)
-    buf.push("task-1", "Immediate")
-    await buf.flush_now()
-
-    assert len(flushed) == 1
-    assert flushed[0] == [("task-1", "Immediate")]
 
 
 @pytest.mark.asyncio

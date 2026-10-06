@@ -52,7 +52,7 @@ from verbix.provider.models import (
     ToolDefinition,
     ToolFunction,
 )
-from verbix.runtime.buffer import CompletionBuffer
+from verbix.runtime.announcer import AnnouncerLoop
 from verbix.runtime.floor import FloorArbiter, FloorState
 from verbix.runtime.ledger import TaskLedger
 from verbix.runtime.tools import CancelTool, FinishTool, SpawnTool, StatusTool
@@ -374,11 +374,14 @@ class Runtime:
         self._turn_handle: TurnHandle = TurnHandle()
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
 
-        # Completion buffer for batching finished worker results
-        self.buffer = CompletionBuffer(
-            window_seconds=buffer_window,
-            on_flush=self._on_buffer_flush,
+        # Non-cancelling announcer loop for finished worker results
+        self.announcer_loop = AnnouncerLoop(
+            floor=self.floor,
+            ledger=self.ledger,
+            speak_fn=self._announce_ids,
+            batch_window=buffer_window,
         )
+        self.announcer_loop.start()  # No-op without a running loop.
 
         # Foreground agent with strictly spawn, status, cancel tools
         self.foreground_tools = [
@@ -612,7 +615,7 @@ class Runtime:
                 self.ledger.mark_cancelled(t.id)
                 return
             self.ledger.mark_completed(t.id, t.result or "Task completed.")
-            self.buffer.push(t.id, t.result or "Task completed.")
+            self.announcer_loop.push(t.id)
 
         worker_task.on_completed(_on_finish)
         self.tasks[task_id] = worker_task
@@ -692,7 +695,20 @@ class Runtime:
             f"{task_lines}"
         )
 
+    async def _announce_ids(self, batch: list[str]) -> None:
+        """AnnouncerLoop speak_fn: floor already held, resolve results via ledger."""
+        tuples = []
+        for task_id in batch:
+            entry = self.ledger.get(task_id)
+            tuples.append((task_id, entry.result_summary if entry else ""))
+        await self._speak_batch(tuples)
+
     async def _on_buffer_flush(self, batch: list[tuple[str, str]]) -> None:
+        """Direct flush entry point (floor acquired here)."""
+        async with self.floor.acquire(FloorState.ANNOUNCING):
+            await self._speak_batch(batch)
+
+    async def _speak_batch(self, batch: list[tuple[str, str]]) -> None:
         """Synthesizes background worker results via dedicated announcer and delivers to output."""
         items = [f"- {task_id}: {result.strip()}" for task_id, result in batch if result.strip()]
         if not items:
@@ -702,37 +718,40 @@ class Runtime:
             "[Background task completion update. Announce the completed results directly to the user in spoken conversational prose:]\n"
             + "\n".join(items)
         )
-        async with self.floor.acquire(FloorState.ANNOUNCING):
-            final_text = ""
-            try:
-                self.announcer.messages = []
-                self.announcer.n_calls = 0
-                self.announcer.cost = 0.0
-                self.announcer.model = adapt_provider(self.provider)
-                async for event in self.announcer.step_stream(wake_prompt):
-                    if isinstance(event, CoreTurnComplete) and event.final_text in (
-                        "LimitsExceeded",
-                        "TimeExceeded",
-                    ):
-                        logger.warning(
-                            "Announcer step aborted with %s", event.final_text
-                        )
-                        continue
-                    if self.wake_output and hasattr(self.wake_output, "emit"):
-                        res = self.wake_output.emit(event)
-                        if asyncio.iscoroutine(res):
-                            await res
-                    if isinstance(event, CoreTurnComplete) and event.final_text:
-                        final_text = event.final_text
-            except Exception:
-                logger.exception("Failed to synthesize background task completion announcement")
-                return
+        final_text = ""
+        try:
+            self.announcer.messages = []
+            self.announcer.n_calls = 0
+            self.announcer.cost = 0.0
+            self.announcer.model = adapt_provider(self.provider)
+            async for event in self.announcer.step_stream(wake_prompt):
+                if isinstance(event, CoreTurnComplete) and event.final_text in (
+                    "LimitsExceeded",
+                    "TimeExceeded",
+                ):
+                    logger.warning(
+                        "Announcer step aborted with %s", event.final_text
+                    )
+                    continue
+                if self.wake_output and hasattr(self.wake_output, "emit"):
+                    res = self.wake_output.emit(event)
+                    if asyncio.iscoroutine(res):
+                        await res
+                if isinstance(event, CoreTurnComplete) and event.final_text:
+                    final_text = event.final_text
+        except Exception:
+            logger.exception("Failed to synthesize background task completion announcement")
+            return
 
-            if final_text:
-                for task_id, _ in batch:
-                    self.ledger.mark_delivered(task_id)
-                self.foreground.messages.append({"role": "assistant", "content": final_text})
-                if self.on_wake:
-                    wake_res = self.on_wake(final_text)
-                    if asyncio.iscoroutine(wake_res):
-                        await wake_res
+        if final_text:
+            for task_id, _ in batch:
+                self.ledger.mark_delivered(task_id)
+            self.foreground.messages.append({"role": "assistant", "content": final_text})
+            if self.on_wake:
+                wake_res = self.on_wake(final_text)
+                if asyncio.iscoroutine(wake_res):
+                    await wake_res
+
+    async def aclose(self) -> None:
+        """Teardown: stop the announcer loop."""
+        await self.announcer_loop.stop()

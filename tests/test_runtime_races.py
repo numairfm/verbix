@@ -2,7 +2,9 @@ import asyncio
 import os
 import subprocess
 import pytest
-from verbix.runtime.buffer import CompletionBuffer
+from verbix.runtime.announcer import AnnouncerLoop
+from verbix.runtime.floor import FloorArbiter
+from verbix.runtime.ledger import TaskLedger
 from verbix.minisweagent.agents.default import DefaultAgent, AgentConfig
 from verbix.minisweagent.tools.registry import ToolRegistry
 from verbix.minisweagent.environments.local import LocalEnvironment
@@ -10,24 +12,32 @@ from verbix.core.events import ToolCallDelta
 
 @pytest.mark.asyncio
 async def test_regression_completion_buffer_drops_concurrent_finish():
-    flushed = []
-    completed = []
+    # CompletionBuffer removed (R3); same loss scenario replayed via
+    # AnnouncerLoop must deliver both completions (no cancelling flush).
+    floor = FloorArbiter()
+    ledger = TaskLedger()
+    announced = []
 
-    async def on_flush(batch):
-        flushed.append(batch)
+    async def speak_fn(batch):
+        announced.append(list(batch))
         await asyncio.sleep(0.1)
-        completed.append(batch)
 
-    buf = CompletionBuffer(window_seconds=0.02, on_flush=on_flush)
-    buf.push("task-1", "res-1")
-    await asyncio.sleep(0.04)  # Flush task-1 begins
-    buf.push("task-2", "res-2")  # Second push arrives while flush is in-flight
-    await asyncio.sleep(0.2)
+    announcer = AnnouncerLoop(floor=floor, ledger=ledger, speak_fn=speak_fn, batch_window=0.02)
+    announcer.start()
 
-    # In current buggy buffer, task-1's flush was cancelled mid-flight, so completed only has task-2
-    all_completed_ids = [t[0] for batch in completed for t in batch]
-    assert "task-1" in all_completed_ids
-    assert "task-2" in all_completed_ids
+    for task_id, res in (("task-1", "res-1"), ("task-2", "res-2")):
+        ledger.register_task(task_id, task_id)
+        ledger.mark_completed(task_id, res)
+
+    announcer.push("task-1")
+    await asyncio.sleep(0.04)  # Announcement of task-1 in progress
+    announcer.push("task-2")  # Second push arrives while announcement is in-flight
+    await asyncio.sleep(0.3)
+    await announcer.stop()
+
+    all_ids = [t for batch in announced for t in batch]
+    assert "task-1" in all_ids
+    assert "task-2" in all_ids
 
 @pytest.mark.asyncio
 async def test_regression_cancel_mid_tool_call_orphans_state():

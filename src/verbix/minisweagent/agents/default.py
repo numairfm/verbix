@@ -33,7 +33,10 @@ from verbix.minisweagent.exceptions import (
 )
 from verbix.minisweagent.models.utils.actions_toolcall import BASH_TOOL
 from verbix.minisweagent.tools.registry import ToolRegistry
-from verbix.minisweagent.utils.history import validate_and_repair_history
+from verbix.minisweagent.utils.history import (
+    CANCELLED_TOOL_CONTENT,
+    validate_and_repair_history,
+)
 from verbix.minisweagent.utils.serialize import recursive_merge
 
 
@@ -404,6 +407,17 @@ class DefaultAgent:
                                     # Started side-effecting op runs to completion and is
                                     # recorded; cancellation then unwinds to repair below.
                                     obs, is_err = await pending
+                                    # cancel_turn() may have synchronously repaired already,
+                                    # leaving a synthetic response; the real result replaces it.
+                                    self.messages[:] = [
+                                        m
+                                        for m in self.messages
+                                        if not (
+                                            m.get("role") == "tool"
+                                            and m.get("tool_call_id") == call_id
+                                            and m.get("content") == CANCELLED_TOOL_CONTENT
+                                        )
+                                    ]
                                     self.add_messages(
                                         {
                                             "role": "tool",

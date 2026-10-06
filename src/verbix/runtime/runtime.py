@@ -52,7 +52,6 @@ from verbix.provider.models import (
     ToolDefinition,
     ToolFunction,
 )
-from verbix.runtime.announcer import AnnouncerLoop
 from verbix.runtime.floor import FloorArbiter, FloorState
 from verbix.runtime.ledger import TaskLedger
 from verbix.runtime.tools import CancelTool, FinishTool, SpawnTool, StatusTool
@@ -421,15 +420,6 @@ class Runtime:
         self._turn_handle: TurnHandle = TurnHandle()
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
 
-        # Non-cancelling announcer loop for finished worker results
-        self.announcer_loop = AnnouncerLoop(
-            floor=self.floor,
-            ledger=self.ledger,
-            speak_fn=self._announce_ids,
-            batch_window=buffer_window,
-        )
-        self.announcer_loop.start()  # No-op without a running loop.
-
         # Foreground agent with strictly spawn, status, cancel tools
         self.foreground_tools = [
             SpawnTool(self),
@@ -472,34 +462,11 @@ class Runtime:
         )
         self.foreground.history = DefaultAgentHistoryProxy(self.foreground)
 
-        # Dedicated tool-less announcer for background completion synthesis
-        announcer_path = (
-            Path(__file__).resolve().parent.parent
-            / "minisweagent"
-            / "config"
-            / "announcer.yaml"
-        )
-        raw_announcer_cfg: dict[str, Any] = {}
-        if announcer_path.is_file():
-            raw_announcer_cfg = (
-                yaml.safe_load(announcer_path.read_text(encoding="utf-8")) or {}
-            )
-        announcer_cfg_dict = raw_announcer_cfg.get("agent", {})
-        self._base_announcer_prompt = (
-            announcer_cfg_dict.get("system_template")
-            or DEFAULT_ANNOUNCER_PROMPT
-        )
-        announcer_cfg_dict["system_template"] = self._build_grounded_prompt(
-            self._base_announcer_prompt
-        )
-        announcer_cfg_dict["tools"] = []
-        announcer_config = AgentConfig(**announcer_cfg_dict)
-        self.announcer = DefaultAgent(
-            model=adapt_provider(self.provider),
-            env=None,
-            tools=None,
-            config=announcer_config,
-        )
+    @property
+    def announcer(self) -> DefaultAgent:
+        """Backward-compatibility alias pointing to single foreground companion."""
+        return self.foreground
+
 
     @property
     def is_idle(self) -> bool:
@@ -670,12 +637,7 @@ class Runtime:
                 self.ledger.mark_cancelled(t.id)
                 self._broadcast_event("task_cancelled", {"task_id": t.id})
                 return
-            self.ledger.mark_completed(t.id, t.result or "Task completed.")
-            self._broadcast_event(
-                "task_completed",
-                {"task_id": t.id, "result": t.result or "Task completed."},
-            )
-            self.announcer_loop.push(t.id)
+            self._on_task_finished(t.id, t.result or "Task completed.")
 
         worker_task.on_completed(_on_finish)
         self.tasks[task_id] = worker_task
@@ -686,6 +648,19 @@ class Runtime:
         )
         worker_task.start()
         return task_id
+
+    def _on_task_finished(self, task_id: str, result: str) -> None:
+        """Silently records task completion into the ledger and context memory."""
+        self.ledger.mark_completed(task_id, result)
+        self._broadcast_event(
+            "task_completed",
+            {"task_id": task_id, "result": result},
+        )
+        if hasattr(self, "foreground") and hasattr(self.foreground, "messages"):
+            self.foreground.messages.append({
+                "role": "user",
+                "content": f"[Task '{task_id}' completed]: {result}",
+            })
 
     def get_task_status_summary(self, task_id: str | None = None) -> str:
         """Ledger-backed status summary for the IPC server."""
@@ -835,11 +810,10 @@ class Runtime:
         return False
 
     async def aclose(self) -> None:
-        """Teardown: SIGKILL tracked in-flight process groups, then stop the announcer loop."""
+        """Teardown: SIGKILL tracked in-flight process groups."""
         for env in self._environments:
             try:
                 env.kill_all()
             except Exception:
                 logger.exception("Failed to kill worker process groups on shutdown")
         self._environments.clear()
-        await self.announcer_loop.stop()

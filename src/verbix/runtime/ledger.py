@@ -52,6 +52,12 @@ class TaskLedger:
             return
         entry.delivery = "heard"
 
+    def get_status(self, task_id: str) -> str:
+        entry = self.get(task_id)
+        if entry is None:
+            return ""
+        return f"{entry.status}: {entry.result_summary}"
+
     def get_compact_summary(self) -> str:
         recent = list(self._tasks.values())[-6:]
         lines = [f"- {e.id}: {e.objective[:80]} ({e.status})" for e in recent]

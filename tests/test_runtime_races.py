@@ -2,7 +2,6 @@ import asyncio
 import os
 import subprocess
 import pytest
-from verbix.runtime.announcer import AnnouncerLoop
 from verbix.runtime.floor import FloorArbiter
 from verbix.runtime.ledger import TaskLedger
 from verbix.minisweagent.agents.default import DefaultAgent, AgentConfig
@@ -12,32 +11,15 @@ from verbix.core.events import ToolCallDelta
 
 @pytest.mark.asyncio
 async def test_regression_completion_buffer_drops_concurrent_finish():
-    # CompletionBuffer removed (R3); same loss scenario replayed via
-    # AnnouncerLoop must deliver both completions (no cancelling flush).
-    floor = FloorArbiter()
+    # Announcer collapsed; concurrent completions record directly into TaskLedger without dropping.
     ledger = TaskLedger()
-    announced = []
-
-    async def speak_fn(batch):
-        announced.append(list(batch))
-        await asyncio.sleep(0.1)
-
-    announcer = AnnouncerLoop(floor=floor, ledger=ledger, speak_fn=speak_fn, batch_window=0.02)
-    announcer.start()
 
     for task_id, res in (("task-1", "res-1"), ("task-2", "res-2")):
         ledger.register_task(task_id, task_id)
         ledger.mark_completed(task_id, res)
 
-    announcer.push("task-1")
-    await asyncio.sleep(0.04)  # Announcement of task-1 in progress
-    announcer.push("task-2")  # Second push arrives while announcement is in-flight
-    await asyncio.sleep(0.3)
-    await announcer.stop()
-
-    all_ids = [t for batch in announced for t in batch]
-    assert "task-1" in all_ids
-    assert "task-2" in all_ids
+    assert "res-1" in ledger.get_status("task-1")
+    assert "res-2" in ledger.get_status("task-2")
 
 @pytest.mark.asyncio
 async def test_regression_cancel_mid_tool_call_orphans_state():

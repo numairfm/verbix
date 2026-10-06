@@ -54,12 +54,14 @@ async def test_runtime_spawn_and_completion_loop(mock_provider, tmp_path):
     assert task.result is not None
     assert "primes" in task.result
 
-    # Wait for completion buffer flush and foreground wake
+    # Wait for completion to settle
     import asyncio
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.05)
 
-    assert len(woken) == 1
-    assert "prime" in woken[0].lower()
+    # Silent completion: no unsolicited vocal wake
+    assert len(woken) == 0
+    # Ledger records completion result
+    assert "primes" in runtime.ledger.get_status(task_id)
 
 
 @pytest.mark.asyncio
@@ -237,22 +239,15 @@ async def test_runtime_announcer_layered_custom_system_prompt(mock_provider, tmp
 
 
 @pytest.mark.asyncio
-async def test_runtime_direct_worker_announcement(tmp_path):
+async def test_runtime_direct_worker_completion_is_silent(tmp_path):
     provider = MagicMock()
     stream_calls = 0
 
     async def fake_stream(messages, tools=None, reasoning_effort=None):
         nonlocal stream_calls
         stream_calls += 1
-        last_msg = messages[-1].content if messages else ""
-        if "[Background task completion update" in last_msg:
-            # Receptionist synthesis turn
-            yield ProviderTextDelta(text="I've finished the task: the answer is 42.")
-            yield ProviderFinish(reason="stop")
-        else:
-            # Worker execution
-            yield ProviderTextDelta(text="Calculation finished: 42.")
-            yield ProviderFinish(reason="stop")
+        yield ProviderTextDelta(text="Calculation finished: 42.")
+        yield ProviderFinish(reason="stop")
 
     provider.stream = fake_stream
 
@@ -274,18 +269,17 @@ async def test_runtime_direct_worker_announcement(tmp_path):
     import asyncio
     await asyncio.sleep(0.05)
 
-    # 1. Synthesized announcement must be emitted through wake_output
-    from verbix.core.events import TurnComplete
-    turn_completes = [e for e in emitted_events if isinstance(e, TurnComplete)]
-    assert len(turn_completes) == 1
-    assert "I've finished the task: the answer is 42." in turn_completes[0].final_text
+    # 1. Worker completion is silent: no events emitted through wake_output
+    assert len(emitted_events) == 0
 
-    # 2. Synthesized answer was committed to foreground history
-    history_msgs = runtime.foreground.history.messages
-    assert any(m.role == "assistant" and "I've finished the task: the answer is 42." in m.content for m in history_msgs)
+    # 2. Result recorded in ledger
+    assert "Calculation finished: 42." in runtime.ledger.get_status(task_id)
 
-    # 3. Provider stream was called twice: once by worker, once by foreground synthesis
-    assert stream_calls == 2
+    # 3. Context notice recorded in foreground messages
+    assert any(f"[Task '{task_id}' completed]" in str(m.get("content", "")) for m in runtime.foreground.messages)
+
+    # 4. Stream was called once by worker only (no announcer synthesis)
+    assert stream_calls == 1
 
 
 @pytest.mark.asyncio
@@ -326,112 +320,11 @@ async def test_runtime_uses_miniswe_agent(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_runtime_buffer_flush_failure_does_not_blurt_raw_markdown(tmp_path):
+async def test_runtime_worker_markdown_result_is_silent(tmp_path):
     provider = MagicMock()
 
     async def fake_stream(messages, tools=None, reasoning_effort=None):
-        last_msg = messages[-1].content if messages else ""
-        if "[Background task completion update" in last_msg:
-            # Synthesis fails (e.g. LLM provider error after retries)
-            raise RuntimeError("API connection error")
-        else:
-            # Worker execution succeeds
-            yield ProviderTextDelta(text="# Markdown Result\n- Item 1\n- Item 2")
-            yield ProviderFinish(reason="stop")
-
-    provider.stream = fake_stream
-
-    emitted_events = []
-    class FakeOutput:
-        async def emit(self, event):
-            emitted_events.append(event)
-
-    output = FakeOutput()
-    on_wake_called = []
-    runtime = Runtime(
-        workspace=tmp_path,
-        provider=provider,
-        buffer_window=0.02,
-        on_wake=lambda text: on_wake_called.append(text),
-    )
-    runtime.wake_output = output
-
-    task_id = await runtime.spawn("run task")
-    task = runtime.tasks[task_id]
-    await task.wait()
-    assert task.status == "completed"
-
-    import asyncio
-    await asyncio.sleep(0.05)
-
-    # Failed synthesis should log and be silent, never emitting raw markdown to wake_output or on_wake
-    assert len(emitted_events) == 0
-    assert len(on_wake_called) == 0
-
-
-@pytest.mark.asyncio
-async def test_runtime_announcer_clean_history(tmp_path):
-    provider = MagicMock()
-
-    async def fake_stream(messages, tools=None, reasoning_effort=None):
-        last_msg = messages[-1].content if messages else ""
-        if "[Background task completion update" in last_msg:
-            # Announcer synthesis turn (must receive NO tools!)
-            assert tools is None or len(tools) == 0
-            yield ProviderTextDelta(text="Task finished: all 42 items processed.")
-            yield ProviderFinish(reason="stop")
-        else:
-            # Worker execution
-            yield ProviderTextDelta(text="Calculation complete: 42.")
-            yield ProviderFinish(reason="stop")
-
-    provider.stream = fake_stream
-
-    emitted_events = []
-    class FakeOutput:
-        async def emit(self, event):
-            emitted_events.append(event)
-
-    output = FakeOutput()
-    runtime = Runtime(workspace=tmp_path, provider=provider, buffer_window=0.02)
-    runtime.wake_output = output
-
-    # 1. Announcer exists and has ZERO tools
-    assert hasattr(runtime, "announcer")
-    assert runtime.announcer is not None
-    assert runtime.announcer.tools is None or len(runtime.announcer.tools.get_definitions()) == 0
-
-    task_id = await runtime.spawn("process items")
-    task = runtime.tasks[task_id]
-    await task.wait()
-    assert task.status == "completed"
-
-    import asyncio
-    await asyncio.sleep(0.05)
-
-    # 2. Spoken announcement delivered to wake_output
-    from verbix.core.events import TurnComplete
-    turn_completes = [e for e in emitted_events if isinstance(e, TurnComplete)]
-    assert len(turn_completes) == 1
-    assert "Task finished: all 42 items processed." in turn_completes[0].final_text
-
-    # 3. Companion history contains ONLY the assistant speech, NEVER internal wake prompt
-    msgs = runtime.foreground.messages
-    assert not any(isinstance(m, dict) and "[Background task completion update" in str(m.get("content", "")) for m in msgs)
-    assert any(isinstance(m, dict) and m.get("role") == "assistant" and "Task finished: all 42 items processed." in str(m.get("content", "")) for m in msgs)
-
-
-@pytest.mark.asyncio
-async def test_runtime_announcer_multiple_announcements_never_exceeds_limits(tmp_path):
-    import asyncio
-
-    provider = MagicMock()
-    call_idx = 0
-
-    async def fake_stream(messages, tools=None, reasoning_effort=None):
-        nonlocal call_idx
-        call_idx += 1
-        yield ProviderTextDelta(text=f"Announcement number {call_idx}.")
+        yield ProviderTextDelta(text="# Markdown Result\n- Item 1\n- Item 2")
         yield ProviderFinish(reason="stop")
 
     provider.stream = fake_stream
@@ -442,24 +335,54 @@ async def test_runtime_announcer_multiple_announcements_never_exceeds_limits(tmp
             emitted_events.append(event)
 
     output = FakeOutput()
-    runtime = Runtime(workspace=tmp_path, provider=provider, buffer_window=0.02)
+    runtime = Runtime(workspace=tmp_path, provider=provider)
+    runtime.wake_output = output
+
+    task_id = await runtime.spawn("run task")
+    task = runtime.tasks[task_id]
+    await task.wait()
+    assert task.status == "completed"
+
+    import asyncio
+    await asyncio.sleep(0.05)
+
+    # Worker output goes directly to ledger, never emitting to wake_output
+    assert len(emitted_events) == 0
+    assert "# Markdown Result" in runtime.ledger.get_status(task_id)
+
+
+@pytest.mark.asyncio
+async def test_runtime_announcer_alias_clean_history(tmp_path):
+    mock_provider = MagicMock()
+    runtime = Runtime(workspace=tmp_path, provider=mock_provider)
+    assert hasattr(runtime, "announcer")
+    assert runtime.announcer is runtime.foreground
+
+
+@pytest.mark.asyncio
+async def test_runtime_multiple_completions_silently_recorded_in_ledger(tmp_path):
+    import asyncio
+    provider = MagicMock()
+    emitted_events = []
+    class FakeOutput:
+        async def emit(self, event):
+            emitted_events.append(event)
+
+    output = FakeOutput()
+    runtime = Runtime(workspace=tmp_path, provider=provider)
     runtime.wake_output = output
 
     try:
-        # Three completions announced as separate loop batches (never one merged flush)
         for i in ("task-1", "task-2", "task-3"):
             runtime.ledger.register_task(i, f"objective {i}")
-            runtime.ledger.mark_completed(i, f"Result {i}")
-            runtime.announcer_loop.push(i)
-            await asyncio.sleep(0.15)
+            runtime._on_task_finished(i, f"Result {i}")
 
-        from verbix.core.events import TurnComplete
-        turn_completes = [e for e in emitted_events if isinstance(e, TurnComplete)]
-        assert len(turn_completes) == 3
-        assert turn_completes[0].final_text == "Announcement number 1."
-        assert turn_completes[1].final_text == "Announcement number 2."
-        assert turn_completes[2].final_text == "Announcement number 3."
-        assert not any(e.final_text == "LimitsExceeded" for e in turn_completes)
+        await asyncio.sleep(0.05)
+
+        assert "Result task-1" in runtime.ledger.get_status("task-1")
+        assert "Result task-2" in runtime.ledger.get_status("task-2")
+        assert "Result task-3" in runtime.ledger.get_status("task-3")
+        assert len(emitted_events) == 0
     finally:
         await runtime.aclose()
 

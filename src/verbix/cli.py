@@ -21,11 +21,11 @@ from verbix.ipc.client import VerbixClient
 from verbix.ipc.server import VerbixServer
 from verbix.minisweagent.models.litellm_model import LitellmModel, LitellmModelConfig
 from verbix.runtime.runtime import Runtime
+from verbix.voice.callback_sink import select_sink
 from verbix.voice.capture import PTTCapture
 from verbix.voice.pipeline import VoicePipeline
 from verbix.voice.player import AudioPlayer
 from verbix.voice.pocket_tts import PocketTTSEngine
-from verbix.voice.sinks import SubprocessAudioSink
 from verbix.voice.stt import FasterWhisperSTT
  
 logger = logging.getLogger(__name__)
@@ -124,6 +124,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--voice",
         action="store_true",
         help="Run in voice mode (Toggle -> Live STT -> Receptionist -> PocketTTS audio playback).",
+    )
+    parser.add_argument(
+        "--audio-sink",
+        choices=("auto", "callback", "subprocess"),
+        default="auto",
+        help="Audio playback backend (default: auto — callback if sounddevice is installed, else subprocess).",
     )
     parser.add_argument(
         "--toggle",
@@ -303,7 +309,11 @@ async def async_main(args: argparse.Namespace) -> int:
         if args.voice:
             stt = FasterWhisperSTT()
             tts = PocketTTSEngine()
-            sink = SubprocessAudioSink(sample_rate=24000, audio_format="f32")
+            sink = select_sink(
+                getattr(args, "audio_sink", "auto"),
+                sample_rate=24000,
+                audio_format="f32",
+            )
             player = AudioPlayer(tts=tts, sink=sink)
             capture = PTTCapture()
             pipeline = VoicePipeline(
@@ -332,7 +342,9 @@ async def async_main(args: argparse.Namespace) -> int:
     if args.voice:
         stt = FasterWhisperSTT()
         tts = PocketTTSEngine()
-        sink = SubprocessAudioSink(sample_rate=24000, audio_format="f32")
+        sink = select_sink(
+            getattr(args, "audio_sink", "auto"), sample_rate=24000, audio_format="f32"
+        )
         player = AudioPlayer(tts=tts, sink=sink)
         capture = PTTCapture()
         printer = CliPrinter(show_thoughts=getattr(args, "show_thoughts", False))

@@ -22,6 +22,9 @@ dependencies = [
 verbix = "verbix:main"
 
 [project.optional-dependencies]
+audio = [
+    "sounddevice",
+]
 tts = [
     "pocket-tts>=3.3.0",
     "torch>=2.5.0",

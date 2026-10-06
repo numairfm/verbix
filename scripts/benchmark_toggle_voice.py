@@ -68,9 +68,8 @@ async def main() -> None:
     total_ttfa_latencies: list[float] = []
 
     for run_idx in range(1, 11):
-        # A. Simulate speech capture with LiveSTT running in background during key hold
-        live_session = stt.create_live_session(sample_rate=16000)
-        live_session.start()
+        # A. Simulate speech capture with incremental STT running during key hold
+        live_session = stt.open_session(sample_rate=16000)
 
         chunk_size = 1600  # 50ms chunks
         for i in range(0, len(test_pcm), chunk_size):
@@ -85,7 +84,7 @@ async def main() -> None:
         t_toggle_off = time.perf_counter()
 
         # 1. Finalize STT
-        transcription = await live_session.finish()
+        transcription = await live_session.finalize()
         t_stt_done = time.perf_counter()
         stt_latency = (t_stt_done - t_toggle_off) * 1000
 

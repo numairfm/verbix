@@ -66,14 +66,13 @@ class VoicePipeline:
         return {"action": "recording"}
 
     async def start_recording(self) -> None:
-        """Begins recording and attaches live STT worker."""
+        """Begins recording and attaches incremental STT session."""
         if self.capture.is_recording:
             return
 
-        create_live_fn = getattr(self.stt, "create_live_session", None)
-        if callable(create_live_fn):
-            self._live_stt = create_live_fn(sample_rate=self.capture.sample_rate)
-            self._live_stt.start()
+        open_session_fn = getattr(self.stt, "open_session", None)
+        if callable(open_session_fn):
+            self._live_stt = open_session_fn(sample_rate=self.capture.sample_rate)
             self.capture.on_chunk = self._live_stt.feed
 
         # Warm provider connection in background so TLS handshake is complete before speech ends
@@ -92,7 +91,7 @@ class VoicePipeline:
 
         transcribed_text = ""
         if self._live_stt is not None:
-            transcribed_text = await self._live_stt.finish(audio_bytes)
+            transcribed_text = await self._live_stt.finalize()
             self._live_stt = None
         elif audio_bytes and len(audio_bytes) >= 1600:
             transcribed_text = await self.stt.transcribe(audio_bytes)

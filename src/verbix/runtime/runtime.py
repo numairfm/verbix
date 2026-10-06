@@ -53,6 +53,8 @@ from verbix.provider.models import (
     ToolFunction,
 )
 from verbix.runtime.buffer import CompletionBuffer
+from verbix.runtime.floor import FloorArbiter, FloorState
+from verbix.runtime.ledger import TaskLedger
 from verbix.runtime.tools import CancelTool, FinishTool, SpawnTool, StatusTool
 from verbix.runtime.worker import WorkerTask
 from verbix.tools.base import ToolContext
@@ -367,7 +369,8 @@ class Runtime:
 
         self.tasks: dict[str, WorkerTask] = {}
         self._task_counter: int = 0
-        self._turn_lock = asyncio.Lock()
+        self.floor = FloorArbiter()
+        self.ledger = TaskLedger()
         self._turn_handle: TurnHandle = TurnHandle()
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
 
@@ -451,7 +454,7 @@ class Runtime:
     @property
     def is_idle(self) -> bool:
         """Returns True if no foreground turn is actively running."""
-        return not self._turn_lock.locked()
+        return self.floor.state == FloorState.IDLE
 
     def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
         """Subscribes an event queue to receive runtime events."""
@@ -496,33 +499,38 @@ class Runtime:
 
     async def step(self, user_text: str | None = None) -> AsyncIterator[AgentEvent]:
         """Executes a foreground conversation turn with Verbix."""
-        async with self._turn_lock:
-            # System prompt stays static (provider cache prefix); volatile
-            # grounding rides on the user message at request time only.
-            self.foreground.model = adapt_provider(self.provider)
-            if user_text is not None:
-                user_text = f"{self._request_grounding()}\n{user_text}"
-            async for event in self.foreground.step_stream(user_text):
+        async with self.floor.acquire(FloorState.FOREGROUND):
+            async for event in self._step_inner(user_text):
                 yield event
+
+    async def _step_inner(self, user_text: str | None = None) -> AsyncIterator[AgentEvent]:
+        # System prompt stays static (provider cache prefix); volatile
+        # grounding rides on the user message at request time only.
+        self.foreground.model = adapt_provider(self.provider)
+        if user_text is not None:
+            user_text = f"{self._request_grounding()}\n{user_text}"
+        async for event in self.foreground.step_stream(user_text):
+            yield event
 
     async def submit(self, user_text: str, output: Any = None) -> str:
         """Runs a complete foreground turn, streaming events to output and returning final text."""
         final_text = ""
-        self._turn_handle = TurnHandle(
-            task=asyncio.current_task(),
-            kind="foreground",
-            delivered_text_provider=lambda: self._submit_delivered_text(output),
-        )
-        try:
-            async for event in self.step(user_text):
-                if output and hasattr(output, "emit"):
-                    res = output.emit(event)
-                    if asyncio.iscoroutine(res):
-                        await res
-                if isinstance(event, CoreTurnComplete) and event.final_text:
-                    final_text = event.final_text
-        finally:
-            self._turn_handle.task = None
+        async with self.floor.acquire(FloorState.FOREGROUND):
+            self._turn_handle = TurnHandle(
+                task=asyncio.current_task(),
+                kind="foreground",
+                delivered_text_provider=lambda: self._submit_delivered_text(output),
+            )
+            try:
+                async for event in self._step_inner(user_text):
+                    if output and hasattr(output, "emit"):
+                        res = output.emit(event)
+                        if asyncio.iscoroutine(res):
+                            await res
+                    if isinstance(event, CoreTurnComplete) and event.final_text:
+                        final_text = event.final_text
+            finally:
+                self._turn_handle.task = None
         return final_text
 
     def _submit_delivered_text(self, output: Any) -> str:
@@ -535,6 +543,7 @@ class Runtime:
 
     async def cancel_turn(self) -> None:
         """Cancels an active foreground turn (e.g. on barge-in) and repairs history."""
+        self.floor.request_interrupt()
         self._turn_handle.cancel()
         self.foreground.messages[:] = validate_and_repair_history(
             self.foreground.messages, delivered_text=self._turn_handle.delivered_text()
@@ -600,11 +609,14 @@ class Runtime:
 
         def _on_finish(t: WorkerTask) -> None:
             if t.status == "cancelled":
+                self.ledger.mark_cancelled(t.id)
                 return
+            self.ledger.mark_completed(t.id, t.result or "Task completed.")
             self.buffer.push(t.id, t.result or "Task completed.")
 
         worker_task.on_completed(_on_finish)
         self.tasks[task_id] = worker_task
+        self.ledger.register_task(task_id, task)
         worker_task.start()
         return task_id
 
@@ -690,7 +702,7 @@ class Runtime:
             "[Background task completion update. Announce the completed results directly to the user in spoken conversational prose:]\n"
             + "\n".join(items)
         )
-        async with self._turn_lock:
+        async with self.floor.acquire(FloorState.ANNOUNCING):
             final_text = ""
             try:
                 self.announcer.messages = []
@@ -717,6 +729,8 @@ class Runtime:
                 return
 
             if final_text:
+                for task_id, _ in batch:
+                    self.ledger.mark_delivered(task_id)
                 self.foreground.messages.append({"role": "assistant", "content": final_text})
                 if self.on_wake:
                     wake_res = self.on_wake(final_text)

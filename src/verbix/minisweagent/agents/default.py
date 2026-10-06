@@ -432,7 +432,12 @@ class DefaultAgent:
                             if self.tools is not None and "finish" in self.tools._handlers:
                                 try:
                                     res = await self.tools.aexecute("finish", args)
-                                    obs = res if isinstance(res, str) else str(res)
+                                    if isinstance(res, str):
+                                        obs = res
+                                    elif hasattr(res, "observation"):
+                                        obs = res.observation
+                                    else:
+                                        obs = str(res)
                                 except Exception:  # noqa: BLE001, S110
                                     pass
                             tool_msg: dict[str, Any] = {

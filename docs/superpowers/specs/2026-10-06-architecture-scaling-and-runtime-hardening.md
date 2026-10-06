@@ -19,7 +19,7 @@ stay fast and valid. No processes are left behind.
 | # | Decision |
 |---|---|
 | D1 | **Local-first.** Zero-config is 100% free/offline on CPU; the only required secret is one LLM key. STT/TTS sit behind pluggable interfaces so cloud backends can be opted into later. |
-| D2 | **Push-to-talk stays primary.** Add an *optional* hands-free VAD-endpointing mode. |
+| D2 | **Strict Push-to-Talk only.** No always-listening or hands-free open-mic mode. The mic is only active while the user explicitly toggles recording. Audio optimization focuses purely on zero-latency PTT release. |
 | D3 | **GPU when available, CPU always works.** Target dev box is an AMD laptop with a Radeon iGPU, so **Vulkan** is the preferred acceleration path. No CUDA-only dependencies. |
 | D4 | **Context compaction:** deterministic pruning on the hot path; LLM summarization only **async, off the hot path**, when idle. |
 
@@ -214,7 +214,7 @@ flowchart LR
 5. `finalize()` decodes only the open segment (usually < 3 s), which satisfies L2.
 6. Partials for the open segment are off by default on CPU and enabled automatically on GPU backends.
 
-**S2 — Hands-free mode (D2, optional).** `voice.mode: ptt | handsfree`. The endpoint fires after speech of ≥ 250 ms followed by silence ≥ `endpoint_silence_ms` (default 500, range 300–800). Phase 3 v1 is **half-duplex**: VAD is ignored while the floor is `FOREGROUND/ANNOUNCING` audio, and barge-in stays on the key. v2 documents an opt-in PipeWire `libpipewire-module-echo-cancel` source for spoken barge-in with a raised VAD threshold. That gives echo cancellation with no code dependency.
+**S2 — Strict Push-to-Talk (D2).** `voice.mode: ptt`. No background listening loop or always-open mic. Recording is triggered strictly via user interaction (toggle key, Enter, or IPC `toggle`). When recording ends, the microphone stream is immediately closed and resources released. Audio pipeline optimizations apply exclusively to incremental transcription during active key-down and instant earcon/finalization on key-release.
 
 **S3 — Real provider warm-up.** `LitellmModel.warm()` pre-opens the HTTPS connection when recording starts, via a cheap authenticated request (e.g. a 1-token completion with `max_tokens=1`, or a models list where the provider supports it). It is rate-limited to once per 60 s.
 
@@ -358,10 +358,9 @@ Each phase ends with a green suite and is independently shippable. Every phase i
 
 ### Phase 3 — Medium-term scaling
 1. A7 **Tier 2** async summarization.
-2. S2 hands-free VAD endpointing (half-duplex), plus PipeWire AEC documentation for full-duplex.
-3. `whisper.cpp` Vulkan STT backend with `auto` detection.
-4. Opt-in cloud STT/TTS backends behind the interfaces.
-5. Event-bus consumers: ledger progress events, worker `screenshot` tool, `systemd-run` scope isolation.
+2. `whisper.cpp` Vulkan STT backend with `auto` detection.
+3. Opt-in cloud STT/TTS backends behind the interfaces.
+4. Event-bus consumers: ledger progress events, worker `screenshot` tool, `systemd-run` scope isolation.
 
 ```mermaid
 flowchart LR

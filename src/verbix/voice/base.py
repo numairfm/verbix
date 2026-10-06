@@ -101,5 +101,9 @@ class MockAudioSink:
             self.stop()
             raise
 
+    @property
+    def stopped(self) -> bool:
+        return self._stopped
+
     def stop(self) -> None:
         self._stopped = True

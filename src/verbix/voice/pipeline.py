@@ -65,10 +65,21 @@ class VoicePipeline:
         await self.start_recording()
         return {"action": "recording"}
 
+    @property
+    def turn_output(self) -> SpeechOutput:
+        return self._speech_output
+
     async def start_recording(self) -> None:
         """Begins recording and attaches incremental STT session."""
         if self.capture.is_recording:
             return
+
+        # Hard-mute/interrupt speaker playback immediately so assistant cannot speak over recording
+        self._speech_output.interrupt()
+        if self.runtime is not None and hasattr(self.runtime, "floor"):
+            from verbix.runtime.floor import FloorState
+
+            self.runtime.floor.set_state(FloorState.LISTENING)
 
         open_session_fn = getattr(self.stt, "open_session", None)
         if callable(open_session_fn):
@@ -99,6 +110,10 @@ class VoicePipeline:
 
         transcribed_text = transcribed_text.strip()
         if not transcribed_text:
+            if self.runtime is not None and hasattr(self.runtime, "floor"):
+                from verbix.runtime.floor import FloorState
+
+                self.runtime.floor.set_state(FloorState.IDLE)
             return {"action": "idle", "transcription": ""}
 
         # Launch turn execution in background so toggle command returns immediately
@@ -109,10 +124,26 @@ class VoicePipeline:
 
     async def execute_voice_turn(self, user_text: str) -> str | None:
         """Executes a complete receptionist turn from transcribed user text, streaming TTS audio."""
+        from verbix.runtime.floor import FloorState
+
         if self.printer and hasattr(self.printer, "reset_delivered"):
             self.printer.reset_delivered()
         self._speech_output.reset()
-        return await self.runtime.submit(user_text, self._speech_output)
+        if self.runtime is not None and hasattr(self.runtime, "floor"):
+            self.runtime.floor.set_state(FloorState.SPEAKING)
+        try:
+            res = await self.runtime.submit(user_text, self._speech_output)
+            # Floor stays in SPEAKING until audio playback completely drains
+            while self._speech_output.is_playing:
+                await asyncio.sleep(0.02)
+            return res
+        finally:
+            if (
+                self.runtime is not None
+                and hasattr(self.runtime, "floor")
+                and self.runtime.floor.state == FloorState.SPEAKING
+            ):
+                self.runtime.floor.set_state(FloorState.IDLE)
 
     def delivered_text(self) -> str:
         return self._speech_output.delivered_text()

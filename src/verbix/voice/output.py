@@ -14,6 +14,7 @@ import re
 from typing import Any
 
 from verbix.core.events import AgentEvent, TextDelta, TurnComplete
+from verbix.core.telemetry import record_latency
 from verbix.voice.segments import normalize_for_tts, split_chunks
 
 logger = logging.getLogger(__name__)
@@ -91,8 +92,10 @@ class SpeechOutput:
 
     def interrupt(self) -> None:
         """Barge-in: silence audio now, discard everything not yet spoken."""
+        record_latency("interrupt_called")
         self._epoch += 1
         self.sink.stop()
+        record_latency("audio_silent")
         if self._pump and not self._pump.done():
             self._pump.cancel()
         self._pump = None
@@ -150,6 +153,8 @@ class SpeechOutput:
                 self._pump = None
 
     async def _feed(self, epoch: int):
+        first_write = True
+        first_pcm = True
         while True:
             tag, kind, payload = await self._frames.get()
             if tag != self._epoch or tag != epoch:
@@ -157,13 +162,22 @@ class SpeechOutput:
             if kind == "end":
                 return
             if kind == "cue":
+                if first_write:
+                    record_latency("sink_first_write")
+                    first_write = False
                 yield payload
                 continue
             spoken = False
             async for audio in self.tts.synthesize(normalize_for_tts(payload)):
                 if self._epoch != epoch:
                     return
+                if first_pcm:
+                    record_latency("tts_first_pcm")
+                    first_pcm = False
                 if not spoken:
                     self._delivered.append(payload)
                     spoken = True
+                if first_write:
+                    record_latency("sink_first_write")
+                    first_write = False
                 yield audio

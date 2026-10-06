@@ -24,6 +24,7 @@ from verbix.core.events import (
     ToolCallStarted,
     TurnComplete,
 )
+from verbix.core.telemetry import record_latency
 from verbix.minisweagent.exceptions import (
     FormatError,
     InterruptAgentFlow,
@@ -39,6 +40,7 @@ from verbix.minisweagent.utils.history import (
     validate_and_repair_history,
 )
 from verbix.minisweagent.utils.serialize import recursive_merge
+from verbix.voice.segments import split_chunks
 
 
 class AgentConfig(BaseModel):
@@ -321,6 +323,9 @@ class DefaultAgent:
                 turn_complete_event: TurnComplete | None = None
                 buffered_text_events: list[TextDelta] = []
                 has_tool_calls = False
+                pending_text = ""
+                released_text = ""
+                first_chunk_marked = False
 
                 # Single query_stream call site: pre-query hooks (e.g. compaction) go here.
                 self.messages[:] = compact_messages(self.messages, max_tokens=self.config.max_context_tokens or 16000)
@@ -330,11 +335,26 @@ class DefaultAgent:
                         if has_tool_calls:
                             continue
                         buffered_text_events.append(event)
+                        pending_text += event.text
+                        # A4: release at the first speakable boundary instead of
+                        # buffering the whole turn; short pre-tool chatter never
+                        # splits, so it stays suppressed as before.
+                        if len(split_chunks(pending_text)) > 1:
+                            for buffered in buffered_text_events:
+                                self._delivered_text += buffered.text
+                                yield buffered
+                            released_text += pending_text
+                            pending_text = ""
+                            buffered_text_events.clear()
+                            if not first_chunk_marked:
+                                record_latency("first_speakable_chunk")
+                                first_chunk_marked = True
                     elif isinstance(event, ThoughtDelta):
                         yield event
                     elif isinstance(event, ToolCallDelta):
                         has_tool_calls = True
                         buffered_text_events.clear()
+                        pending_text = ""
                         idx = event.index
                         if idx not in accumulated_tool_calls:
                             accumulated_tool_calls[idx] = {
@@ -352,6 +372,7 @@ class DefaultAgent:
                     elif isinstance(event, ToolCallStarted):
                         has_tool_calls = True
                         buffered_text_events.clear()
+                        pending_text = ""
                         idx = len(accumulated_tool_calls)
                         accumulated_tool_calls[idx] = {
                             "call_id": event.call_id,
@@ -400,10 +421,11 @@ class DefaultAgent:
                             }
                         )
 
-                    # Record assistant response message (suppressed pre-tool chatter is not stored)
+                    # Record assistant response message (unreleased pre-tool chatter is
+                    # not stored; the already-released prefix is kept as content).
                     assistant_msg: dict[str, Any] = {
                         "role": "assistant",
-                        "content": None,
+                        "content": released_text or None,
                         "tool_calls": [
                             {
                                 "id": tc["call_id"],

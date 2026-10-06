@@ -75,6 +75,12 @@ def _default_vad(sample_rate: int) -> Callable[[bytes], bool]:
     return _is_speech
 
 
+def _looks_like_hallucination(text: str) -> bool:
+    """True for punctuation-only decoder output (the classic silence hallucination)."""
+    s = text.strip()
+    return bool(s) and all(ch in ".,…_ \t-" for ch in s)
+
+
 class FasterWhisperSTT:
     """Local Speech-to-Text engine using quantized faster-whisper on CPU.
 
@@ -165,6 +171,18 @@ class FasterWhisperSTT:
                 audio_float,
             ).astype(np.float32)
 
+        # No-speech gate: skip the model entirely when bundled Silero finds
+        # no speech. Mic noise passes the energy pre-gate but must never be
+        # decoded (tiny.en hallucinates dots on noise). VAD errors fail open.
+        if len(audio_float) >= 512:
+            try:
+                from faster_whisper.vad import get_speech_timestamps
+
+                if not get_speech_timestamps(audio_float, sampling_rate=16000):
+                    return ""
+            except (ImportError, OSError, RuntimeError, ValueError):
+                pass
+
         def _sync_transcribe() -> str:
             model = self._load_model()
             kwargs: dict[str, Any] = {}
@@ -178,7 +196,8 @@ class FasterWhisperSTT:
                 **kwargs,
             )
             parts = [s.text.strip() for s in segments if s.text.strip()]
-            return " ".join(parts).strip()
+            result = " ".join(parts).strip()
+            return "" if _looks_like_hallucination(result) else result
 
         try:
             return await asyncio.to_thread(_sync_transcribe)

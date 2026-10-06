@@ -553,6 +553,9 @@ class Runtime:
                             await res
                     if isinstance(event, CoreTurnComplete) and event.final_text:
                         final_text = event.final_text
+                if output and getattr(output, "is_playing", False):
+                    while output.is_playing:
+                        await asyncio.sleep(0.02)
             finally:
                 self._turn_handle.task = None
         return final_text

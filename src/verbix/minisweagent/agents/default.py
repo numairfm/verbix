@@ -33,6 +33,7 @@ from verbix.minisweagent.exceptions import (
 )
 from verbix.minisweagent.models.utils.actions_toolcall import BASH_TOOL
 from verbix.minisweagent.tools.registry import ToolRegistry
+from verbix.minisweagent.utils.compaction import compact_messages
 from verbix.minisweagent.utils.history import (
     CANCELLED_TOOL_CONTENT,
     validate_and_repair_history,
@@ -76,6 +77,8 @@ class AgentConfig(BaseModel):
 
     turn_scoped_limits: bool = False
     """Reset turn_calls/turn_cost at the start of each step_stream call (foreground agent)."""
+    max_context_tokens: int | None = None
+    """Tier 1 context budget for rolling compaction (None = default 16000)."""
 
 
 def cap_observation(text: str, max_chars: int = 10000) -> str:
@@ -315,6 +318,7 @@ class DefaultAgent:
                 has_tool_calls = False
 
                 # Single query_stream call site: pre-query hooks (e.g. compaction) go here.
+                self.messages[:] = compact_messages(self.messages, max_tokens=self.config.max_context_tokens or 16000)
                 stream = self.model.query_stream(self.messages, tools=tool_defs)
                 async for event in stream:
                     if isinstance(event, TextDelta):

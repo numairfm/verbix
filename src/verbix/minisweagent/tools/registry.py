@@ -12,13 +12,22 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, dict[str, Any]] = {}
         self._handlers: dict[str, Callable[..., Any]] = {}
+        self._side_effecting: set[str] = set()
 
     def register(
-        self, name: str, definition: dict[str, Any], handler: Callable[..., Any]
+        self, name: str, definition: dict[str, Any], handler: Callable[..., Any], *, side_effecting: bool = False
     ) -> None:
         """Register a tool definition and its handler."""
         self._tools[name] = definition
         self._handlers[name] = handler
+        if side_effecting:
+            self._side_effecting.add(name)
+        else:
+            self._side_effecting.discard(name)
+
+    def is_side_effecting(self, name: str) -> bool:
+        """Return True if the tool performs side effects that must survive cancellation."""
+        return name in self._side_effecting
 
     def get_definitions(self, names: list[str] | None = None) -> list[dict[str, Any]]:
         """Return tool definitions for the requested names, or all if names is None."""

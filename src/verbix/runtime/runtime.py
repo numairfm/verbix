@@ -5,6 +5,7 @@ import logging
 import platform
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent
 from verbix.minisweagent.environments.local import LocalEnvironment
 from verbix.minisweagent.models.litellm_model import LitellmModel
 from verbix.minisweagent.tools.registry import ToolRegistry
+from verbix.minisweagent.utils.history import validate_and_repair_history
 from verbix.provider.models import (
     Finish as ProviderFinish,
 )
@@ -300,6 +302,25 @@ def adapt_provider(provider: Any) -> Any:
     return provider
 
 
+@dataclass
+class TurnHandle:
+    """Owns an active turn: its task, kind, and delivered-text provider."""
+
+    task: asyncio.Task[Any] | None = None
+    kind: str = "foreground"
+    delivered_text_provider: Callable[[], str] | None = None
+
+    def delivered_text(self) -> str:
+        if self.delivered_text_provider is None:
+            return ""
+        return self.delivered_text_provider()
+
+    def cancel(self) -> None:
+        """Idempotently cancel the turn task."""
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
+
+
 class Runtime:
     """Core Verbix runtime orchestrating the foreground agent and independent background workers."""
 
@@ -347,7 +368,7 @@ class Runtime:
         self.tasks: dict[str, WorkerTask] = {}
         self._task_counter: int = 0
         self._turn_lock = asyncio.Lock()
-        self._active_turn_task: asyncio.Task[Any] | None = None
+        self._turn_handle: TurnHandle = TurnHandle()
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
 
         # Completion buffer for batching finished worker results
@@ -381,7 +402,9 @@ class Runtime:
 
                 return _handler
 
-            registry.register(tool.name, definition, _make_handler(tool))
+            registry.register(
+                tool.name, definition, _make_handler(tool), side_effecting=tool.name in ("spawn", "cancel")
+            )
 
         agent_cfg_dict["system_template"] = self.system_prompt
         agent_cfg_dict["system_prompt"] = self.system_prompt
@@ -490,7 +513,11 @@ class Runtime:
     async def submit(self, user_text: str, output: Any = None) -> str:
         """Runs a complete foreground turn, streaming events to output and returning final text."""
         final_text = ""
-        self._active_turn_task = asyncio.current_task()
+        self._turn_handle = TurnHandle(
+            task=asyncio.current_task(),
+            kind="foreground",
+            delivered_text_provider=lambda: self._submit_delivered_text(output),
+        )
         try:
             async for event in self.step(user_text):
                 if output and hasattr(output, "emit"):
@@ -500,13 +527,23 @@ class Runtime:
                 if isinstance(event, CoreTurnComplete) and event.final_text:
                     final_text = event.final_text
         finally:
-            self._active_turn_task = None
+            self._turn_handle.task = None
         return final_text
 
+    def _submit_delivered_text(self, output: Any) -> str:
+        delivered = getattr(output, "delivered_text", None)
+        if callable(delivered):
+            res = delivered()
+            if isinstance(res, str):
+                return res
+        return self.foreground._delivered_text
+
     async def cancel_turn(self) -> None:
-        """Cancels an active foreground turn (e.g. on barge-in)."""
-        if self._active_turn_task and not self._active_turn_task.done():
-            self._active_turn_task.cancel()
+        """Cancels an active foreground turn (e.g. on barge-in) and repairs history."""
+        self._turn_handle.cancel()
+        self.foreground.messages[:] = validate_and_repair_history(
+            self.foreground.messages, delivered_text=self._turn_handle.delivered_text()
+        )
 
     async def spawn(self, task: str) -> str:
         """Spawns an independent background worker with full workspace tools."""

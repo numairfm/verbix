@@ -32,6 +32,7 @@ async def test_turn_complete_never_respeaks_delivered_text():
     out = SpeechOutput(tts=MockTextToSpeech(), sink=MockAudioSink())
     await out.emit(TextDelta(text="Hello world. This is spoken."))
     await asyncio.sleep(0.2)
+    n = len(out.tts.synthesized_texts)
     await out.emit(TurnComplete(final_text="Hello world. This is spoken."))
     await asyncio.sleep(0.2)
-    assert out.tts.synthesized_texts.count("Hello world. This is spoken.") == 0
+    assert len(out.tts.synthesized_texts) == n

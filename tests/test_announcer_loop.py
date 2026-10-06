@@ -35,3 +35,29 @@ async def test_announcer_loop_batches_without_dropping_items():
     flattened = [item for batch in announced for item in batch]
     assert "t1" in flattened
     assert "t2" in flattened
+
+
+@pytest.mark.asyncio
+async def test_announcer_loop_merges_burst_within_window():
+    floor = FloorArbiter()
+    ledger = TaskLedger()
+    announced = []
+
+    async def speak_fn(batch):
+        announced.append(list(batch))
+
+    announcer = AnnouncerLoop(floor=floor, ledger=ledger, speak_fn=speak_fn, batch_window=0.05)
+    announcer.start()
+
+    for tid in ("t1", "t2"):
+        ledger.register_task(tid, f"obj {tid}")
+        ledger.mark_completed(tid, f"res {tid}")
+        announcer.push(tid)  # Both pushes land inside one batch window
+
+    await asyncio.sleep(0.15)
+    await announcer.stop()
+
+    assert len(announced) == 1
+    assert set(announced[0]) == {"t1", "t2"}
+    assert ledger.get("t1").delivery == "heard"
+    assert ledger.get("t2").delivery == "heard"

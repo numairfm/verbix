@@ -55,13 +55,10 @@ class AnnouncerLoop:
             self._task = None
 
     async def _run(self) -> None:
+        batch: list[str] = []
         while True:
             try:
-                first = await self._queue.get()
-            except asyncio.CancelledError:
-                break
-            batch = [first]
-            try:
+                batch = [await self._queue.get()]
                 await asyncio.sleep(self.batch_window)
                 while not self._queue.empty():
                     batch.append(self._queue.get_nowait())
@@ -71,13 +68,17 @@ class AnnouncerLoop:
                     try:
                         res = self.speak_fn(batch)
                         if asyncio.iscoroutine(res):
-                            await res
+                            res = await res
                     except Exception:
                         logger.exception("Announcer speak_fn failed")
                         continue
-                    for task_id in batch:
-                        self.ledger.mark_delivered(task_id)
+                    if res is not False:
+                        for task_id in batch:
+                            self.ledger.mark_heard(task_id)
+                batch = []
             except asyncio.CancelledError:
+                for task_id in batch:  # stop() mid-announcement: requeue, never drop
+                    self._queue.put_nowait(task_id)
                 break
             except Exception:
                 logger.exception("Error in announcer loop")

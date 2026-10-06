@@ -45,11 +45,11 @@ class TaskLedger:
         entry.status = "cancelled"
         entry.finished_at = time.time()
 
-    def mark_delivered(self, task_id: str) -> None:
+    def mark_heard(self, task_id: str) -> None:
         entry = self._tasks.get(task_id)
         if entry is None:
             return
-        entry.delivery = "delivered"
+        entry.delivery = "heard"
 
     def get_compact_summary(self) -> str:
         recent = list(self._tasks.values())[-6:]

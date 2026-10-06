@@ -695,24 +695,26 @@ class Runtime:
             f"{task_lines}"
         )
 
-    async def _announce_ids(self, batch: list[str]) -> None:
+    async def _announce_ids(self, batch: list[str]) -> bool:
         """AnnouncerLoop speak_fn: floor already held, resolve results via ledger."""
         tuples = []
         for task_id in batch:
             entry = self.ledger.get(task_id)
             tuples.append((task_id, entry.result_summary if entry else ""))
-        await self._speak_batch(tuples)
+        return await self._speak_batch(tuples)
 
     async def _on_buffer_flush(self, batch: list[tuple[str, str]]) -> None:
         """Direct flush entry point (floor acquired here)."""
         async with self.floor.acquire(FloorState.ANNOUNCING):
-            await self._speak_batch(batch)
+            if await self._speak_batch(batch):
+                for task_id, _ in batch:
+                    self.ledger.mark_heard(task_id)
 
-    async def _speak_batch(self, batch: list[tuple[str, str]]) -> None:
+    async def _speak_batch(self, batch: list[tuple[str, str]]) -> bool:
         """Synthesizes background worker results via dedicated announcer and delivers to output."""
         items = [f"- {task_id}: {result.strip()}" for task_id, result in batch if result.strip()]
         if not items:
-            return
+            return False
         wake_prompt = (
             f"{self._request_grounding()}\n"
             "[Background task completion update. Announce the completed results directly to the user in spoken conversational prose:]\n"
@@ -741,16 +743,16 @@ class Runtime:
                     final_text = event.final_text
         except Exception:
             logger.exception("Failed to synthesize background task completion announcement")
-            return
+            return False
 
         if final_text:
-            for task_id, _ in batch:
-                self.ledger.mark_delivered(task_id)
             self.foreground.messages.append({"role": "assistant", "content": final_text})
             if self.on_wake:
                 wake_res = self.on_wake(final_text)
                 if asyncio.iscoroutine(wake_res):
                     await wake_res
+            return True
+        return False
 
     async def aclose(self) -> None:
         """Teardown: stop the announcer loop."""

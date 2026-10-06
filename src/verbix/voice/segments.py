@@ -2,8 +2,9 @@
 
 import re
 
-SOFT_MAX = 220
-EAGER_MIN = 40
+SOFT_MAX = 130
+MAX_WORDS = 24
+EAGER_MIN = 35
 
 _PROTECTED = re.compile(
     r"https?://\S+"  # URLs (covers :// and dotted paths)
@@ -36,26 +37,33 @@ def _boundaries(text):
     return sorted(cuts)
 
 
+def _is_valid_cut(s: str, cut: int) -> bool:
+    head = s[:cut].strip()
+    return len(head) <= SOFT_MAX and len(head.split()) <= MAX_WORDS
+
+
 def split_chunks(text):
     s = text.strip()
     if not s:
         return []
     if len(s) >= EAGER_MIN:
         cuts = _boundaries(s)
-        if cuts:
+        if cuts and _is_valid_cut(s, cuts[0]):
             head, tail = s[: cuts[0]].rstrip(), s[cuts[0]:].strip()
-            if head and tail and len(head) <= SOFT_MAX and len(tail) <= SOFT_MAX:
+            if head and tail:
                 return [head, *_split_tail(tail)]
     return _split_tail(s)
 
 
 def _split_tail(s):
     out, cur = [], s
-    while len(cur) > SOFT_MAX:
-        cuts = [c for c in _boundaries(cur) if c <= SOFT_MAX]
-        cut = cuts[-1] if cuts else SOFT_MAX
-        if len(cur) - cut > SOFT_MAX:
-            cut = SOFT_MAX  # ponytail: boundary would strand oversized tail; hard cut instead
+    while len(cur) > SOFT_MAX or len(cur.split()) > MAX_WORDS:
+        punc_cuts = [c for c in _boundaries(cur) if _is_valid_cut(cur, c)]
+        if punc_cuts:
+            cut = punc_cuts[-1]
+        else:
+            word_cuts = [m.end() for m in re.finditer(r"\s+", cur) if _is_valid_cut(cur, m.end())]
+            cut = word_cuts[-1] if word_cuts else SOFT_MAX
         head, cur = cur[:cut].rstrip(), cur[cut:].strip()
         if head:
             out.append(head)

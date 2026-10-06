@@ -14,9 +14,24 @@ def test_no_split_inside_protected_tokens():
 
 
 def test_soft_max_forces_split_at_last_clause():
-    long_text = "First part here, " + "x" * 300
+    long_text = "First part here, " + "word " * 50
     chunks = split_chunks(long_text)
-    assert len(chunks) == 2 and all(len(c) <= 221 for c in chunks)
+    assert len(chunks) >= 2
+    assert all(len(c) <= 130 and len(c.split()) <= 24 for c in chunks)
+
+
+def test_long_sentence_without_clauses_splits_at_word_boundaries():
+    text = (
+        "The history of computers spans from early mechanical calculating devices "
+        "like Charles Babbage's nineteenth-century analytical engine through the vacuum "
+        "tubes and transistors of the mid-twentieth century that powered massive room-sized mainframes."
+    )
+    chunks = split_chunks(text)
+    assert len(chunks) >= 2
+    assert all(len(c) <= 130 and len(c.split()) <= 24 for c in chunks)
+    # Ensure words are not chopped in half (e.g. 'massive' wasn't split into 'mass' and 'ive')
+    assert any("massive" in c for c in chunks)
+    assert not any(c.startswith("ive ") for c in chunks)
 
 
 def test_normalizer_strips_markdown_and_symbols():

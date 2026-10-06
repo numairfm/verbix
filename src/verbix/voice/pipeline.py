@@ -2,75 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from typing import TYPE_CHECKING, Any
 
-from verbix.core.events import AgentEvent, TextDelta, TurnComplete
 from verbix.voice.capture import PTTCapture
+from verbix.voice.output import SpeechOutput
 from verbix.voice.player import AudioPlayer
 
 if TYPE_CHECKING:
     from verbix.voice.base import SpeechToText
 
 logger = logging.getLogger(__name__)
-
-
-def split_sentences(text: str) -> list[str]:
-    """Splits a stream of text into spoken sentences at punctuation or newline boundaries."""
-    parts = re.split(r"(?<=[.!?])\s+|\n+", text)
-    return [p.strip() for p in parts if p.strip()]
-
-
-class SpeechTurnOutput:
-    """TurnOutput implementation that feeds completed sentences to the AudioPlayer."""
-
-    def __init__(self, player: AudioPlayer, printer: Any = None) -> None:
-        self.player = player
-        self.printer = printer
-        self._buffer: str = ""
-        self._delivered_sentences: list[str] = []
-
-    async def emit(self, event: AgentEvent) -> None:
-        if self.printer and hasattr(self.printer, "emit"):
-            res = self.printer.emit(event)
-            if asyncio.iscoroutine(res):
-                await res
-
-        if isinstance(event, TextDelta):
-            self._buffer += event.text
-            if any(p in self._buffer for p in (". ", "! ", "? ", ".\n", "!\n", "?\n")):
-                parts = re.split(r"(?<=[.!?])(?:\s+|\n+)", self._buffer)
-                if len(parts) > 1:
-                    complete = [p.strip() for p in parts[:-1] if p.strip()]
-                    self._buffer = parts[-1]
-                    for s in complete:
-                        try:
-                            await self.player.speak(s)
-                            self._delivered_sentences.append(s)
-                        except asyncio.CancelledError:
-                            self._delivered_sentences.append(s)
-                            raise
-
-        elif isinstance(event, TurnComplete):
-            if self._buffer.strip():
-                parts = split_sentences(self._buffer)
-                self._buffer = ""
-                for s in parts:
-                    if s:
-                        await self.player.speak(s)
-                        self._delivered_sentences.append(s)
-            elif event.final_text.strip() and event.final_text.strip() not in self._delivered_sentences:
-                txt = event.final_text.strip()
-                await self.player.speak(txt)
-                self._delivered_sentences.append(txt)
-            self._delivered_sentences.clear()
-
-    def delivered_text(self) -> str:
-        return " ".join(self._delivered_sentences).strip()
-
-    def reset_delivered(self) -> None:
-        self._buffer = ""
-        self._delivered_sentences.clear()
 
 
 class VoicePipeline:
@@ -93,7 +34,7 @@ class VoicePipeline:
         self.capture = capture or PTTCapture()
         self.printer = printer
 
-        self._speech_output = SpeechTurnOutput(self.player, printer=self.printer)
+        self._speech_output = SpeechOutput(player.tts, player.sink, printer=self.printer)
         if self.runtime is not None:
             self.runtime.wake_output = self._speech_output
 
@@ -112,8 +53,8 @@ class VoicePipeline:
             return await self.stop_recording_and_process()
 
         # 2. Playback / turn barge-in
-        if self.player.is_playing or not self.runtime.is_idle:
-            self.player.stop()
+        if self._speech_output.is_playing or self.player.is_playing or not self.runtime.is_idle:
+            self._speech_output.interrupt()
             await self.runtime.cancel_turn()
             self.runtime.user_active = True
             await self.start_recording()
@@ -147,7 +88,7 @@ class VoicePipeline:
         audio_bytes = await self.capture.stop_recording()
 
         # Instant audible cue on capture stop
-        asyncio.create_task(self.player.play_cue())
+        asyncio.create_task(self._speech_output.play_cue())
 
         transcribed_text = ""
         if self._live_stt is not None:
@@ -170,5 +111,8 @@ class VoicePipeline:
         """Executes a complete receptionist turn from transcribed user text, streaming TTS audio."""
         if self.printer and hasattr(self.printer, "reset_delivered"):
             self.printer.reset_delivered()
-        self._speech_output.reset_delivered()
+        self._speech_output.reset()
         return await self.runtime.submit(user_text, self._speech_output)
+
+    def delivered_text(self) -> str:
+        return self._speech_output.delivered_text()

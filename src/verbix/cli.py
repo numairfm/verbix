@@ -110,16 +110,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Model for background autonomous workers (overrides --model).",
     )
     parser.add_argument(
-        "--isolate-worktrees",
-        action="store_true",
-        help="Run background workers in isolated git worktrees.",
-    )
-    parser.add_argument(
-        "--allow-network",
-        action="store_true",
-        help="Allow outbound network access in worker sandbox.",
-    )
-    parser.add_argument(
         "--serve",
         action="store_true",
         help="Run as a headless background IPC daemon listening on Unix Domain Socket.",

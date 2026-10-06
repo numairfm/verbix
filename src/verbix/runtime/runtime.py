@@ -323,6 +323,52 @@ class TurnHandle:
             self.task.cancel()
 
 
+class WakeOutputFanOut:
+    """Fans wake-turn events out to the voice sink and IPC subscriber queues."""
+
+    def __init__(
+        self,
+        voice_output: Any = None,
+        broadcast: Callable[[Any], Any] | None = None,
+    ) -> None:
+        self.voice_output = voice_output
+        self._broadcast = broadcast
+        self._delivered: list[str] = []
+
+    async def emit(self, event: AgentEvent) -> None:
+        text = getattr(event, "text", "")
+        if text:
+            self._delivered.append(text)
+        if self.voice_output is not None and hasattr(self.voice_output, "emit"):
+            res = self.voice_output.emit(event)
+            if asyncio.iscoroutine(res):
+                await res
+        if self._broadcast is not None:
+            res = self._broadcast(event)
+            if asyncio.iscoroutine(res):
+                await res
+
+    def delivered_text(self) -> str:
+        delivered = getattr(self.voice_output, "delivered_text", None)
+        if callable(delivered):
+            try:
+                res = delivered()
+                if isinstance(res, str) and res:
+                    return res
+            except Exception:  # noqa: BLE001, S110
+                pass
+        return "".join(self._delivered)
+
+    def reset_delivered(self) -> None:
+        self._delivered.clear()
+        reset = getattr(self.voice_output, "reset_delivered", None)
+        if callable(reset):
+            try:
+                reset()
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+
 class Runtime:
     """Core Verbix runtime orchestrating the foreground agent and independent background workers."""
 
@@ -613,15 +659,39 @@ class Runtime:
         def _on_finish(t: WorkerTask) -> None:
             if t.status == "cancelled":
                 self.ledger.mark_cancelled(t.id)
+                self._broadcast_event("task_cancelled", {"task_id": t.id})
                 return
             self.ledger.mark_completed(t.id, t.result or "Task completed.")
+            self._broadcast_event(
+                "task_completed",
+                {"task_id": t.id, "result": t.result or "Task completed."},
+            )
             self.announcer_loop.push(t.id)
 
         worker_task.on_completed(_on_finish)
         self.tasks[task_id] = worker_task
         self.ledger.register_task(task_id, task)
+        self._broadcast_event(
+            "task_registered", {"task_id": task_id, "objective": task}
+        )
         worker_task.start()
         return task_id
+
+    def get_task_status_summary(self, task_id: str | None = None) -> str:
+        """Ledger-backed status summary for the IPC server."""
+        if task_id is not None:
+            entry = self.ledger.get(task_id)
+            if entry is None:
+                return f"No task found with ID '{task_id}'."
+            summary = f"{entry.id}: '{entry.objective}' ({entry.status})"
+            if entry.result_summary:
+                summary += f": {entry.result_summary}"
+            return summary
+        return self.ledger.get_compact_summary() or "No active background tasks."
+
+    async def cancel_task(self, task_id: str) -> bool:
+        """IPC cancel delegating to cancel(); True only when a task was cancelled."""
+        return (await self.cancel(task_id)).startswith("Cancelled")
 
     def list_active_tasks(self) -> list[WorkerTask]:
         return [t for t in self.tasks.values() if t.status == "running"]
@@ -710,6 +780,15 @@ class Runtime:
                 for task_id, _ in batch:
                     self.ledger.mark_heard(task_id)
 
+    def _broadcast_wake_event(self, event: AgentEvent) -> None:
+        """Broadcasts a wake-turn event to IPC subscribers as plain data."""
+        payload: dict[str, Any] = {}
+        for attr in ("text", "thought", "final_text"):
+            val = getattr(event, attr, None)
+            if isinstance(val, str) and val:
+                payload[attr] = val
+        self._broadcast_event("wake_event", {"event": type(event).__name__, **payload})
+
     async def _speak_batch(self, batch: list[tuple[str, str]]) -> bool:
         """Synthesizes background worker results via dedicated announcer and delivers to output."""
         items = [f"- {task_id}: {result.strip()}" for task_id, result in batch if result.strip()]
@@ -721,6 +800,7 @@ class Runtime:
             + "\n".join(items)
         )
         final_text = ""
+        fan_out = WakeOutputFanOut(self.wake_output, self._broadcast_wake_event)
         try:
             self.announcer.messages = []
             self.announcer.n_calls = 0
@@ -735,10 +815,7 @@ class Runtime:
                         "Announcer step aborted with %s", event.final_text
                     )
                     continue
-                if self.wake_output and hasattr(self.wake_output, "emit"):
-                    res = self.wake_output.emit(event)
-                    if asyncio.iscoroutine(res):
-                        await res
+                await fan_out.emit(event)
                 if isinstance(event, CoreTurnComplete) and event.final_text:
                     final_text = event.final_text
         except Exception:

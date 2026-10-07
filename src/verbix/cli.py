@@ -436,6 +436,8 @@ async def async_main(args: argparse.Namespace) -> int:
                         heard = pipeline.delivered_text()
                         pipeline.turn_output.interrupt()
                         await pipeline.runtime.cancel_turn(heard=heard)
+                        sys.stdout.write("[Interrupted]\n")
+                        sys.stdout.flush()
                     pipeline._active_voice_task = asyncio.create_task(
                         pipeline.execute_voice_turn(text)
                     )

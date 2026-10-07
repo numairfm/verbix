@@ -151,10 +151,15 @@ async def test_typed_enter_during_playback_barges_instead_of_eaten(voice_harness
         os.write(w, b"hi\n")
         await _wait_for(lambda: h["entered"].is_set())
         await _wait_for(lambda: len(h["sink"].played) > 0)
-        # Turn is mid-playback with audio held; Enter must reach toggle (barge).
+        # Turn is mid-playback with audio held; typed input must barge it.
+        await asyncio.sleep(0.3)
+        os.write(w, b"yo\n")
+        await _wait_for(lambda: len(h["cancels"]) > 0)
+        assert "[Interrupted]" in out.poll()
+        # Replacement turn runs; empty Enter must reach toggle (barge).
         await asyncio.sleep(0.3)
         os.write(w, b"\n")
-        await _wait_for(lambda: len(h["cancels"]) > 0)
+        await _wait_for(lambda: len(h["cancels"]) > 1)
         await _wait_for(lambda: h["capture"].started)
         assert "[Playback interrupted]" in out.poll()
         await asyncio.sleep(0.3)

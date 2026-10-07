@@ -5,6 +5,11 @@
 # Provenance is recorded in <out>/models/MANIFEST.json. Fails loud, no fallbacks.
 set -euo pipefail
 
+# Throwaway build/export trees live on disk-backed storage, never /tmp tmpfs
+# (torch + builds exceed small tmpfs quotas).
+export TMPDIR="${TMPDIR:-$HOME/.cache/verbix-tmp}"
+mkdir -p "$TMPDIR"
+
 ENGINE_REPO="https://github.com/numairfm/PocketTTS.cpp"
 COMMIT="${1:-$(git ls-remote "$ENGINE_REPO" HEAD | awk '{print $1}')}"
 OUT="${2:-$(pwd)/tts-runtime}"
@@ -13,53 +18,70 @@ ALBA_URL="https://huggingface.co/kyutai/tts-voices/resolve/main/alba-mackenna/ca
 echo "engine: $ENGINE_REPO @ $COMMIT"
 echo "out:    $OUT"
 
-# 1. Engine build.
+# 1. Engine build (skipped when a binary is already installed).
 SRC="$(mktemp -d)/PocketTTS.cpp"
-git clone --quiet "$ENGINE_REPO" "$SRC"
-git -C "$SRC" checkout --quiet "$COMMIT"
-cmake -S "$SRC" -B "$SRC/.build" -DCMAKE_BUILD_TYPE=Release >/dev/null
-cmake --build "$SRC/.build" -j"$(nproc)" --target pocket-tts
+if test -x "$OUT/bin/verbix-tts"; then
+    echo "engine binary present, skipping build"
+    git clone --quiet "$ENGINE_REPO" "$SRC"
+    git -C "$SRC" checkout --quiet "$COMMIT"
+else
+    git clone --quiet "$ENGINE_REPO" "$SRC"
+    git -C "$SRC" checkout --quiet "$COMMIT"
+    cmake -S "$SRC" -B "$SRC/.build" -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON >/dev/null
+    cmake --build "$SRC/.build" -j"$(nproc)" --target pocket-tts
+    mkdir -p "$OUT/bin" "$OUT/lib"
+    cp "$SRC/pocket-tts" "$OUT/bin/verbix-tts"
+    cp "$SRC/.build/_deps/onnxruntime-src/lib"/libonnxruntime.so* "$OUT/lib/" 2>/dev/null || true
+fi
 mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/models" "$OUT/voices"
-cp "$SRC/pocket-tts" "$OUT/bin/verbix-tts"
-cp "$SRC"/libonnxruntime.so* "$OUT/lib/" 2>/dev/null || true
-cp "$SRC/export_onnx.py" "$OUT/models/export_onnx.py"
 
-# 2. Weights: throwaway venv (never touches project deps), export + quantize.
+# 2. Weights: throwaway venv (never touches project deps) running the
+# maintained export pipeline from the pocket-tts-onnx-export fork.
+EXPORT_REPO="https://github.com/numairfm/pocket-tts-onnx-export"
+EXPORT_SRC="$(mktemp -d)/export"
+git clone --quiet "$EXPORT_REPO" "$EXPORT_SRC"
+EXPORT_COMMIT="$(git -C "$EXPORT_SRC" rev-parse HEAD)"
+echo "export: $EXPORT_REPO @ $EXPORT_COMMIT"
 EXPORT_VENV="$(mktemp -d)/export-venv"
 python3 -m venv "$EXPORT_VENV"
-"$EXPORT_VENV/bin/pip" install --quiet pocket-tts onnx onnxruntime
-cd "$(mktemp -d)"
-"$EXPORT_VENV/bin/python" "$OUT/models/export_onnx.py"
+"$EXPORT_VENV/bin/pip" install --quiet -r "$EXPORT_SRC/requirements.txt" requests
+# Weights come from the ungated mirror (kyutai repo is gated); proper fix is
+# an env override upstream, sed keeps tonight moving with identical files.
+grep -rl "kyutai/pocket-tts" "$EXPORT_SRC/export.py" "$EXPORT_SRC/onnx_export" \
+    | xargs sed -i 's|kyutai/pocket-tts|Verylicious/pocket-tts-ungated|g'
+cd "$EXPORT_SRC"
+"$EXPORT_VENV/bin/python" export.py --quantize
+ls onnx/
 for f in flow_lm_flow_int8.onnx flow_lm_main_int8.onnx mimi_decoder_int8.onnx \
          mimi_encoder.onnx text_conditioner.onnx tokenizer.model; do
-    test -f "models/$f"
-    cp "models/$f" "$OUT/models/$f"
+    test -f "onnx/$f"
+    cp "onnx/$f" "$OUT/models/$f"
 done
-# BOS conditioning file ships with the pocket-tts package data.
-BOS="$("$EXPORT_VENV/bin/python" -c "import pocket_tts, pathlib; print(pathlib.Path(pocket_tts.__file__).parent)")"
-find "$BOS" -name "bos_before_voice.npy" -exec cp {} "$OUT/models/" \;
+# BOS conditioning file ships with the vendored pocket-tts package data.
+find "$EXPORT_SRC" -name "bos_before_voice.npy" -exec cp {} "$OUT/models/" \;
 test -f "$OUT/models/bos_before_voice.npy"
-rm -rf "$EXPORT_VENV"
-cd - >/dev/null
+cd /
+rm -rf "$EXPORT_VENV" "$EXPORT_SRC"
 
 # 3. Canonical voice.
 curl -sfL "$ALBA_URL" -o "$OUT/voices/alba.wav"
 test -f "$OUT/voices/alba.wav"
 
 # 4. Provenance manifest (byte sizes are the integrity gate in tts_assets.py).
-python3 - "$OUT" "$ENGINE_REPO" "$COMMIT" "$ALBA_URL" <<'EOF'
+python3 - "$OUT" "$ENGINE_REPO" "$COMMIT" "$EXPORT_REPO" "$EXPORT_COMMIT" "$ALBA_URL" <<'EOF'
 import datetime, json, sys
 from pathlib import Path
-out, repo, commit, alba = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+out = Path(sys.argv[1])
 files = {}
 for p in sorted((out / "models").glob("*")) + sorted((out / "voices").glob("*.wav")):
     if p.suffix == ".py":
         continue
     files[str(p.relative_to(out))] = p.stat().st_size
 (out / "models" / "MANIFEST.json").write_text(json.dumps({
-    "engine_repo": repo, "engine_commit": commit,
-    "weight_origin": "Verylicious/pocket-tts-ungated via export_onnx.py (same commit)",
-    "alba_canonical_url": alba,
+    "engine_repo": sys.argv[2], "engine_commit": sys.argv[3],
+    "export_repo": sys.argv[4], "export_commit": sys.argv[5],
+    "alba_canonical_url": sys.argv[6],
     "built_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "files": files,
 }, indent=2))

@@ -8,16 +8,19 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Pinned bundle content (bytes), recorded 2026-10-07. URLs are recorded in
-# MANIFEST.json by whoever fetches; sizes are the integrity gate here.
+# Pinned bundle content (bytes), re-minted 2026-10-08 via
+# scripts/setup_tts_runtime.sh (engine + export commits in MANIFEST.json).
+# URLs are recorded in MANIFEST.json by whoever fetches; sizes are the
+# integrity gate here.
 PINNED_FILES: dict[str, int] = {
     "models/flow_lm_flow_int8.onnx": 9962530,
     "models/flow_lm_main_int8.onnx": 76341079,
-    "models/mimi_decoder.onnx": 41471926,
-    "models/mimi_encoder.onnx": 39768446,
-    "models/text_conditioner.onnx": 16388344,
+    "models/mimi_decoder_int8.onnx": 22695710,
+    "models/mimi_encoder.onnx": 585023,
+    "models/mimi_encoder.onnx.data": 72613888,
+    "models/text_conditioner.onnx": 465,
+    "models/text_conditioner.onnx.data": 16388096,
     "models/tokenizer.model": 59339,
-    "models/bos_before_voice.npy": 4224,
     "voices/alba.wav": 958542,
 }
 

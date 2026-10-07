@@ -568,15 +568,28 @@ class Runtime:
                 return res
         return self.foreground._delivered_text
 
-    async def cancel_turn(self) -> None:
-        """Cancels an active foreground turn (e.g. on barge-in) and repairs history."""
+    async def cancel_turn(self, heard: str | None = None) -> None:
+        """Cancels an active foreground turn (e.g. on barge-in) and repairs history.
+
+        `heard` is a pre-interrupt snapshot of actually-spoken text; when given it
+        wins over the live provider, whose delivered record may already be wiped.
+        Repair runs after the dying turn unwinds so its own repair cannot overwrite
+        the snapshot (unwind is synchronous; the timeout is a backstop only).
+        """
         self.floor.request_interrupt()
-        had_active = self._turn_handle.task is not None and not self._turn_handle.task.done()
+        task = self._turn_handle.task
+        had_active = task is not None and not task.done()
         self._turn_handle.cancel()
         if not had_active:
             return
+        if task is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+            except (asyncio.CancelledError, TimeoutError):
+                pass
+        delivered = heard if heard is not None else self._turn_handle.delivered_text()
         self.foreground.messages[:] = validate_and_repair_history(
-            self.foreground.messages, delivered_text=self._turn_handle.delivered_text()
+            self.foreground.messages, delivered_text=delivered
         )
 
     async def spawn(self, task: str) -> str:

@@ -54,10 +54,13 @@ cd "$EXPORT_SRC"
 "$EXPORT_VENV/bin/python" export.py --quantize
 ls onnx/
 for f in flow_lm_flow_int8.onnx flow_lm_main_int8.onnx mimi_decoder_int8.onnx \
-         mimi_encoder.onnx text_conditioner.onnx tokenizer.model; do
+         mimi_encoder.onnx text_conditioner.onnx; do
     test -f "onnx/$f"
     cp "onnx/$f" "$OUT/models/$f"
 done
+cp onnx/*.onnx.data "$OUT/models/"
+find weights -name "tokenizer.model" -exec cp {} "$OUT/models/" \;
+test -f "$OUT/models/tokenizer.model"
 # BOS conditioning file ships with the vendored pocket-tts package data.
 find "$EXPORT_SRC" -name "bos_before_voice.npy" -exec cp {} "$OUT/models/" \;
 test -f "$OUT/models/bos_before_voice.npy"

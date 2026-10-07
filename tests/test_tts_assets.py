@@ -61,8 +61,21 @@ def test_layout_contains_bin_models_voices(tmp_path):
     assert (layout["models"] / "MANIFEST.json").is_file()
 
 
-def test_default_root_is_universal_home(monkeypatch):
+def test_default_root_is_universal_home(monkeypatch, tmp_path):
     from verbix.voice import tts_assets as mod
 
     monkeypatch.delenv("VERBIX_TTS_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
     assert mod.default_root() == Path.home() / ".verbix" / "tts"
+
+
+def test_repo_local_runtime_wins_when_present(monkeypatch, tmp_path):
+    from verbix.voice import tts_assets as mod
+
+    monkeypatch.delenv("VERBIX_TTS_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert mod.default_root() == Path.home() / ".verbix" / "tts"
+    local_bin = tmp_path / "tts-runtime" / "bin"
+    local_bin.mkdir(parents=True)
+    (local_bin / "verbix-tts").write_bytes(b"fakebinary")
+    assert mod.default_root() == tmp_path / "tts-runtime"

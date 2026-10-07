@@ -19,6 +19,9 @@ scratch/
 # Verbix runtime files
 .verbix/
 
+# Local TTS runtime (helper binary + weights, built/fetched per machine)
+tts-runtime/
+
 # Local editor and IDE config
 .commandcode/
 

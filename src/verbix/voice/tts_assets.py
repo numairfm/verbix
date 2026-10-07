@@ -79,6 +79,9 @@ def _resolve_binary(root: Path) -> Path | None:
 def default_root() -> Path:
     if env := os.environ.get("VERBIX_TTS_DIR"):
         return Path(env)
+    local = Path.cwd() / "tts-runtime"
+    if _resolve_binary(local) is not None:
+        return local
     return Path.home() / ".verbix" / "tts"
 
 

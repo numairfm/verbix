@@ -21,7 +21,7 @@ def resolve_contained_path(path_str: str, workspace: Path) -> Path:
 
 
 class FileReadTool:
-    name: str = "file_read"
+    name: str = "read"
     description: str = "Reads a file within the workspace with line numbers."
 
     @property
@@ -78,7 +78,7 @@ class FileReadTool:
 
 
 class FileWriteTool:
-    name: str = "file_write"
+    name: str = "write"
     description: str = (
         "Writes content to a file within the workspace, creating parent directories."
     )
@@ -110,14 +110,14 @@ class FileWriteTool:
                 if recorded is None:
                     return ToolResult(
                         f"error: refusing to overwrite '{path_str}' because this "
-                        "session has not read it; call file_read first",
+                        "session has not read it; call read first",
                         is_error=True,
                     )
                 current = hashlib.sha256(target.read_bytes()).hexdigest()
                 if current != recorded:
                     return ToolResult(
                         f"error: '{path_str}' changed since this session read it; "
-                        "call file_read again and re-apply your change",
+                        "call read again and re-apply your change",
                         is_error=True,
                     )
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -137,7 +137,7 @@ class FileWriteTool:
 
 
 class FileEditTool:
-    name: str = "file_edit"
+    name: str = "edit"
     description: str = "Replaces an exact occurrence of old_str with new_str in a file."
 
     @property
@@ -172,13 +172,13 @@ class FileEditTool:
             if recorded is None:
                 return ToolResult(
                     f"error: refusing to edit '{path_str}' because this session "
-                    "has not read it; call file_read first",
+                    "has not read it; call read first",
                     is_error=True,
                 )
             if hashlib.sha256(raw).hexdigest() != recorded:
                 return ToolResult(
                     f"error: '{path_str}' changed since this session read it; "
-                    "call file_read again and re-apply your change",
+                    "call read again and re-apply your change",
                     is_error=True,
                 )
 

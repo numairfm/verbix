@@ -19,8 +19,8 @@ class ToolContext:
     """Workspace plus the per-session file-version log used to detect stale writes.
 
     ``file_versions`` maps an absolute resolved path to the sha256 of the bytes
-    this session last observed for it (via ``file_read`` or its own writes).
-    A session-scoped context lets ``file_write``/``file_edit`` refuse to clobber
+    this session last observed for it (via ``read`` or its own writes).
+    A session-scoped context lets ``write``/``edit`` refuse to clobber
     a change another worker made after this session last saw the file.
     """
 

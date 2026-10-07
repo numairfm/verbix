@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from verbix.minisweagent.tools.registry import ToolRegistry
 from verbix.tools.base import ToolContext, ToolResult
 
 if TYPE_CHECKING:
@@ -144,3 +145,29 @@ class FinishTool:
             return ToolResult("error: 'summary' is required to finish work.", is_error=True)
         return ToolResult(f"Task completed: {summary}")
 
+
+
+def build_worker_registry() -> ToolRegistry:
+    """Background worker's four main tools: read, write, edit, finish.
+
+    Bash stays available through the worker environment as the escape hatch,
+    not a registered tool — file work goes through these, identically on
+    every OS.
+    """
+    from verbix.tools.filesystem import FileEditTool, FileReadTool, FileWriteTool
+
+    registry = ToolRegistry()
+    for tool in (FileReadTool(), FileWriteTool(), FileEditTool(), FinishTool()):
+        registry.register(
+            tool.name,
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters_schema,
+                },
+            },
+            tool.execute,
+        )
+    return registry

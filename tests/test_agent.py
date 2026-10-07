@@ -70,7 +70,7 @@ async def mock_agent_sse_app(scope, receive, send):
                                     "index": 0,
                                     "id": "call_w1",
                                     "function": {
-                                        "name": "file_write",
+                                        "name": "write",
                                         "arguments": '{"path": "test.txt", "content": "hello agent"}',
                                     },
                                 }
@@ -107,7 +107,7 @@ async def mock_agent_sse_app(scope, receive, send):
                                     "index": 0,
                                     "id": "call_loop",
                                     "function": {
-                                        "name": "file_read",
+                                        "name": "read",
                                         "arguments": '{"path": "loop.txt"}',
                                     },
                                 }
@@ -202,7 +202,7 @@ async def test_agent_tool_calling_turn(tmp_path: Path):
         turn_completes = [e for e in events if isinstance(e, TurnComplete)]
 
         assert len(tool_starts) == 1
-        assert tool_starts[0].tool_name == "file_write"
+        assert tool_starts[0].tool_name == "write"
         assert len(tool_finishes) == 1
         assert tool_finishes[0].is_error is False
         assert len(turn_completes) == 1
@@ -240,7 +240,7 @@ async def test_agent_cycle_detection(tmp_path: Path):
         async for event in session.step(user_input="start looping"):
             events.append(event)
 
-        # Agent should detect repeated file_read loop and stop
+        # Agent should detect repeated read loop and stop
         turn_completes = [e for e in events if isinstance(e, TurnComplete)]
         assert len(turn_completes) == 1
         assert (

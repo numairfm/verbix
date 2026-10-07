@@ -192,6 +192,16 @@ def drain_stdin() -> None:
         pass
 
 
+def _note_turn_failed(task: asyncio.Task) -> None:
+    """Logs background voice-turn failures; cancellations are routine."""
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.exception("Background voice turn failed")
+
+
 class CliPrinter:
     """Renders the conversation as one assistant voice.
 
@@ -419,17 +429,31 @@ async def async_main(args: argparse.Namespace) -> int:
                         sys.stdout.flush()
                         active_task = getattr(pipeline, "_active_voice_task", None)
                         if active_task:
-                            try:
-                                await active_task
-                            except asyncio.CancelledError:
-                                pass
-                            except Exception:
-                                logger.exception("Active voice task failed")
+                            active_task.add_done_callback(_note_turn_failed)
                 else:
-                    await pipeline.execute_voice_turn(text)
+                    live = getattr(pipeline, "_active_voice_task", None)
+                    if live is not None and not live.done():
+                        heard = pipeline.delivered_text()
+                        pipeline.turn_output.interrupt()
+                        await pipeline.runtime.cancel_turn(heard=heard)
+                    pipeline._active_voice_task = asyncio.create_task(
+                        pipeline.execute_voice_turn(text)
+                    )
+                    pipeline._active_voice_task.add_done_callback(_note_turn_failed)
         except (KeyboardInterrupt, asyncio.CancelledError):
             sys.stdout.write("\n")
         finally:
+            live = getattr(pipeline, "_active_voice_task", None)
+            if live is not None and not live.done():
+                live.cancel()
+                try:
+                    await asyncio.wait_for(live, timeout=5.0)
+                except asyncio.CancelledError:
+                    pass
+                except TimeoutError:
+                    logger.warning("Voice turn did not end after cancel; leaving it behind")
+                except Exception:
+                    logger.exception("Background voice turn failed")
             await runtime.aclose()
             await tts.aclose()
             getattr(sink, "close", lambda: None)()

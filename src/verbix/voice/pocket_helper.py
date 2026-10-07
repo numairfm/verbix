@@ -61,9 +61,9 @@ class PocketHelperEngine:
         return self._proc is not None
 
     def _root(self) -> Path:
-        if (env := os.environ.get("VERBIX_TTS_DIR")) and Path(env).is_dir():
-            return Path(env)
-        return Path.cwd()
+        from verbix.voice.tts_assets import default_root
+
+        return default_root()
 
     async def load(self) -> None:
         """Spawns the helper and waits until /health reports warm."""

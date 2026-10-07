@@ -286,11 +286,13 @@ def _build_voice_pipeline(
     from verbix.voice.capture import PTTCapture
     from verbix.voice.pipeline import VoicePipeline
     from verbix.voice.player import AudioPlayer
-    from verbix.voice.pocket_tts import PocketTTSEngine
+    from verbix.voice.pocket_helper import PocketHelperEngine
     from verbix.voice.stt import FasterWhisperSTT
+    from verbix.voice.tts_assets import ensure_tts_runtime
 
     stt = FasterWhisperSTT()
-    tts = PocketTTSEngine()
+    ensure_tts_runtime()
+    tts = PocketHelperEngine()
     sink = select_sink(
         getattr(args, "audio_sink", "auto"),
         sample_rate=24000,

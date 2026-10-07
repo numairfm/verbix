@@ -17,10 +17,10 @@ from verbix.voice.sinks import SubprocessAudioSink
 
 
 def __getattr__(name: str) -> Any:
-    if name == "PocketTTSEngine":
-        from verbix.voice.pocket_tts import PocketTTSEngine
+    if name == "PocketHelperEngine":
+        from verbix.voice.pocket_helper import PocketHelperEngine
 
-        return PocketTTSEngine
+        return PocketHelperEngine
     if name == "FasterWhisperSTT":
         from verbix.voice.stt import FasterWhisperSTT
 
@@ -36,7 +36,7 @@ __all__ = [
     "MockSpeechToText",
     "MockTextToSpeech",
     "PTTCapture",
-    "PocketTTSEngine",
+    "PocketHelperEngine",
     "SpeechOutput",
     "SpeechToText",
     "SubprocessAudioSink",

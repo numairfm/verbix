@@ -67,6 +67,18 @@ def ensure_files(
     return out
 
 
+def _resolve_binary(root: Path) -> Path | None:
+    """First existing helper binary: verbix-tts, then pocket-tts fallback."""
+    import sys
+
+    suffix = ".exe" if sys.platform == "win32" else ""
+    for name in ("verbix-tts", "pocket-tts"):
+        candidate = root / "bin" / (name + suffix)
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def default_root() -> Path:
     if env := os.environ.get("VERBIX_TTS_DIR"):
         return Path(env)
@@ -88,19 +100,20 @@ def ensure_tts_runtime(
     triggered implicitly — explicit script runs and CI own that step.
     """
     root = root or default_root()
-    binary = root / "bin" / "pocket-tts"
-    if not binary.is_file():
+    binary = _resolve_binary(root)
+    if binary is None:
         if base_url:
             try:
-                _download(f"{base_url.rstrip('/')}/bin/pocket-tts", binary)
+                _download(f"{base_url.rstrip('/')}/bin/verbix-tts", root / "bin" / "verbix-tts")
+                binary = root / "bin" / "verbix-tts"
             except OSError as e:
                 raise RuntimeError(
-                    f"TTS helper binary missing at {binary}: {e}. Build one with "
+                    f"TTS helper binary missing under {root / 'bin'}: {e}. Build one with "
                     "scripts/build_tts_helper.sh."
                 ) from e
         else:
             raise RuntimeError(
-                f"TTS helper binary missing at {binary}. Build one with "
+                f"TTS helper binary missing under {root / 'bin'}. Build one with "
                 "scripts/build_tts_helper.sh or point VERBIX_TTS_DIR at a runtime dir."
             )
     ensure_files(root, files if files is not None else PINNED_FILES, base_url)

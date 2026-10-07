@@ -99,7 +99,7 @@ Expected: FAIL with import error on the missing module.
 
 - [ ] **Step 3: Implement `ensure_tts_runtime` + build script + CI**
 
-`build_tts_helper.sh <source-commit> <out-dir>`: clone pinned commit, cmake release build, copy binary + `lib/` + fetched models/voices/licenses into the layout. CI matrix (linux, macos, windows) runs it and uploads the layout as the per-platform TTS bundle. Record source commit, model URLs, byte sizes, and license references in `models/MANIFEST.json` written into the layout.
+`build_tts_helper.sh <source-commit> <out-dir>`: clone pinned commit, cmake release build, install the binary as `bin/verbix-tts` (+ `lib/`, fetched models/voices/licenses) into the layout. The engine resolves `bin/verbix-tts` first with a `bin/pocket-tts` fallback, so Task Manager shows `verbix-tts`. CI matrix (linux, macos, windows) runs it and uploads the layout as the per-platform TTS bundle. Record source commit, model URLs, byte sizes, and license references in `models/MANIFEST.json` written into the layout.
 
 - [ ] **Step 4: Run tests to verify they pass**
 

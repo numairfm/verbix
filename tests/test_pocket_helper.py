@@ -69,8 +69,13 @@ class StubProcess:
 
 
 @pytest.fixture
-def rig(monkeypatch):
+def rig(monkeypatch, tmp_path):
     from verbix.voice import pocket_helper as mod
+
+    root = tmp_path / "tts"
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "verbix-tts").write_bytes(b"fakebinary")
+    monkeypatch.setenv("VERBIX_TTS_DIR", str(root))
 
     state = FakeHelperState()
     spawns = []
@@ -127,6 +132,7 @@ def test_synthesize_posts_text_and_yields_pcm_verbatim(rig):
     assert state.bodies and state.bodies[0]["text"] == "hello world"
     assert state.bodies[0]["voice"] == "alba.wav"
     assert len(spawns) == 1
+    assert spawns[0][0].endswith("verbix-tts")
 
 
 def test_empty_text_yields_nothing_and_never_spawns(rig):
@@ -208,3 +214,24 @@ def test_double_load_starts_one_helper_and_aclose_kills_it(rig):
 
     asyncio.run(bye())
     assert not eng.is_loaded
+
+
+def test_falls_back_to_pocket_tts_binary_name(rig, monkeypatch, tmp_path):
+    from verbix.voice.pocket_helper import PocketHelperEngine
+
+    root = tmp_path / "tts2"
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "pocket-tts").write_bytes(b"fakebinary")
+    monkeypatch.setenv("VERBIX_TTS_DIR", str(root))
+
+    seen = []
+
+    async def go():
+        eng = PocketHelperEngine()
+        await eng.load()
+        seen.append(eng)
+        await eng.aclose()
+
+    asyncio.run(go())
+    _, spawns = rig
+    assert spawns and spawns[-1][0].endswith("pocket-tts")

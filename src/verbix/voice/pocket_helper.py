@@ -60,11 +60,6 @@ class PocketHelperEngine:
     def is_loaded(self) -> bool:
         return self._proc is not None
 
-    def _root(self) -> Path:
-        from verbix.voice.tts_assets import default_root
-
-        return default_root()
-
     async def load(self) -> None:
         """Spawns the helper and waits until /health reports warm."""
         async with self._lock:
@@ -73,8 +68,15 @@ class PocketHelperEngine:
     async def _load_locked(self) -> None:
         if self.is_loaded:
             return
-        root = self._root()
-        binary = self.helper_bin or (root / "bin" / "pocket-tts")
+        from verbix.voice.tts_assets import _resolve_binary, default_root
+
+        root = self.models_dir.parent if self.models_dir else default_root()
+        binary = self.helper_bin or _resolve_binary(root)
+        if binary is None:
+            raise RuntimeError(
+                f"TTS helper binary missing under {root / 'bin'}. Build one with "
+                "scripts/build_tts_helper.sh or point VERBIX_TTS_DIR at a runtime dir."
+            )
         models = self.models_dir or (root / "models")
         voices = self.voices_dir or (root / "voices")
         self._port = _free_port()

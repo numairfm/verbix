@@ -1,7 +1,10 @@
 import asyncio
+
 import pytest
+
 from verbix.core.events import TextDelta, TurnComplete
 from verbix.voice.output import SpeechOutput
+
 
 @pytest.mark.asyncio
 async def test_consecutive_utterances_play_in_strict_fifo_order_during_active_playback():
@@ -45,6 +48,8 @@ async def test_consecutive_utterances_play_in_strict_fifo_order_during_active_pl
             break
         await asyncio.sleep(0.02)
 
-    # MUST play in exact FIFO sequence: First, then Second
-    assert played_chunks == ["audio(First sentence.)", "audio(Second sentence.)"]
+    # MUST play in exact FIFO sequence: First, breath, then Second
+    assert played_chunks[0] == "audio(First sentence.)"
+    assert played_chunks[2] == "audio(Second sentence.)"
+    assert played_chunks[1] == bytes(int(24000 * 0.15) * 4)
     assert sink.stopped is False

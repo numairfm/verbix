@@ -74,8 +74,8 @@ async def test_prefetch_starts_next_sentence_during_playback():
     assert tts.calls[0] == "Sentence one here."
     tts.release["Sentence two here."].set()
     sink.gate.set()
-    await _wait_for(lambda: len(sink.played) >= 2)
-    assert sink.played[1] == b"audio:Sentence two here."
+    await _wait_for(lambda: len(sink.played) >= 3)
+    assert sink.played[2] == b"audio:Sentence two here."
 
 
 @pytest.mark.asyncio
@@ -121,3 +121,44 @@ async def test_stale_buffered_sentence_never_yielded_after_epoch_flip():
     await asyncio.sleep(0.1)
     assert sink.played == [b"audio:Sentence one here."]
     assert out.delivered_text() == "Sentence one here."
+
+
+@pytest.mark.asyncio
+async def test_late_frame_is_prefetched_during_playback():
+    """Story scenario: frame two arrives while frame one plays; its synth
+    must start before playback of frame one finishes (sink still gated)."""
+    tts, sink = GateTTS(), GateSink()
+    tts.release = {"Sentence one here.": asyncio.Event(), "Sentence two here.": asyncio.Event()}
+    out = SpeechOutput(tts=tts, sink=sink)
+    await out.emit(TextDelta(text="Sentence one here. "))
+    await _wait_for(lambda: "Sentence one here." in tts.started)
+    tts.release["Sentence one here."].set()
+    await _wait_for(lambda: sink.played != [])
+    # Frame two arrives late, mid-playback:
+    await out.emit(TextDelta(text="Sentence two here. "))
+    await out.emit(TurnComplete(final_text=""))
+    await _wait_for(lambda: "Sentence two here." in tts.started)
+    tts.release["Sentence two here."].set()
+    sink.gate.set()
+    await _wait_for(lambda: len(sink.played) >= 3)
+    assert sink.played[0] == b"audio:Sentence one here."
+    assert sink.played[2] == b"audio:Sentence two here."
+
+
+@pytest.mark.asyncio
+async def test_inter_sentence_silence_inserted():
+    tts, sink = GateTTS(), GateSink()
+    tts.release = {"Sentence one here.": asyncio.Event(), "Sentence two here.": asyncio.Event()}
+    out = SpeechOutput(tts=tts, sink=sink)
+    await out.emit(TextDelta(text="Sentence one here. "))
+    await out.emit(TextDelta(text="Sentence two here. "))
+    await out.emit(TurnComplete(final_text=""))
+    await _wait_for(lambda: "Sentence one here." in tts.started)
+    tts.release["Sentence one here."].set()
+    await _wait_for(lambda: sink.played != [])
+    tts.release["Sentence two here."].set()
+    sink.gate.set()
+    await _wait_for(lambda: len(sink.played) >= 3)
+    gap = sink.played[1]
+    assert len(gap) == int(24000 * 0.15) * 4
+    assert set(gap) == {0}

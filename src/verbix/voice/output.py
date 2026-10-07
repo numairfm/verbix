@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 _TERMINAL = (".", "!", "?")
 
+# Prefetch depth: synth tasks kept warm while earlier frames play.
+_WARM_DEPTH = 2
+# Breath between sentences so seamless playback never sounds rushed.
+_GAP_SECONDS = 0.15
+
 
 def _sentences(text: str) -> list[str]:
     """Split text at sentence boundaries so sub-220 tails keep TTS pauses."""
@@ -42,6 +47,7 @@ class SpeechOutput:
         self._frames: asyncio.Queue[tuple[int, str, Any]] = asyncio.Queue()
         self._synth_tasks: set[asyncio.Task] = set()
         self._pump: asyncio.Task[None] | None = None
+        self._warm: list[list] = []  # [tag, kind, payload, task|None] in frame order
 
     @property
     def is_playing(self) -> bool:
@@ -67,6 +73,7 @@ class SpeechOutput:
                 for s in _sentences(c) or [c]:
                     self._frames.put_nowait((self._epoch, "text", s))
             self._ensure_pump()
+            self._top_up()
         elif isinstance(event, TurnComplete):
             buf, self._buf = self._buf, ""
             if buf.strip():
@@ -78,6 +85,7 @@ class SpeechOutput:
                     self._frames.put_nowait((self._epoch, "text", s))
             self._frames.put_nowait((self._epoch, "end", ""))
             self._ensure_pump()
+            self._top_up()
 
     def _tail(self, final_text: str) -> str:
         f = (final_text or "").strip()
@@ -105,6 +113,7 @@ class SpeechOutput:
             if not task.done():
                 task.cancel()
         self._synth_tasks.clear()
+        self._drop_warm()
         while not self._frames.empty():
             try:
                 self._frames.get_nowait()
@@ -151,7 +160,7 @@ class SpeechOutput:
         current = asyncio.current_task()
         epoch = self._epoch
         try:
-            while self._epoch == epoch and not self._frames.empty():
+            while self._epoch == epoch and (not self._frames.empty() or self._warm):
                 frames_before = self._frames.qsize()
                 await self.sink.play_stream(self._feed(epoch))
                 if self._frames.qsize() >= frames_before and not self._frames.empty():
@@ -192,22 +201,59 @@ class SpeechOutput:
         task.add_done_callback(self._synth_tasks.discard)
         return task
 
+    def _gap_bytes(self) -> bytes:
+        """Short silence between sentences; zeros in the sink's format."""
+        rate = int(getattr(self.sink, "sample_rate", 24000) or 24000)
+        fmt = getattr(self.sink, "audio_format", "f32")
+        return bytes(int(rate * _GAP_SECONDS) * (2 if fmt != "f32" else 4))
+
+    def _drop_warm(self) -> None:
+        for _, _, _, t in self._warm:
+            if t is not None and not t.done():
+                t.cancel()
+        self._warm.clear()
+
+    def _top_up(self) -> None:
+        """Move queued frames into the warm list, starting synth at once.
+
+        Called on every enqueue (emit) and every feed iteration, so a frame
+        that arrives mid-playback starts synthesizing immediately instead of
+        waiting for the current frame to finish. Bounded to _WARM_DEPTH
+        concurrent synth tasks; order is always frame order.
+        """
+        epoch = self._epoch
+        running = sum(
+            1 for _, k, _, t in self._warm if k == "text" and t is not None and not t.done()
+        )
+        while running < _WARM_DEPTH:
+            try:
+                tag, kind, payload = self._frames.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            if tag != epoch:
+                return
+            if kind == "end":
+                if self._frames.empty():
+                    self._warm.append([tag, kind, payload, None])
+                continue
+            if kind == "cue":
+                self._warm.append([tag, kind, payload, None])
+                return
+            self._warm.append([tag, kind, payload, self._spawn_synth(payload, epoch)])
+            running += 1
+
     async def _feed(self, epoch: int):
         first_write = True
         first_pcm = True
-        holdback: tuple[int, str, Any] | None = None
-        carry: tuple[int, str, asyncio.Task] | None = None
+        spoken_any = False
         while True:
-            if carry is None:
-                if holdback is not None:
-                    tag, kind, payload = holdback
-                    holdback = None
-                else:
-                    tag, kind, payload = await self._frames.get()
+            self._top_up()
+            if not self._warm:
+                tag, kind, payload = await self._frames.get()
                 if tag != self._epoch or tag != epoch:
                     return
                 if kind == "end":
-                    if self._frames.empty() and holdback is None:
+                    if self._frames.empty():
                         return
                     continue
                 if kind == "cue":
@@ -216,42 +262,42 @@ class SpeechOutput:
                         first_write = False
                     yield payload
                     continue
-                carry = (tag, payload, self._spawn_synth(payload, epoch))
-            tag, payload, task = carry
-            carry = None
-            # Prefetch exactly one upcoming text frame while this one runs.
-            upcoming: tuple[int, str, asyncio.Task] | None = None
-            try:
-                tag2, kind2, payload2 = self._frames.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-            else:
-                if kind2 == "text" and tag2 == epoch and tag2 == self._epoch:
-                    upcoming = (tag2, payload2, self._spawn_synth(payload2, epoch))
-                else:
-                    holdback = (tag2, kind2, payload2)
+                self._warm.append([tag, kind, payload, self._spawn_synth(payload, epoch)])
+                continue
+            tag, kind, payload, task = self._warm.pop(0)
+            if tag != self._epoch or tag != epoch:
+                self._drop_warm()
+                return
+            if kind == "cue":
+                if first_write:
+                    record_latency("sink_first_write")
+                    first_write = False
+                yield payload
+                continue
+            if kind == "end":
+                if self._frames.empty() and not self._warm:
+                    return
+                continue
+            if task is None:
+                task = self._spawn_synth(payload, epoch)
             try:
                 parts = await task
             except (asyncio.CancelledError, Exception):
-                if upcoming is not None and not upcoming[2].done():
-                    upcoming[2].cancel()
+                self._drop_warm()
                 raise
-            if parts is None:
-                if upcoming is not None and not upcoming[2].done():
-                    upcoming[2].cancel()
-                return
-            if tag != self._epoch or tag != epoch:
-                if upcoming is not None and not upcoming[2].done():
-                    upcoming[2].cancel()
+            if parts is None or tag != self._epoch or tag != epoch:
+                self._drop_warm()
                 return
             if first_pcm:
                 record_latency("tts_first_pcm")
                 first_pcm = False
             if parts:
+                if spoken_any:
+                    yield self._gap_bytes()
+                spoken_any = True
                 self._delivered.append(payload)
                 for audio in parts:
                     if first_write:
                         record_latency("sink_first_write")
                         first_write = False
                     yield audio
-            carry = upcoming

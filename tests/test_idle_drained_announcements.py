@@ -1,10 +1,14 @@
 import asyncio
 from unittest.mock import MagicMock
+
 import pytest
+
 from verbix.core.events import TextDelta
-from verbix.provider.models import TextDelta as ProviderTextDelta, Finish as ProviderFinish
-from verbix.runtime.runtime import Runtime
+from verbix.provider.models import Finish as ProviderFinish
+from verbix.provider.models import TextDelta as ProviderTextDelta
 from verbix.runtime.floor import FloorState
+from verbix.runtime.runtime import Runtime
+
 
 @pytest.mark.asyncio
 async def test_task_finishing_while_idle_speaks_immediately(tmp_path):
@@ -91,4 +95,41 @@ async def test_task_finishing_while_busy_holds_until_floor_returns_to_idle(tmp_p
 
     assert any("task 2 finished" in s for s in spoken)
     assert rt.floor.is_idle is True
+    await rt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_drain_announcement_turn_is_offered_no_tools_and_spawns_nothing(tmp_path):
+    spoken = []
+    seen_tools = []
+
+    class FakeOutput:
+        async def emit(self, event):
+            if isinstance(event, TextDelta):
+                spoken.append(event.text)
+        def delivered_text(self):
+            return "".join(spoken)
+
+    provider = MagicMock()
+    async def fake_stream(messages, tools=None, reasoning_effort=None):
+        seen_tools.append(tools)
+        yield ProviderTextDelta(text="Task 9 finished successfully.")
+        yield ProviderFinish(reason="stop")
+    provider.stream = fake_stream
+
+    rt = Runtime(workspace=tmp_path, provider=provider)
+    rt.wake_output = FakeOutput()
+    before = set(rt.tasks)
+
+    rt.ledger.register_task("task-9", "do thing")
+    rt._on_task_finished("task-9", "did thing")
+
+    for _ in range(100):
+        if spoken:
+            break
+        await asyncio.sleep(0.02)
+
+    assert any("Task 9 finished" in s for s in spoken)
+    assert set(rt.tasks) == before
+    assert seen_tools and all(t is None for t in seen_tools)
     await rt.aclose()

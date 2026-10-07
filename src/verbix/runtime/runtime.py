@@ -464,11 +464,14 @@ class Runtime:
         )
         self.foreground.history = DefaultAgentHistoryProxy(self.foreground)
 
-    @property
-    def announcer(self) -> DefaultAgent:
-        """Backward-compatibility alias pointing to single foreground companion."""
-        return self.foreground
-
+        announcer_config = fg_config.model_copy(update={"tools": []})
+        self.announcer = DefaultAgent(
+            model=adapt_provider(self.provider),
+            env=None,
+            tools=ToolRegistry(),
+            config=announcer_config,
+        )
+        self.announcer.messages = self.foreground.messages
 
     @property
     def is_idle(self) -> bool:
@@ -527,26 +530,32 @@ class Runtime:
             finally:
                 self._turn_handle.task = None
 
-    async def _step_inner(self, user_text: str | None = None) -> AsyncIterator[AgentEvent]:
+    async def _step_inner(
+        self, user_text: str | None = None, *, agent: Any = None
+    ) -> AsyncIterator[AgentEvent]:
         # System prompt stays static (provider cache prefix); volatile
         # grounding rides on the user message at request time only.
-        self.foreground.model = adapt_provider(self.provider)
+        session = agent or self.foreground
+        session.model = adapt_provider(self.provider)
         if user_text is not None:
             user_text = f"{self._request_grounding()}\n{user_text}"
-        async for event in self.foreground.step_stream(user_text):
+        async for event in session.step_stream(user_text):
             yield event
 
-    async def submit(self, user_text: str, output: Any = None) -> str:
+    async def submit(
+        self, user_text: str, output: Any = None, *, agent: Any = None
+    ) -> str:
         """Runs a complete foreground turn, streaming events to output and returning final text."""
+        session = agent or self.foreground
         final_text = ""
         async with self.floor.acquire(FloorState.FOREGROUND):
             self._turn_handle = TurnHandle(
                 task=asyncio.current_task(),
                 kind="foreground",
-                delivered_text_provider=lambda: self._submit_delivered_text(output),
+                delivered_text_provider=lambda: self._submit_delivered_text(output, session),
             )
             try:
-                async for event in self._step_inner(user_text):
+                async for event in self._step_inner(user_text, agent=session):
                     if output and hasattr(output, "emit"):
                         res = output.emit(event)
                         if asyncio.iscoroutine(res):
@@ -560,13 +569,13 @@ class Runtime:
                 self._turn_handle.task = None
         return final_text
 
-    def _submit_delivered_text(self, output: Any) -> str:
+    def _submit_delivered_text(self, output: Any, session: Any) -> str:
         delivered = getattr(output, "delivered_text", None)
         if callable(delivered):
             res = delivered()
             if isinstance(res, str):
                 return res
-        return self.foreground._delivered_text
+        return session._delivered_text
 
     async def cancel_turn(self, heard: str | None = None) -> None:
         """Cancels an active foreground turn (e.g. on barge-in) and repairs history.
@@ -713,7 +722,7 @@ class Runtime:
                 "[Background task update. In one brief, natural conversational prose sentence, "
                 "inform the user of these completed results:]\n" + "\n".join(items)
             )
-            final_text = await self.submit(prompt, self.wake_output)
+            final_text = await self.submit(prompt, self.wake_output, agent=self.announcer)
             if final_text and self.on_wake:
                 wake_res = self.on_wake(final_text)
                 if asyncio.iscoroutine(wake_res):

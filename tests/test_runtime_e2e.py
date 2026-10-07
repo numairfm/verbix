@@ -359,11 +359,13 @@ async def test_runtime_worker_markdown_result_is_silent(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_runtime_announcer_alias_clean_history(tmp_path):
+async def test_runtime_announcer_is_dedicated_toolless_agent(tmp_path):
     mock_provider = MagicMock()
     runtime = Runtime(workspace=tmp_path, provider=mock_provider)
     assert hasattr(runtime, "announcer")
-    assert runtime.announcer is runtime.foreground
+    assert runtime.announcer is not runtime.foreground
+    assert runtime.announcer.get_tool_definitions() is None
+    assert runtime.announcer.messages is runtime.foreground.messages
 
 
 @pytest.mark.asyncio

@@ -6,13 +6,16 @@ This file covers heavy model and media assets by name.
 
 ## TTS voice engine
 
-- **PocketTTS.cpp** — single-file C++ runtime (ONNX Runtime). Pinned source
-  commit recorded in `models/MANIFEST.json` at fetch time.
-- **Kyutai PocketTTS weights** (CC-BY-4.0): int8 flow models + fp32 codec,
-  sentencepiece tokenizer, BOS voice-conditioning file, via the community
-  ONNX export line. Modification note: format conversion to ONNX only.
-  Links: <https://github.com/kyutai-labs/pocket-tts>,
-  <https://github.com/k2-fsa/sherpa-onnx> (reference implementation).
+- **PocketTTS.cpp** (MIT) — single-file C++ runtime (ONNX Runtime), built
+  from <https://github.com/numairfm/PocketTTS.cpp>. Pinned source commit
+  recorded in `tts-runtime/models/MANIFEST.json`.
+- **PocketTTS weights** (CC-BY-4.0): int8 flow models + int8 decoder, fp32
+  encoder/conditioner, sentencepiece tokenizer. Forged from
+  `Verylicious/pocket-tts-ungated` via
+  <https://github.com/numairfm/pocket-tts-onnx-export> (pinned commit in
+  the manifest); served from the project's bundle mirror with byte-size
+  pins in `voice/tts_assets.py`. Modification note: format conversion to
+  ONNX (+ int8 dynamic quantization of MatMuls) only.
 - **Alba voice reference** (`voices/alba.wav`): canonical Alba clip from
   `kyutai/tts-voices` (`alba-mackenna/casual.wav`), CC-BY-4.0. Voice-likeness
   clearance for commercial use is tracked separately (CC-BY-4.0 does not

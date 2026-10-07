@@ -55,7 +55,7 @@ def test_layout_contains_bin_models_voices(tmp_path):
     layout = mod.ensure_tts_runtime(
         root, base_url=base, files={"models/mimi_encoder.onnx": 64, "voices/alba.wav": 128}
     )
-    assert (layout["bin"] / "pocket-tts").is_file()
+    assert (layout["bin"] / "verbix-tts").is_file()
     assert layout["models"].is_dir()
     assert layout["voices"].is_dir()
     assert (layout["models"] / "MANIFEST.json").is_file()

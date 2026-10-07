@@ -15,8 +15,8 @@ cmake -S "$SRC" -B "$SRC/.build" -DCMAKE_BUILD_TYPE=Release >/dev/null
 cmake --build "$SRC/.build" -j"$(nproc)" --target pocket-tts
 
 mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/models" "$OUT/voices"
-cp "$SRC/.build/pocket-tts" "$OUT/bin/verbix-tts"
-cp "$SRC/.build"/libonnxruntime.so* "$OUT/lib/" 2>/dev/null || true
+cp "$SRC/pocket-tts" "$OUT/bin/verbix-tts"
+cp "$SRC"/libonnxruntime.so* "$OUT/lib/" 2>/dev/null || true
 rm -rf "$SRC"
-echo "helper built at $OUT/bin/pocket-tts"
+echo "helper built at $OUT/bin/verbix-tts"
 echo "next: fetch models + voices into $OUT (see tts_assets PINNED_FILES)"

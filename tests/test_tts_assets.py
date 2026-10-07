@@ -59,3 +59,10 @@ def test_layout_contains_bin_models_voices(tmp_path):
     assert layout["models"].is_dir()
     assert layout["voices"].is_dir()
     assert (layout["models"] / "MANIFEST.json").is_file()
+
+
+def test_default_root_is_universal_home(monkeypatch):
+    from verbix.voice import tts_assets as mod
+
+    monkeypatch.delenv("VERBIX_TTS_DIR", raising=False)
+    assert mod.default_root() == Path.home() / ".verbix" / "tts"

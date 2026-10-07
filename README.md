@@ -51,7 +51,7 @@ Audio extras are optional: `uv sync --extra audio` (`sounddevice`).
 Voice mode needs STT (faster-whisper, a main dependency) plus the TTS
 runtime: a resident PocketTTS.cpp helper (built per platform — see
 `scripts/build_tts_helper.sh`), its model bundle, and one voice clip,
-resolved into `~/.cache/verbix/tts` on first voice use
+resolved into `~/.verbix/tts` on first voice use
 (`VERBIX_TTS_DIR` overrides). Without them, text and `--serve` modes
 still work. Attribution: `THIRD-PARTY-NOTICES.md`.
 

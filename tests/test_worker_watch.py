@@ -49,3 +49,18 @@ def test_format_worker_event_tags_turns():
     )
     assert out == '[task-2] $ read({"path": "a"})'
     assert format_worker_event("task-2", TurnComplete(final_text="done")) is None
+
+
+def test_format_worker_event_covers_started_and_finished():
+    from verbix.core.events import ToolCallFinished, ToolCallStarted
+
+    out = format_worker_event(
+        "task-2", ToolCallStarted(call_id="c1", tool_name="read", arguments={"path": "a"})
+    )
+    assert out == '[task-2] $ read({"path": "a"})'
+    assert (
+        format_worker_event(
+            "task-2", ToolCallFinished(call_id="c1", observation="ok")
+        )
+        is None
+    )

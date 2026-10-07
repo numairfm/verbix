@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 from unittest.mock import Mock, NonCallableMock
 
-from verbix.core.events import TextDelta, ToolCallDelta, TurnComplete
+from verbix.core.events import TextDelta, ToolCallDelta, ToolCallStarted, TurnComplete
 
 if TYPE_CHECKING:
     from verbix.core.agent import AgentSession
@@ -22,6 +23,8 @@ def format_worker_event(task_id: str, event: Any) -> str | None:
         return f"[{task_id}] {event.text}"
     if isinstance(event, ToolCallDelta) and event.name:
         return f"[{task_id}] $ {event.name}({event.arguments_delta})"
+    if isinstance(event, ToolCallStarted):
+        return f"[{task_id}] $ {event.tool_name}({json.dumps(event.arguments)})"
     return None
 
 

@@ -549,10 +549,11 @@ class DefaultAgent:
             raise
         except Submitted:
             raise
-        except Exception:
+        except Exception as e:  # noqa: BLE001
             # Turn boundary: a failed turn still ends as a repaired, spoken
-            # turn; the session never dies here.
-            self.logger.exception("Agent turn failed")
+            # turn; the session never dies here. One line in the log — full
+            # tracebacks belong in debug, never in the user's terminal.
+            self.logger.warning("Agent turn failed: %s", e)
             self.messages[:] = validate_and_repair_history(
                 self.messages, delivered_text=self._delivered_text
             )

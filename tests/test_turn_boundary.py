@@ -57,3 +57,14 @@ async def test_session_usable_after_blip():
     assert isinstance(events[-1], TurnComplete)
     assert events[-1].final_text == "second turn ok"
     assert_history_valid(agent.messages)
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_logs_no_traceback(caplog):
+    import logging
+
+    agent = _agent()
+    with caplog.at_level(logging.WARNING, logger="agent"):
+        [e async for e in agent.step_stream("do thing")]
+        [e async for e in agent.step_stream("try again")]
+    assert not [r for r in caplog.records if r.exc_info], "no tracebacks in user log"

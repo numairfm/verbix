@@ -40,6 +40,7 @@ class SpeechOutput:
         self._delivered: list[str] = []
         self._epoch = 0
         self._frames: asyncio.Queue[tuple[int, str, Any]] = asyncio.Queue()
+        self._synth_tasks: set[asyncio.Task] = set()
         self._pump: asyncio.Task[None] | None = None
 
     @property
@@ -100,6 +101,10 @@ class SpeechOutput:
         if self._pump and not self._pump.done():
             self._pump.cancel()
         self._pump = None
+        for task in list(self._synth_tasks):
+            if not task.done():
+                task.cancel()
+        self._synth_tasks.clear()
         while not self._frames.empty():
             try:
                 self._frames.get_nowait()
@@ -164,34 +169,85 @@ class SpeechOutput:
             if self._pump is current:
                 self._pump = None
 
+    def _spawn_synth(
+        self, payload: str, epoch: int
+    ) -> asyncio.Task[list[bytes] | None]:
+        """Synthesizes one text frame to buffered parts without playing them.
+
+        Returns None when the epoch moved mid-synthesis (stale: discard).
+        Playing still happens only in _feed, so prefetched audio is never
+        heard unless the pump yields it — barge-in stays exact.
+        """
+
+        async def _run() -> list[bytes] | None:
+            parts: list[bytes] = []
+            async for audio in self.tts.synthesize(normalize_for_tts(payload)):
+                if self._epoch != epoch:
+                    return None
+                parts.append(audio)
+            return parts
+
+        task = asyncio.create_task(_run())
+        self._synth_tasks.add(task)
+        task.add_done_callback(self._synth_tasks.discard)
+        return task
+
     async def _feed(self, epoch: int):
         first_write = True
         first_pcm = True
+        holdback: tuple[int, str, Any] | None = None
+        carry: tuple[int, str, asyncio.Task] | None = None
         while True:
-            tag, kind, payload = await self._frames.get()
-            if tag != self._epoch or tag != epoch:
+            if carry is None:
+                if holdback is not None:
+                    tag, kind, payload = holdback
+                    holdback = None
+                else:
+                    tag, kind, payload = await self._frames.get()
+                if tag != self._epoch or tag != epoch:
+                    return
+                if kind == "end":
+                    if self._frames.empty() and holdback is None:
+                        return
+                    continue
+                if kind == "cue":
+                    if first_write:
+                        record_latency("sink_first_write")
+                        first_write = False
+                    yield payload
+                    continue
+                carry = (tag, payload, self._spawn_synth(payload, epoch))
+            tag, payload, task = carry
+            carry = None
+            # Prefetch exactly one upcoming text frame while this one runs.
+            upcoming: tuple[int, str, asyncio.Task] | None = None
+            try:
+                tag2, kind2, payload2 = self._frames.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            else:
+                if kind2 == "text" and tag2 == epoch and tag2 == self._epoch:
+                    upcoming = (tag2, payload2, self._spawn_synth(payload2, epoch))
+                else:
+                    holdback = (tag2, kind2, payload2)
+            try:
+                parts = await task
+            except (asyncio.CancelledError, Exception):
+                if upcoming is not None and not upcoming[2].done():
+                    upcoming[2].cancel()
+                raise
+            if parts is None:
+                if upcoming is not None and not upcoming[2].done():
+                    upcoming[2].cancel()
                 return
-            if kind == "end":
-                if self._frames.empty():
-                    return
-                continue
-            if kind == "cue":
-                if first_write:
-                    record_latency("sink_first_write")
-                    first_write = False
-                yield payload
-                continue
-            spoken = False
-            async for audio in self.tts.synthesize(normalize_for_tts(payload)):
-                if self._epoch != epoch:
-                    return
-                if first_pcm:
-                    record_latency("tts_first_pcm")
-                    first_pcm = False
-                if not spoken:
-                    self._delivered.append(payload)
-                    spoken = True
-                if first_write:
-                    record_latency("sink_first_write")
-                    first_write = False
-                yield audio
+            if first_pcm:
+                record_latency("tts_first_pcm")
+                first_pcm = False
+            if parts:
+                self._delivered.append(payload)
+                for audio in parts:
+                    if first_write:
+                        record_latency("sink_first_write")
+                        first_write = False
+                    yield audio
+            carry = upcoming

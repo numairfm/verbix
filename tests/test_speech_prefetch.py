@@ -98,3 +98,26 @@ async def test_barge_in_never_plays_or_records_prefetched():
     await asyncio.sleep(0.1)
     assert sink.played == [b"audio:Sentence one here."]
     assert heard == "Sentence one here."
+
+
+@pytest.mark.asyncio
+async def test_stale_buffered_sentence_never_yielded_after_epoch_flip():
+    # Stages the exact race: the flip wins over the pump (pump NOT cancelled),
+    # so only the new epoch re-check can stop the buffered sentence.
+    tts, sink = GateTTS(), GateSink()
+    tts.release = {"Sentence one here.": asyncio.Event(), "Sentence two here.": asyncio.Event()}
+    out = SpeechOutput(tts=tts, sink=sink)
+    await out.emit(TextDelta(text="Sentence one here. "))
+    await out.emit(TextDelta(text="Sentence two here. "))
+    await out.emit(TurnComplete(final_text=""))
+    await _wait_for(lambda: "Sentence one here." in tts.started)
+    tts.release["Sentence one here."].set()
+    await _wait_for(lambda: sink.played != [])
+    tts.release["Sentence two here."].set()
+    await _wait_for(lambda: len(tts.calls) == 2)
+    await asyncio.sleep(0.05)
+    out._epoch += 1
+    sink.gate.set()
+    await asyncio.sleep(0.1)
+    assert sink.played == [b"audio:Sentence one here."]
+    assert out.delivered_text() == "Sentence one here."

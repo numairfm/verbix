@@ -240,6 +240,10 @@ class SpeechOutput:
                 if upcoming is not None and not upcoming[2].done():
                     upcoming[2].cancel()
                 return
+            if tag != self._epoch or tag != epoch:
+                if upcoming is not None and not upcoming[2].done():
+                    upcoming[2].cancel()
+                return
             if first_pcm:
                 record_latency("tts_first_pcm")
                 first_pcm = False

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import platform
+import sys
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass
@@ -385,10 +386,12 @@ class Runtime:
         buffer_window: float = 0.3,
         on_wake: Callable[[str], Coroutine[Any, Any, None] | None] | None = None,
         worker_model: Any = None,
+        worker_echo: bool = False,
     ) -> None:
         self.workspace = Path(workspace).resolve()
         self.provider = provider
         self.worker_model = worker_model
+        self.worker_echo = worker_echo
 
         # Load voice.yaml configuration
         config_path = (
@@ -499,6 +502,15 @@ class Runtime:
                 q.put_nowait({"type": event_type, "payload": payload})
             except asyncio.QueueFull:
                 pass
+
+    def _echo_worker_event(self, task_id: str, event: Any) -> None:
+        """Prints one tagged background-turn line for --show-worker-turns."""
+        from verbix.runtime.worker import format_worker_event
+
+        line = format_worker_event(task_id, event)
+        if line:
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
 
     def _build_grounded_prompt(self, base_prompt: str | None = None) -> str:
         """Build the static, cache-stable system prompt (no volatile clock content)."""
@@ -649,6 +661,7 @@ class Runtime:
             id=task_id,
             description=task,
             session=worker_agent,
+            on_event=self._echo_worker_event if self.worker_echo else None,
         )
 
         def _on_finish(t: WorkerTask) -> None:

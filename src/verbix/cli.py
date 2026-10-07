@@ -137,6 +137,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print model reasoning and thought deltas to stderr.",
     )
     parser.add_argument(
+        "--show-worker-turns",
+        action="store_true",
+        help="Print background worker turns tagged with their task ID.",
+    )
+    parser.add_argument(
         "--system-prompt",
         type=str,
         default=None,
@@ -178,6 +183,8 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
         workspace=workspace,
         provider=foreground_model,
         worker_model=worker_model,
+        worker_echo=bool(getattr(args, "show_worker_turns", False))
+        or os.environ.get("VERBIX_WORKER_ECHO") == "1",
         system_prompt=getattr(args, "system_prompt", None),
     )
 

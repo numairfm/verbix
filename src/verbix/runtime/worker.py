@@ -7,13 +7,22 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 from unittest.mock import Mock, NonCallableMock
 
-from verbix.core.events import TextDelta, TurnComplete
+from verbix.core.events import TextDelta, ToolCallDelta, TurnComplete
 
 if TYPE_CHECKING:
     from verbix.core.agent import AgentSession
     from verbix.minisweagent.agents.default import DefaultAgent
 
 TaskStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
+
+
+def format_worker_event(task_id: str, event: Any) -> str | None:
+    """One tagged CLI line per background event; None for events with no display."""
+    if isinstance(event, TextDelta):
+        return f"[{task_id}] {event.text}"
+    if isinstance(event, ToolCallDelta) and event.name:
+        return f"[{task_id}] $ {event.name}({event.arguments_delta})"
+    return None
 
 
 class WorkerTask:
@@ -24,10 +33,12 @@ class WorkerTask:
         id: str,
         description: str,
         session: AgentSession | DefaultAgent | Any,
+        on_event: Callable[[str, Any], None] | None = None,
     ) -> None:
         self.id = id
         self.description = description
         self.session = session
+        self.on_event = on_event
 
         self._status: TaskStatus = "pending"
         self._result: str | None = None
@@ -60,6 +71,15 @@ class WorkerTask:
         self._status = "running"
         self._asyncio_task = asyncio.create_task(self._run())
 
+    def _emit(self, event: Any) -> None:
+        """Forwards one session event to the watch callback; never breaks the turn."""
+        if self.on_event is None:
+            return
+        try:
+            self.on_event(self.id, event)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     async def _run(self) -> None:
         accumulated_text: list[str] = []
         session: Any = self.session
@@ -70,6 +90,7 @@ class WorkerTask:
             )
             if has_step_stream:
                 async for event in session.step_stream(self.description):
+                    self._emit(event)
                     if isinstance(event, TextDelta):
                         accumulated_text.append(event.text)
                     elif isinstance(event, TurnComplete) and event.final_text:
@@ -78,6 +99,7 @@ class WorkerTask:
                 step_res = session.step(self.description)
                 if hasattr(step_res, "__aiter__"):
                     async for event in step_res:
+                        self._emit(event)
                         if isinstance(event, TextDelta):
                             accumulated_text.append(event.text)
                         elif isinstance(event, TurnComplete) and event.final_text:

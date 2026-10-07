@@ -18,10 +18,75 @@ _PROTECTED = re.compile(
 _CLAUSE = re.compile(r"[,;:—]")
 _SENT_END = re.compile(r"[.!?]+")
 _URL = re.compile(r"https?://\S+")
-_PATH = re.compile(r"(?:^|(?<=\s))(?:~?/|\./)(?:[\w.\-~]+/)*([\w.\-~]+)")
+_PATH = re.compile(r"(?:^|(?<=\s))(~?/(?:[\w.\-~]+/)*[\w.\-~]+)")
+_DECIMAL = re.compile(r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])")
+_INT = re.compile(r"(?<![\w.])\d[\d,]*(?!\d)")
 _BULLET = re.compile(r"(?m)^\s*(?:[-*+]|\d+[.)])\s+")
 _MD = re.compile(r"[*_#`]")
 _WS = re.compile(r"\s+")
+
+_ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+_TEENS = ["ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+          "seventeen", "eighteen", "nineteen"]
+_TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+_DIGIT_WORDS = {str(i): w for i, w in enumerate(_ONES)}
+
+
+def _under_100(n: int) -> str:
+    if n < 10:
+        return _ONES[n]
+    if n < 20:
+        return _TEENS[n - 10]
+    return _TENS[n // 10] + (f"-{_ONES[n % 10]}" if n % 10 else "")
+
+
+def _under_1000(n: int) -> str:
+    head, rest = divmod(n, 100)
+    if not head:
+        return _under_100(rest)
+    return _ONES[head] + " hundred" + (f" {_under_100(rest)}" if rest else "")
+
+
+def _int_words(n: int) -> str:
+    if n < 1000:
+        return _under_1000(n)
+    parts = []
+    for scale, name in ((10**9, "billion"), (10**6, "million"), (10**3, "thousand")):
+        head, n = divmod(n, scale)
+        if head:
+            parts.append(f"{_under_1000(head)} {name}")
+    if n:
+        parts.append(_under_1000(n))
+    return " ".join(parts)
+
+
+def _verbalize_path(m: "re.Match[str]") -> str:
+    raw = m.group(0)
+    trail = ""
+    if raw.endswith("."):
+        raw, trail = raw[:-1], "."
+    parts = [
+        "home" if p == "~" else p.replace(".", " dot ")
+        for p in re.split(r"/+", raw)
+        if p not in ("", ".")
+    ]
+    return ", ".join(p for p in parts if p) + trail
+
+
+def _verbalize_decimal(m: "re.Match[str]") -> str:
+    chunks = m.group(0).split(".")
+    left = chunks[0]
+    left_words = _int_words(int(left)) if len(left) <= 4 else " ".join(_DIGIT_WORDS[d] for d in left)
+    right = " ".join(_DIGIT_WORDS[d] for d in "".join(chunks[1:]))
+    return f"{left_words} point {right}"
+
+
+def _verbalize_int(m: "re.Match[str]") -> str:
+    digits = m.group(0).replace(",", "")
+    if len(digits) > 4:
+        # IDs and long codes read digit by digit, never as magnitudes.
+        return " ".join(_DIGIT_WORDS[d] for d in digits)
+    return _int_words(int(digits))
 
 
 def _spans(text):
@@ -74,7 +139,10 @@ def _split_tail(s):
 
 def normalize_for_tts(text):
     t = _URL.sub("a link", text)
-    t = _PATH.sub(r"\1", t)
+    t = t.replace("_", " ")
+    t = _PATH.sub(_verbalize_path, t)
+    t = _DECIMAL.sub(_verbalize_decimal, t)
+    t = _INT.sub(_verbalize_int, t)
     t = _BULLET.sub("", t)
     t = _MD.sub("", t)
     t = t.replace("%", " percent").replace("&", " and ").replace("→", " to ")

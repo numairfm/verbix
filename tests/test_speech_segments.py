@@ -1,4 +1,4 @@
-from verbix.voice.segments import split_chunks, normalize_for_tts
+from verbix.voice.segments import normalize_for_tts, split_chunks
 
 
 def test_eager_first_chunk_at_clause_boundary():
@@ -35,4 +35,20 @@ def test_long_sentence_without_clauses_splits_at_word_boundaries():
 
 
 def test_normalizer_strips_markdown_and_symbols():
-    assert normalize_for_tts("Use *bold* and 50% & `code` → ok") == "Use bold and 50 percent and code to ok"
+    assert normalize_for_tts("Use *bold* and 50% & `code` → ok") == "Use bold and fifty percent and code to ok"
+
+
+def test_normalizer_verbalizes_paths_component_by_component():
+    assert (
+        normalize_for_tts("The current working directory is /home/numair/dev/projects/verbix.")
+        == "The current working directory is home, numair, dev, projects, verbix."
+    )
+    assert normalize_for_tts("open ~/notes/todo.md") == "open home, notes, todo dot md"
+
+
+def test_normalizer_verbalizes_numbers():
+    assert normalize_for_tts("All 193 tests passed") == "All one hundred ninety-three tests passed"
+    assert normalize_for_tts("Pi is 3.14") == "Pi is three point one four"
+    assert normalize_for_tts("in 2026") == "in two thousand twenty-six"
+    assert normalize_for_tts("call_4134918 done") == "call four one three four nine one eight done"
+    assert normalize_for_tts("plan v1.2.3 now") == "plan v1.2.3 now"

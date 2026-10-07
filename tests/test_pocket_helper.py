@@ -19,6 +19,7 @@ class FakeHelperState:
         self.tts_payload = b"\x00\x01\x02\x03" * 480  # 1920 f32 samples
         self.kill_connection_first = False
         self.requests = 0
+        self.spawnenv = []
 
 
 def make_server(state):
@@ -84,6 +85,7 @@ def rig(monkeypatch, tmp_path):
         def __init__(self, argv, **kwargs):
             port = int(argv[argv.index("--port") + 1])
             spawns.append(argv)
+            state.spawnenv.append(kwargs.get("env") or {})
             for _ in range(50):
                 try:
                     self.server = ThreadingHTTPServer(("127.0.0.1", port), make_server(state))
@@ -214,3 +216,28 @@ def test_double_load_starts_one_helper_and_aclose_kills_it(rig):
 
     asyncio.run(bye())
     assert not eng.is_loaded
+
+
+def test_spawn_injects_library_path(rig):
+    import os
+    import sys
+
+    from verbix.voice.pocket_helper import PocketHelperEngine
+
+    state, _ = rig
+
+    async def go():
+        eng = PocketHelperEngine()
+        await eng.load()
+        await eng.aclose()
+
+    asyncio.run(go())
+    assert state.spawnenv, "helper spawned with no env"
+    env = state.spawnenv[0]
+    lib = str(__import__("pathlib").Path(os.environ["VERBIX_TTS_DIR"]) / "lib")
+    if sys.platform == "win32":
+        assert lib in env.get("PATH", "").split(os.pathsep)
+    elif sys.platform == "darwin":
+        assert lib in env.get("DYLD_LIBRARY_PATH", "").split(os.pathsep)
+    else:
+        assert lib in env.get("LD_LIBRARY_PATH", "").split(os.pathsep)

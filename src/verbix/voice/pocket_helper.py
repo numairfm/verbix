@@ -7,6 +7,7 @@ import os
 import secrets
 import socket
 import subprocess
+import sys
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -79,6 +80,16 @@ class PocketHelperEngine:
             )
         models = self.models_dir or (root / "models")
         voices = self.voices_dir or (root / "voices")
+        # Library path injected at spawn (per OS) so the helper finds its
+        # bundled lib no matter how the binary was built; mirrors rpath.
+        lib = str(root / "lib")
+        env = dict(os.environ)
+        if sys.platform == "win32":
+            env["PATH"] = lib + os.pathsep + env.get("PATH", "")
+        elif sys.platform == "darwin":
+            env["DYLD_LIBRARY_PATH"] = lib + os.pathsep + env.get("DYLD_LIBRARY_PATH", "")
+        else:
+            env["LD_LIBRARY_PATH"] = lib + os.pathsep + env.get("LD_LIBRARY_PATH", "")
         self._port = _free_port()
         self._token = secrets.token_hex(32)
         argv = [
@@ -106,7 +117,7 @@ class PocketHelperEngine:
             str(models / "tokenizer.model"),
         ]
         self._proc = await asyncio.to_thread(
-            subprocess.Popen, argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            subprocess.Popen, argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env
         )
         await self._await_healthy()
         logger.info("TTS helper ready on 127.0.0.1:%d", self._port)

@@ -547,6 +547,19 @@ class DefaultAgent:
                 self.messages, delivered_text=self._delivered_text
             )
             raise
+        except Submitted:
+            raise
+        except Exception:
+            # Turn boundary: a failed turn still ends as a repaired, spoken
+            # turn; the session never dies here.
+            self.logger.exception("Agent turn failed")
+            self.messages[:] = validate_and_repair_history(
+                self.messages, delivered_text=self._delivered_text
+            )
+            note = "Sorry — I ran into a problem. Could you say that again?"
+            self.add_messages(self._format_message(role="assistant", content=note))
+            yield TurnComplete(final_text=note)
+            return
 
     def handle_uncaught_exception(self, e: Exception) -> list[dict[str, Any]]:
         msg = self._format_message(

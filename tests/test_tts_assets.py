@@ -50,7 +50,7 @@ def test_layout_contains_bin_models_voices(tmp_path):
     base = _fixture_repo(tmp_path)
     root = tmp_path / "tts"
     (root / "bin").mkdir(parents=True)
-    (root / "bin" / "pocket-tts").write_bytes(b"fakebinary")
+    (root / "bin" / "verbix-tts").write_bytes(b"fakebinary")
 
     layout = mod.ensure_tts_runtime(
         root, base_url=base, files={"models/mimi_encoder.onnx": 64, "voices/alba.wav": 128}

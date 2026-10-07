@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -37,6 +38,18 @@ from verbix.minisweagent.models.utils.openai_multimodal import expand_multimodal
 from verbix.minisweagent.models.utils.retry import retry
 
 logger = logging.getLogger("litellm_model")
+
+# Transient mid-stream failures worth one clean restart each - but only while
+# nothing has been yielded yet. Re-requesting after speech started would
+# repeat what the user already heard; that path belongs to the turn boundary.
+_TRANSIENT_STREAM_ERRORS = (
+    litellm.exceptions.APIConnectionError,
+    litellm.exceptions.Timeout,
+    litellm.exceptions.RateLimitError,
+    litellm.exceptions.ServiceUnavailableError,
+    litellm.exceptions.MidStreamFallbackError,
+)
+_MAX_STREAM_ATTEMPTS = 3
 
 
 class LitellmModelConfig(BaseModel):
@@ -159,99 +172,107 @@ class LitellmModel:
         if tools is not None:
             call_kwargs["tools"] = tools
 
-        try:
-            response = cast(
-                Any,
-                await litellm.acompletion(
-                    model=self.config.model_name,
-                    messages=prepared_messages,
-                    stream=True,
-                    **call_kwargs,
-                ),
-            )
-        except litellm.exceptions.AuthenticationError as e:
-            e.message += " You can set your API key in environment variables or provider config."
-            logger.error(f"Authentication failed for model {self.config.model_name}: {e}")
-            raise
-
-        accumulated_text: list[str] = []
-        finish_reason: str | None = None
-        chunks: list[Any] = []
-        saw_usage = False
-
-        try:
-            async for chunk in response:
-                chunks.append(chunk)
-                if getattr(chunk, "usage", None):
-                    saw_usage = True
-                choices = getattr(chunk, "choices", None)
-                if choices is None and isinstance(chunk, dict):
-                    choices = chunk.get("choices", [])
-                if not choices:
-                    continue
-
-                choice = choices[0]
-                delta = getattr(choice, "delta", None)
-                if delta is None and isinstance(choice, dict):
-                    delta = choice.get("delta", {})
-
-                fr = getattr(choice, "finish_reason", None)
-                if fr is None and isinstance(choice, dict):
-                    fr = choice.get("finish_reason")
-                if fr:
-                    finish_reason = fr
-
-                # 1. Thought / Reasoning
-                reasoning = (
-                    getattr(delta, "reasoning_content", None)
-                    or getattr(delta, "reasoning", None)
-                    or getattr(delta, "thought", None)
+        attempts = 0
+        while True:
+            accumulated_text: list[str] = []
+            finish_reason: str | None = None
+            chunks: list[Any] = []
+            saw_usage = False
+            yielded_any = False
+            try:
+                response = cast(
+                    Any,
+                    await litellm.acompletion(
+                        model=self.config.model_name,
+                        messages=prepared_messages,
+                        stream=True,
+                        **call_kwargs,
+                    ),
                 )
-                if reasoning is None and isinstance(delta, dict):
+                async for chunk in response:
+                    yielded_any = True
+                    chunks.append(chunk)
+                    if getattr(chunk, "usage", None):
+                        saw_usage = True
+                    choices = getattr(chunk, "choices", None)
+                    if choices is None and isinstance(chunk, dict):
+                        choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+
+                    choice = choices[0]
+                    delta = getattr(choice, "delta", None)
+                    if delta is None and isinstance(choice, dict):
+                        delta = choice.get("delta", {})
+
+                    fr = getattr(choice, "finish_reason", None)
+                    if fr is None and isinstance(choice, dict):
+                        fr = choice.get("finish_reason")
+                    if fr:
+                        finish_reason = fr
+
+                    # 1. Thought / Reasoning
                     reasoning = (
-                        delta.get("reasoning_content")
-                        or delta.get("reasoning")
-                        or delta.get("thought")
+                        getattr(delta, "reasoning_content", None)
+                        or getattr(delta, "reasoning", None)
+                        or getattr(delta, "thought", None)
                     )
-                if reasoning:
-                    yield ThoughtDelta(thought=reasoning)
-
-                # 2. Text Content
-                content = getattr(delta, "content", None)
-                if content is None and isinstance(delta, dict):
-                    content = delta.get("content")
-                if content:
-                    accumulated_text.append(content)
-                    yield TextDelta(text=content)
-
-                # 3. Tool Calls
-                tool_calls = getattr(delta, "tool_calls", None)
-                if tool_calls is None and isinstance(delta, dict):
-                    tool_calls = delta.get("tool_calls", [])
-                if tool_calls:
-                    for tc in tool_calls:
-                        idx = getattr(tc, "index", 0)
-                        call_id = getattr(tc, "id", None)
-                        fn = getattr(tc, "function", None)
-                        if isinstance(tc, dict):
-                            idx = tc.get("index", 0)
-                            call_id = tc.get("id")
-                            fn = tc.get("function", {})
-                        fn_name = getattr(fn, "name", None) if fn else None
-                        args_delta = getattr(fn, "arguments", "") if fn else ""
-                        if isinstance(fn, dict):
-                            fn_name = fn.get("name")
-                            args_delta = fn.get("arguments", "")
-                        yield ToolCallDelta(
-                            index=idx,
-                            call_id=call_id,
-                            name=fn_name,
-                            arguments_delta=args_delta or "",
+                    if reasoning is None and isinstance(delta, dict):
+                        reasoning = (
+                            delta.get("reasoning_content")
+                            or delta.get("reasoning")
+                            or delta.get("thought")
                         )
-        except litellm.exceptions.AuthenticationError as e:
-            e.message += " You can set your API key in environment variables or provider config."
-            logger.error(f"Authentication failed during stream for model {self.config.model_name}: {e}")
-            raise
+                    if reasoning:
+                        yield ThoughtDelta(thought=reasoning)
+
+                    # 2. Text Content
+                    content = getattr(delta, "content", None)
+                    if content is None and isinstance(delta, dict):
+                        content = delta.get("content")
+                    if content:
+                        accumulated_text.append(content)
+                        yield TextDelta(text=content)
+
+                    # 3. Tool Calls
+                    tool_calls = getattr(delta, "tool_calls", None)
+                    if tool_calls is None and isinstance(delta, dict):
+                        tool_calls = delta.get("tool_calls", [])
+                    if tool_calls:
+                        for tc in tool_calls:
+                            idx = getattr(tc, "index", 0)
+                            call_id = getattr(tc, "id", None)
+                            fn = getattr(tc, "function", None)
+                            if isinstance(tc, dict):
+                                idx = tc.get("index", 0)
+                                call_id = tc.get("id")
+                                fn = tc.get("function", {})
+                            fn_name = getattr(fn, "name", None) if fn else None
+                            args_delta = getattr(fn, "arguments", "") if fn else ""
+                            if isinstance(fn, dict):
+                                fn_name = fn.get("name")
+                                args_delta = fn.get("arguments", "")
+                            yield ToolCallDelta(
+                                index=idx,
+                                call_id=call_id,
+                                name=fn_name,
+                                arguments_delta=args_delta or "",
+                            )
+            except litellm.exceptions.AuthenticationError as e:
+                e.message += " You can set your API key in environment variables or provider config."
+                logger.error(f"Authentication failed during stream for model {self.config.model_name}: {e}")
+                raise
+            except _TRANSIENT_STREAM_ERRORS as e:
+                if yielded_any or attempts >= _MAX_STREAM_ATTEMPTS - 1:
+                    raise
+                attempts += 1
+                logger.warning(
+                    f"Transient stream error for model {self.config.model_name} "
+                    f"(attempt {attempts + 1}/{_MAX_STREAM_ATTEMPTS}): {e}",
+                )
+                await asyncio.sleep(min(8.0, 2.0 ** (attempts - 1)))
+                continue
+            break
 
         full_text = "".join(accumulated_text)
         if saw_usage:

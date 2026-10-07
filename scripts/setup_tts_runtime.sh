@@ -34,7 +34,7 @@ else
     cp "$SRC/pocket-tts" "$OUT/bin/verbix-tts"
     cp "$SRC/.build/_deps/onnxruntime-src/lib"/libonnxruntime.so* "$OUT/lib/" 2>/dev/null || true
 fi
-mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/models" "$OUT/voices"
+mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/models" "$OUT/models/tts" "$OUT/voices"
 
 # 2. Weights: throwaway venv (never touches project deps) running the
 # maintained export pipeline from the pocket-tts-onnx-export fork.
@@ -56,14 +56,11 @@ ls onnx/
 for f in flow_lm_flow_int8.onnx flow_lm_main_int8.onnx mimi_decoder_int8.onnx \
          mimi_encoder.onnx text_conditioner.onnx; do
     test -f "onnx/$f"
-    cp "onnx/$f" "$OUT/models/$f"
+    cp "onnx/$f" "$OUT/models/tts/$f"
 done
-cp onnx/*.onnx.data "$OUT/models/"
-find weights -name "tokenizer.model" -exec cp {} "$OUT/models/" \;
-test -f "$OUT/models/tokenizer.model"
-# BOS conditioning file ships with the vendored pocket-tts package data.
-find "$EXPORT_SRC" -name "bos_before_voice.npy" -exec cp {} "$OUT/models/" \;
-test -f "$OUT/models/bos_before_voice.npy"
+cp onnx/*.onnx.data "$OUT/models/tts/"
+find weights -name "tokenizer.model" -exec cp {} "$OUT/models/tts/" \;
+test -f "$OUT/models/tts/tokenizer.model"
 cd /
 rm -rf "$EXPORT_VENV" "$EXPORT_SRC"
 

@@ -13,16 +13,20 @@ logger = logging.getLogger(__name__)
 # URLs are recorded in MANIFEST.json by whoever fetches; sizes are the
 # integrity gate here.
 PINNED_FILES: dict[str, int] = {
-    "models/flow_lm_flow_int8.onnx": 9962530,
-    "models/flow_lm_main_int8.onnx": 76341079,
-    "models/mimi_decoder_int8.onnx": 22695710,
-    "models/mimi_encoder.onnx": 585023,
-    "models/mimi_encoder.onnx.data": 72613888,
-    "models/text_conditioner.onnx": 465,
-    "models/text_conditioner.onnx.data": 16388096,
-    "models/tokenizer.model": 59339,
+    "models/tts/flow_lm_flow_int8.onnx": 9962530,
+    "models/tts/flow_lm_main_int8.onnx": 76341079,
+    "models/tts/mimi_decoder_int8.onnx": 22695710,
+    "models/tts/mimi_encoder.onnx": 585023,
+    "models/tts/mimi_encoder.onnx.data": 72613888,
+    "models/tts/text_conditioner.onnx": 465,
+    "models/tts/text_conditioner.onnx.data": 16388096,
+    "models/tts/tokenizer.model": 59339,
     "voices/alba.wav": 958542,
 }
+
+# Public bundle mirror (downloads.verbix.dev). First voice run pulls missing
+# files from here; the forge in scripts/setup_tts_runtime.sh is the fallback.
+DEFAULT_BUNDLE_URL = "https://downloads.verbix.dev/v1"
 
 # Canonical Alba reference (upstream seed; production mirrors under own control).
 ALBA_URL = "https://huggingface.co/kyutai/tts-voices/resolve/main/alba-mackenna/casual.wav"
@@ -95,11 +99,12 @@ def ensure_tts_runtime(
 ) -> dict[str, Path]:
     """Ensures the helper runtime layout; returns bin/models/voices dirs.
 
-    Binary: must already exist (CI prebuilt, local build, or dev override).
-    If missing and base_url serves one, it is fetched; otherwise a clear
-    error points at scripts/build_tts_helper.sh. Compilation is never
-    triggered implicitly — explicit script runs and CI own that step.
+    Binary: must already exist (setup script build, or dev override).
+    Missing weight/voice files are pulled from base_url (the public bundle
+    by default) with pinned byte-size checks. Compilation is never
+    triggered implicitly — scripts/setup_tts_runtime.sh owns that step.
     """
+    base_url = base_url or DEFAULT_BUNDLE_URL
     root = root or default_root()
     binary = _resolve_binary(root)
     if binary is None:
@@ -109,13 +114,13 @@ def ensure_tts_runtime(
                 binary = root / "bin" / "verbix-tts"
             except OSError as e:
                 raise RuntimeError(
-                    f"TTS helper binary missing under {root / 'bin'}: {e}. Build one with "
-                    "scripts/build_tts_helper.sh."
+                    f"TTS helper binary missing under {root / 'bin'}: {e}. Run "
+                    "scripts/setup_tts_runtime.sh to build it."
                 ) from e
         else:
             raise RuntimeError(
-                f"TTS helper binary missing under {root / 'bin'}. Build one with "
-                "scripts/build_tts_helper.sh or point VERBIX_TTS_DIR at a runtime dir."
+                f"TTS helper binary missing under {root / 'bin'}. Run "
+                "scripts/setup_tts_runtime.sh to build it or point VERBIX_TTS_DIR at a runtime dir."
             )
     ensure_files(root, files if files is not None else PINNED_FILES, base_url)
     manifest = {

@@ -241,3 +241,20 @@ def test_spawn_injects_library_path(rig):
         assert lib in env.get("DYLD_LIBRARY_PATH", "").split(os.pathsep)
     else:
         assert lib in env.get("LD_LIBRARY_PATH", "").split(os.pathsep)
+
+
+def test_models_default_to_tts_subdir(rig):
+    from verbix.voice.pocket_helper import PocketHelperEngine
+
+    _, spawns = rig
+
+    async def go():
+        eng = PocketHelperEngine()
+        await eng.load()
+        await eng.aclose()
+
+    asyncio.run(go())
+    models_dir = spawns[0][spawns[0].index("--models-dir") + 1]
+    assert models_dir.endswith("models/tts")
+    tokenizer = spawns[0][spawns[0].index("--tokenizer") + 1]
+    assert tokenizer.endswith("models/tts/tokenizer.model")

@@ -61,6 +61,37 @@ def test_layout_contains_bin_models_voices(tmp_path):
     assert (layout["models"] / "MANIFEST.json").is_file()
 
 
+def _bucket_repo(tmp_path: Path) -> str:
+    repo = tmp_path / "bucket" / "v1"
+    (repo / "models" / "tts").mkdir(parents=True)
+    (repo / "voices").mkdir(parents=True)
+    (repo / "models" / "tts" / "flow_lm_flow_int8.onnx").write_bytes(b"F" * 32)
+    (repo / "voices" / "alba.wav").write_bytes(b"W" * 16)
+    return (tmp_path / "bucket" / "v1").as_uri()
+
+
+def test_first_run_downloads_from_default_bundle(monkeypatch, tmp_path):
+    from verbix.voice import tts_assets as mod
+
+    base = _bucket_repo(tmp_path)
+    monkeypatch.setattr(mod, "DEFAULT_BUNDLE_URL", base)
+    files = {"models/tts/flow_lm_flow_int8.onnx": 32, "voices/alba.wav": 16}
+    root = tmp_path / "tts"
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "verbix-tts").write_bytes(b"fakebinary")
+
+    layout = mod.ensure_tts_runtime(root, files=files)
+    assert (layout["models"] / "tts" / "flow_lm_flow_int8.onnx").read_bytes() == b"F" * 32
+    assert (layout["voices"] / "alba.wav").read_bytes() == b"W" * 16
+
+
+def test_missing_binary_points_at_setup_script(tmp_path):
+    from verbix.voice import tts_assets as mod
+
+    with __import__("pytest").raises(RuntimeError, match="setup_tts_runtime"):
+        mod.ensure_tts_runtime(tmp_path / "empty", files={})
+
+
 def test_default_root_is_universal_home(monkeypatch, tmp_path):
     from verbix.voice import tts_assets as mod
 

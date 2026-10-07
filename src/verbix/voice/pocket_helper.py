@@ -75,10 +75,10 @@ class PocketHelperEngine:
         binary = self.helper_bin or _resolve_binary(root)
         if binary is None:
             raise RuntimeError(
-                f"TTS helper binary missing under {root / 'bin'}. Build one with "
-                "scripts/build_tts_helper.sh or point VERBIX_TTS_DIR at a runtime dir."
+                f"TTS helper binary missing under {root / 'bin'}. Run "
+                "scripts/setup_tts_runtime.sh or point VERBIX_TTS_DIR at a runtime dir."
             )
-        models = self.models_dir or (root / "models")
+        models = self.models_dir or (root / "models" / "tts")
         voices = self.voices_dir or (root / "voices")
         # Library path injected at spawn (per OS) so the helper finds its
         # bundled lib no matter how the binary was built; mirrors rpath.

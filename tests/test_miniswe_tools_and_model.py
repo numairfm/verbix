@@ -292,3 +292,55 @@ def test_litellm_model_config():
     assert config.model_kwargs["temperature"] == 0.2
     model = LitellmModel(config_class=lambda **kw: config)
     assert model.config.model_name == "anthropic/claude-3-5-sonnet"
+
+
+def _call(name, args, call_id="call-1"):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(id=call_id, function=SimpleNamespace(name=name, arguments=args))
+
+
+def test_parser_keeps_bash_shape_by_default():
+    from verbix.minisweagent.models.utils.actions_toolcall import parse_toolcall_actions
+
+    actions = parse_toolcall_actions(
+        [_call("bash", '{"command": "ls"}')], format_error_template="{{ error }}"
+    )
+    assert actions == [{"command": "ls", "tool_call_id": "call-1"}]
+
+
+def test_parser_rejects_registry_tool_without_allowlist():
+    import pytest
+
+    from verbix.minisweagent.exceptions import FormatError
+    from verbix.minisweagent.models.utils.actions_toolcall import parse_toolcall_actions
+
+    with pytest.raises(FormatError):
+        parse_toolcall_actions(
+            [_call("screenshot", '{"region": "full"}')], format_error_template="{{ error }}"
+        )
+
+
+def test_parser_accepts_allowlisted_registry_tool():
+    from verbix.minisweagent.models.utils.actions_toolcall import parse_toolcall_actions
+
+    actions = parse_toolcall_actions(
+        [_call("screenshot", '{"region": "full"}')],
+        format_error_template="{{ error }}",
+        allowed_tools={"screenshot"},
+    )
+    assert actions == [
+        {"name": "screenshot", "arguments": {"region": "full"}, "tool_call_id": "call-1"}
+    ]
+
+
+def test_parser_still_rejects_unknown_tool_with_allowlist():
+    import pytest
+
+    from verbix.minisweagent.exceptions import FormatError
+    from verbix.minisweagent.models.utils.actions_toolcall import parse_toolcall_actions
+
+    with pytest.raises(FormatError):
+        parse_toolcall_actions(
+            [_call("nope", '{}')], format_error_template="{{ error }}", allowed_tools={"screenshot"}
+        )

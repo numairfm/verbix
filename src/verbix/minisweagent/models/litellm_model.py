@@ -140,7 +140,7 @@ class LitellmModel:
         cost_output = self._calculate_cost(response)
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
         try:
-            actions = self._parse_actions(response)
+            actions = self._parse_actions(response, kwargs.get("tools"))
         except FormatError as e:
             e.messages[0]["extra"].update(cost_output)
             try:
@@ -308,12 +308,18 @@ class LitellmModel:
                 raise RuntimeError(msg) from e
         return {"cost": cost}
 
-    def _parse_actions(self, response: Any) -> list[dict[str, Any]]:
+    def _parse_actions(self, response: Any, tool_defs: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         tool_calls = response.choices[0].message.tool_calls or []
+        allowed: set[str] = set()
+        for definition in tool_defs or []:
+            name = definition.get("function", {}).get("name") if isinstance(definition, dict) else None
+            if name:
+                allowed.add(name)
         return parse_toolcall_actions(
             tool_calls,
             format_error_template=self.config.format_error_template,
             template_kwargs={"finish_reason": response.choices[0].finish_reason},
+            allowed_tools=allowed or None,
         )
 
     def format_message(self, **kwargs: Any) -> dict[str, Any]:

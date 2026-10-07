@@ -29,9 +29,18 @@ BASH_TOOL = {
 
 
 def parse_toolcall_actions(
-    tool_calls: list[Any], *, format_error_template: str, template_kwargs: dict[str, Any] | None = None
+    tool_calls: list[Any],
+    *,
+    format_error_template: str,
+    template_kwargs: dict[str, Any] | None = None,
+    allowed_tools: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Parse tool calls from the response. Raises FormatError if unknown tool or invalid args."""
+    """Parse tool calls from the response. Raises FormatError if unknown tool or invalid args.
+
+    ``allowed_tools`` names the registry tools advertised for this query
+    (``bash`` is always allowed). Registry actions come back generic
+    (``name``/``arguments``); bash keeps its historic ``command`` shape.
+    """
     template_kwargs = template_kwargs or {}
     if not tool_calls:
         raise FormatError(
@@ -57,10 +66,13 @@ def parse_toolcall_actions(
         except (json.JSONDecodeError, TypeError, ValueError) as e:
             error_msg = f"Error parsing tool call arguments: {e}."
         fn_name = getattr(getattr(tool_call, "function", None), "name", "")
-        if fn_name != "bash":
+        known = {"bash"} | (allowed_tools or set())
+        if fn_name not in known:
             error_msg += f"Unknown tool '{fn_name}'."
-        if not isinstance(args, dict) or "command" not in args:
+        elif fn_name == "bash" and (not isinstance(args, dict) or "command" not in args):
             error_msg += "Missing 'command' argument in bash tool call."
+        elif fn_name != "bash" and not isinstance(args, dict):
+            error_msg += f"Invalid arguments for tool '{fn_name}'."
         if error_msg:
             raise FormatError(
                 {
@@ -72,7 +84,10 @@ def parse_toolcall_actions(
                 }
             )
         call_id = getattr(tool_call, "id", None)
-        actions.append({"command": args["command"], "tool_call_id": call_id})
+        if fn_name == "bash":
+            actions.append({"command": args["command"], "tool_call_id": call_id})
+        else:
+            actions.append({"name": fn_name, "arguments": args, "tool_call_id": call_id})
     return actions
 
 

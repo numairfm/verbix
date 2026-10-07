@@ -110,3 +110,28 @@ def test_repo_local_runtime_wins_when_present(monkeypatch, tmp_path):
     local_bin.mkdir(parents=True)
     (local_bin / "verbix-tts").write_bytes(b"fakebinary")
     assert mod.default_root() == tmp_path / "tts-runtime"
+
+
+def test_download_sends_browser_like_user_agent(monkeypatch, tmp_path):
+    from verbix.voice import tts_assets as mod
+
+    seen = {}
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"data"
+
+    def fake_urlopen(req, *a, **k):
+        seen["ua"] = req.get_header("User-agent")
+        return FakeResp()
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    mod._download("https://example.com/y.bin", tmp_path / "y.bin")
+    assert (tmp_path / "y.bin").read_bytes() == b"data"
+    assert seen["ua"] and "Python-urllib" not in seen["ua"]

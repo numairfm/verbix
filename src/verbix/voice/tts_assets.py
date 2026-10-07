@@ -33,9 +33,12 @@ ALBA_URL = "https://huggingface.co/kyutai/tts-voices/resolve/main/alba-mackenna/
 
 
 def _download(url: str, dest: Path) -> None:
+    # Identified user agent: bare urllib is challenged by CDN bot protection.
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
-    urllib.request.urlretrieve(url, tmp)
+    req = urllib.request.Request(url, headers={"User-Agent": "verbix-tts-setup/1.0"})
+    with urllib.request.urlopen(req) as resp, open(tmp, "wb") as f:
+        f.write(resp.read())
     tmp.replace(dest)
 
 

@@ -47,9 +47,13 @@ environment wins over file values (`cli.py:29`).
 Agent tuning lives in `src/verbix/minisweagent/config/`: `voice.yaml`
 (foreground), `worker.yaml` / `swe_worker.yaml` (background workers).
 
-Audio extras are optional: `uv sync --extra audio --extra tts`
-(`sounddevice`, `pocket-tts` + CPU `torch`). Without them, text and
-`--serve` modes still work; voice mode needs STT/TTS backends.
+Audio extras are optional: `uv sync --extra audio` (`sounddevice`).
+Voice mode needs STT (faster-whisper, a main dependency) plus the TTS
+runtime: a resident PocketTTS.cpp helper (built per platform — see
+`scripts/build_tts_helper.sh`), its model bundle, and one voice clip,
+resolved into `~/.cache/verbix/tts` on first voice use
+(`VERBIX_TTS_DIR` overrides). Without them, text and `--serve` modes
+still work. Attribution: `THIRD-PARTY-NOTICES.md`.
 
 ## Architecture
 
@@ -112,7 +116,8 @@ IDLE ──toggle──▶ LISTENING ──toggle──▶ SPEAKING ──draine
 ```
 
 `VoicePipeline` (`voice/pipeline.py`): `PTTCapture` → live `FasterWhisperSTT`
-session → `runtime.submit(text, SpeechOutput)` → sentence-streamed `PocketTTS`
+session → `runtime.submit(text, SpeechOutput)` → sentence-streamed helper
+TTS (`voice/pocket_helper.py`, resident PocketTTS.cpp process)
 → `AudioPlayer` → single sink (`callback_sink`/`sinks`). Toggle during playback
 or a running turn interrupts first (`interrupted_and_recording`). Empty
 transcriptions return to `IDLE` without a model call. `SpeechOutput`
@@ -144,7 +149,7 @@ STATE: IDLE
 | `core/` | canonical messages/events, history repair, inner agent loop |
 | `provider/` | streaming OpenAI-compatible SSE client, errors, event types |
 | `tools/` | `Tool`/`ToolContext`, `file_read`/`file_write`/`file_edit`, `bash` via bubblewrap (`bwrap` missing → raise, never silent fallback) |
-| `voice/` | `pipeline`, `capture`, `stt` (faster-whisper), `pocket_tts`, `player`, `output` (sentence streaming), `sinks`/`callback_sink`, `base` protocols + mocks |
+| `voice/` | `pipeline`, `capture`, `stt` (faster-whisper), `pocket_helper` (resident TTS process), `tts_assets` (pinned fetch), `player`, `output` (sentence streaming), `sinks`/`callback_sink`, `base` protocols + mocks |
 | `ipc/` | `server`/`client`/`protocol`: JSONL over Unix socket, `ping/prompt/status/cancel/toggle`, runtime event fan-out |
 | `minisweagent/` | vendored agent core: `agents/default`, `environments/local`, `models/litellm_model`, `tools/registry`, `config/*.yaml` |
 

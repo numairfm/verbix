@@ -88,8 +88,6 @@ class PocketHelperEngine:
             str(self._port),
             "--precision",
             "int8",
-            "--mimi-precision",
-            "fp32",
             "--temperature",
             "0.3",
             "--lsd-steps",

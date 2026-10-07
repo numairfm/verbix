@@ -214,24 +214,3 @@ def test_double_load_starts_one_helper_and_aclose_kills_it(rig):
 
     asyncio.run(bye())
     assert not eng.is_loaded
-
-
-def test_falls_back_to_pocket_tts_binary_name(rig, monkeypatch, tmp_path):
-    from verbix.voice.pocket_helper import PocketHelperEngine
-
-    root = tmp_path / "tts2"
-    (root / "bin").mkdir(parents=True)
-    (root / "bin" / "pocket-tts").write_bytes(b"fakebinary")
-    monkeypatch.setenv("VERBIX_TTS_DIR", str(root))
-
-    seen = []
-
-    async def go():
-        eng = PocketHelperEngine()
-        await eng.load()
-        seen.append(eng)
-        await eng.aclose()
-
-    asyncio.run(go())
-    _, spawns = rig
-    assert spawns and spawns[-1][0].endswith("pocket-tts")

@@ -68,15 +68,12 @@ def ensure_files(
 
 
 def _resolve_binary(root: Path) -> Path | None:
-    """First existing helper binary: verbix-tts, then pocket-tts fallback."""
+    """Helper binary for this runtime dir, or None. One name, no guessing."""
     import sys
 
     suffix = ".exe" if sys.platform == "win32" else ""
-    for name in ("verbix-tts", "pocket-tts"):
-        candidate = root / "bin" / (name + suffix)
-        if candidate.is_file():
-            return candidate
-    return None
+    candidate = root / "bin" / ("verbix-tts" + suffix)
+    return candidate if candidate.is_file() else None
 
 
 def default_root() -> Path:

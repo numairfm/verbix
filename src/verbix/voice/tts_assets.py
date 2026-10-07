@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import json
+import logging
+import os
+import urllib.request
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# Pinned bundle content (bytes), recorded 2026-10-07. URLs are recorded in
+# MANIFEST.json by whoever fetches; sizes are the integrity gate here.
+PINNED_FILES: dict[str, int] = {
+    "models/flow_lm_flow_int8.onnx": 9962530,
+    "models/flow_lm_main_int8.onnx": 76341079,
+    "models/mimi_decoder.onnx": 41471926,
+    "models/mimi_encoder.onnx": 39768446,
+    "models/text_conditioner.onnx": 16388344,
+    "models/tokenizer.model": 59339,
+    "models/bos_before_voice.npy": 4224,
+    "voices/alba.wav": 958542,
+}
+
+# Canonical Alba reference (upstream seed; production mirrors under own control).
+ALBA_URL = "https://huggingface.co/kyutai/tts-voices/resolve/main/alba-mackenna/casual.wav"
+
+
+def _download(url: str, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    urllib.request.urlretrieve(url, tmp)
+    tmp.replace(dest)
+
+
+def ensure_files(
+    root: Path, files: dict[str, int], base_url: str | None = None
+) -> dict[str, Path]:
+    """Ensures each relpath exists under root with the pinned byte size.
+
+    Missing or wrong-sized files are (re)downloaded from base_url. Returns
+    relpath -> absolute path. Raises RuntimeError naming the file when no
+    base_url is set or the download fails.
+    """
+    out: dict[str, Path] = {}
+    for rel, size in files.items():
+        dest = root / rel
+        if dest.is_file() and dest.stat().st_size == size:
+            out[rel] = dest
+            continue
+        if not base_url:
+            raise RuntimeError(
+                f"TTS asset missing or wrong size: {rel} "
+                f"(want {size} bytes). Set a bundle source or run "
+                "scripts/build_tts_helper.sh."
+            )
+        try:
+            _download(f"{base_url.rstrip('/')}/{rel}", dest)
+        except OSError as e:
+            raise RuntimeError(f"TTS asset download failed: {rel}: {e}") from e
+        if dest.stat().st_size != size:
+            dest.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"TTS asset download failed: {rel} has wrong size "
+                f"(want {size} bytes). Source mismatch — refusing to load."
+            )
+        out[rel] = dest
+    return out
+
+
+def default_root() -> Path:
+    if env := os.environ.get("VERBIX_TTS_DIR"):
+        return Path(env)
+    if env := os.environ.get("VERBIX_CACHE_DIR"):
+        return Path(env) / "tts"
+    return Path.home() / ".cache" / "verbix" / "tts"
+
+
+def ensure_tts_runtime(
+    root: Path | None = None,
+    base_url: str | None = None,
+    files: dict[str, int] | None = None,
+) -> dict[str, Path]:
+    """Ensures the helper runtime layout; returns bin/models/voices dirs.
+
+    Binary: must already exist (CI prebuilt, local build, or dev override).
+    If missing and base_url serves one, it is fetched; otherwise a clear
+    error points at scripts/build_tts_helper.sh. Compilation is never
+    triggered implicitly — explicit script runs and CI own that step.
+    """
+    root = root or default_root()
+    binary = root / "bin" / "pocket-tts"
+    if not binary.is_file():
+        if base_url:
+            try:
+                _download(f"{base_url.rstrip('/')}/bin/pocket-tts", binary)
+            except OSError as e:
+                raise RuntimeError(
+                    f"TTS helper binary missing at {binary}: {e}. Build one with "
+                    "scripts/build_tts_helper.sh."
+                ) from e
+        else:
+            raise RuntimeError(
+                f"TTS helper binary missing at {binary}. Build one with "
+                "scripts/build_tts_helper.sh or point VERBIX_TTS_DIR at a runtime dir."
+            )
+    ensure_files(root, files if files is not None else PINNED_FILES, base_url)
+    manifest = {
+        "binary": str(binary),
+        "files": files if files is not None else PINNED_FILES,
+        "base_url": base_url,
+        "alba_canonical_url": ALBA_URL,
+    }
+    (root / "models" / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
+    return {"bin": root / "bin", "models": root / "models", "voices": root / "voices"}

@@ -1,0 +1,26 @@
+name: tts-helper
+on:
+  workflow_dispatch:
+    inputs:
+      pockettts_commit:
+        description: "Pinned PocketTTS.cpp commit"
+        required: true
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build helper + fetch assets
+        shell: bash
+        run: |
+          bash scripts/build_tts_helper.sh "${{ inputs.pockettts_commit }}" tts-runtime
+          python3 scripts/fetch_tts_assets.py tts-runtime
+      - name: Upload per-platform bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: tts-runtime-${{ matrix.os }}
+          path: tts-runtime/

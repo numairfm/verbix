@@ -195,3 +195,20 @@ def test_multimodal_expansion_is_on_by_default():
     parts = msgs[0]["content"]
     assert isinstance(parts, list)
     assert any(p.get("type") == "image_url" for p in parts)
+
+
+@pytest.mark.asyncio
+async def test_read_states_its_own_completeness(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "f.txt").write_text("one\ntwo\n")
+    (workspace / "d").mkdir()
+    (workspace / "d" / "a.txt").write_text("a")
+    ctx = ToolContext(workspace=workspace)
+    read_tool = FileReadTool()
+
+    file_res = await read_tool.execute({"path": "f.txt", "start_line": 1, "end_line": 1}, ctx)
+    assert "showing lines 1-1 of 2" in file_res.observation
+
+    dir_res = await read_tool.execute({"path": "d"}, ctx)
+    assert "showing entries 1-1 of 1" in dir_res.observation

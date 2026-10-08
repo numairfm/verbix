@@ -70,7 +70,9 @@ class FileReadTool:
         start_line = max(1, int(args.get("start_line", 1)))
         end_line = args.get("end_line")
         end_line = min(len(rows), int(end_line)) if end_line is not None else len(rows)
-        return ToolResult("\n".join(rows[start_line - 1 : end_line]))
+        body = "\n".join(rows[start_line - 1 : end_line])
+        header = f"showing entries {start_line}-{end_line} of {len(rows)}"
+        return ToolResult(f"{header}\n{body}" if body else header)
 
     def _read_image(self, target: Path, path_str: str) -> ToolResult:
         import base64
@@ -121,7 +123,9 @@ class FileReadTool:
                 end_line = len(lines)
 
             selected = [f"{i}: {lines[i - 1]}" for i in range(start_line, end_line + 1)]
-            return ToolResult("\n".join(selected))
+            header = f"showing lines {start_line}-{end_line} of {len(lines)}"
+            body = "\n".join(selected)
+            return ToolResult(f"{header}\n{body}" if body else header)
         except ValueError as e:
             return ToolResult(f"error: {e}", is_error=True)
         except OSError as e:

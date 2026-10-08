@@ -218,3 +218,40 @@ def test_raw_deferrals_pinned():
     assert normalize_for_tts("don't stop") == "don't stop"
     assert normalize_for_tts("TCP/IP is down") == "TCP/IP is down"
     assert normalize_for_tts("well-known fact") == "well-known fact"
+
+
+def test_fixpass_multidigit_times():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("12*34 now") == "twelve times thirty-four now"
+
+
+def test_fixpass_date_passthrough():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("on 12/25/2024 ok") == "on 12/25/2024 ok"
+
+
+def test_fixpass_trailing_comma_kept():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("I have 5, and 6 here") == "I have five, and six here"
+
+
+def test_fixpass_modern_decades():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("the 2010s were odd") == "the twenty tens were odd"
+
+
+def test_fixpass_ascii_arrows():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("a -> b now") == "a to b now"
+    assert normalize_for_tts("a => b now") == "a to b now"
+
+
+def test_fixpass_email_verbalized():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("mail bob@example.com now") == "mail bob at example dot com now"

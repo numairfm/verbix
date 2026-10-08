@@ -39,8 +39,8 @@ _VERSION = re.compile(r"(?<![\w.])([A-Za-z])(\d+(?:\.\d+)+)(?![\w.])")
 _DECIMAL = re.compile(r"(?<![\w.])\d+(?:\.\d+)+\.?(?![\w.])")
 _COMMA_AMOUNT = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\w.])")
 _ORDINAL = re.compile(r"(?<![\w.])(\d+)(st|nd|rd|th)\b", re.IGNORECASE)
-_TIMES = re.compile(r"(\d)\s*\*\s*(\d)")
-_INT = re.compile(r"(?<![\w.])\d[\d,]*(?!\w)")
+_TIMES = re.compile(r"(\d+)\s*\*\s*(\d+)")
+_INT = re.compile(r"(?<![\w.])\d(?:[\d,]*\d)?(?!\w)")
 _MD = re.compile(r"[*_`]")
 _BULLET = re.compile(r"(?m)^\s*(?:[-*+]|\d+[.)])\s+")
 _HASH_HEADING = re.compile(r"(?m)^\s*#{1,6}\s+")
@@ -61,7 +61,7 @@ _SQUARED = re.compile(r"(\w)\^2\b")
 _POWER = re.compile(r"\^")
 _DUNDER = re.compile(r"__(\w+)__")
 _BARE_DOMAIN = re.compile(r"(?<![\w@:/.])([\w-]+\.(?:com|org|net|io|dev|gov|edu)(?:/[\w.\-~/?#=&%]*)?)")
-_MONEY = re.compile(r"(?<![\w$€£¥])([$€£¥])\s*(\d[\d,]*)(?:\.(\d{1,2}))?")
+_MONEY = re.compile(r"(?<![\w$€£¥])([$€£¥])\s*(\d(?:[\d,]*\d)?)(?:\.(\d{1,2}))?")
 _WS = re.compile(r"\s+")
 
 _EMERGENCY = re.compile(r"\b911\b|(?<![\w.])9-1-1(?![\w.])")
@@ -74,6 +74,9 @@ _AMPM = re.compile(r"(\d+)\s*([AaPp])\.?\s*([Mm])\.?\b")
 _DASH_RUN = re.compile(r"(?<![\w.])\d+(?:-\d+)+(?![\w.])")
 _NO_NUM = re.compile(r"No\.(?=\s*\d)")
 _DECADE = re.compile(r"(?<![\w.])((?:1\d|20)\d)0[sS](?![\w.])")
+_DATE = re.compile(r"(?<![\w.])\d+/\d+/\d+(?![\w.])")
+_ARROW = re.compile(r"->|=>|<-")
+_EMAIL = re.compile(r"(?<![\w@:/.])([\w.+-]+)@([\w-]+\.[\w.]+)")
 _YEAR = re.compile(r"(?<![\w.])(1\d{3})(?![\w.])")
 
 _CURRENCY_NAMES = {"$": ("dollar", "dollars"), "€": ("euro", "euros"), "£": ("pound", "pounds"),
@@ -255,9 +258,14 @@ def _verbalize_dash_run(m: re.Match[str]) -> str:
 
 def _verbalize_decade(m: re.Match[str]) -> str:
     stem = m.group(1)
-    tens = _TENS[int(stem[1])]
-    decade = tens[:-1] + "ies" if tens.endswith("y") else tens + "s"
-    return f"{_under_100(int(stem[:2]))} {decade}"
+    if stem == "200":
+        return "two thousands"
+    century = _under_100(int(stem[:2]))
+    d = int(stem[2])
+    if d == 0:
+        return f"{century} hundreds"
+    tens = "ten" if d == 1 else _TENS[d]
+    return f"{century} {tens[:-1] + 'ies' if tens.endswith('y') else tens + 's'}"
 
 
 def _hex_char(c: str) -> str:
@@ -288,6 +296,10 @@ def _verbalize_fraction(m: re.Match[str]) -> str:
         denom = "quarter" if num == "1" else "quarters"
         return f"{_num_side(num)} {denom}"
     return f"{_num_side(num)} {num2words(int(den), to='ordinal')}s"
+
+
+def _verbalize_email(m: re.Match[str]) -> str:
+    return f"{m.group(1)} at {m.group(2).replace('.', ' dot ')}"
 
 
 def _verbalize_cmp(m: re.Match[str]) -> str:
@@ -392,6 +404,7 @@ def normalize_for_tts(text):
     t = _YEAR_RANGE.sub(_verbalize_year_range, t)
     t = _HEX.sub(_verbalize_hex, t)
     t = _UUID.sub(_stash, t)
+    t = _DATE.sub(_stash, t)
     t = _IP.sub(_verbalize_ip, t)
     t = _MAC.sub(_verbalize_mac, t)
     t = _TIME_AMPM.sub(_verbalize_time_ampm, t)
@@ -412,9 +425,11 @@ def normalize_for_tts(text):
     t = _TIMES.sub(_verbalize_times, t)
     t = _CPLUS.sub("C plus plus", t)
     t = _HEART.sub(_stash, t)
+    t = _ARROW.sub(" to ", t)
     t = _CMP.sub(_verbalize_cmp, t)
     t = _SQUARED.sub(r"\1 squared", t)
     t = _POWER.sub(" to the power of ", t)
+    t = _EMAIL.sub(_verbalize_email, t)
     t = _BARE_DOMAIN.sub("a link", t)
     t = _INT.sub(_verbalize_int, t)
     t = _MD.sub("", t)

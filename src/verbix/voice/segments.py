@@ -20,6 +20,9 @@ _PROTECTED = re.compile(
     r"|\.\.\."  # ellipses
     r"|\b(?:Mr|Mrs|Ms|Dr|St|vs|etc|e\.g|i\.e)\."  # abbreviations
     r"|(?:[A-Za-z]\.){2,}"  # U.S., U.K., ...
+    r"|\d{1,3}(?:,\d{3})+"  # comma magnitudes (8,000,000)
+    r"|(?<=\d):(?=\d)"  # glued colon in times/scores (10:30)
+    r"|No\.(?=\s*\d)"  # numbered references (No. 5)
     r"|^[ ]*\d+\.",  # line-initial ordinals (1.)
     re.IGNORECASE | re.MULTILINE,
 )

@@ -183,3 +183,21 @@ def test_paths_hex_uuid_links():
     assert normalize_for_tts("val 0x1F here") == "val hex one ef here"
     assert normalize_for_tts("use __init__ here") == "use dunder init here"
     assert normalize_for_tts("see example.com/foo") == "see a link"
+
+
+def test_splitter_never_cuts_inside_tokens():
+    from verbix.voice.segments import split_chunks
+
+    assert split_chunks("Price 8,000,000 dollars in cash today ok") == [
+        "Price 8,000,000 dollars in cash today ok"
+    ]
+    assert split_chunks("Meeting at 10:30 in the morning sharp ok") == [
+        "Meeting at 10:30 in the morning sharp ok"
+    ]
+    assert split_chunks("Visit No. 5 on the list today ok") == [
+        "Visit No. 5 on the list today ok"
+    ]
+    assert split_chunks("He scored 1. She scored 2, and they both played really well today.") == [
+        "He scored 1.",
+        "She scored 2, and they both played really well today.",
+    ]

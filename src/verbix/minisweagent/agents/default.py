@@ -81,6 +81,8 @@ class AgentConfig(BaseModel):
     """Reset turn_calls/turn_cost at the start of each step_stream call (foreground agent)."""
     max_context_tokens: int | None = None
     """Tier 1 context budget for rolling compaction (None = default 16000)."""
+    tool_choice: str | None = None
+    """Provider tool-call policy (e.g. "none" for tool-less agents). Absent by default."""
 
 
 def cap_observation(text: str, max_chars: int = 10000) -> str:
@@ -329,7 +331,10 @@ class DefaultAgent:
 
                 # Single query_stream call site: pre-query hooks (e.g. compaction) go here.
                 self.messages[:] = compact_messages(self.messages, max_tokens=self.config.max_context_tokens or 16000)
-                stream = self.model.query_stream(self.messages, tools=tool_defs)
+                stream_kwargs: dict[str, Any] = {}
+                if self.config.tool_choice is not None:
+                    stream_kwargs["tool_choice"] = self.config.tool_choice
+                stream = self.model.query_stream(self.messages, tools=tool_defs, **stream_kwargs)
                 async for event in stream:
                     if isinstance(event, TextDelta):
                         if has_tool_calls:

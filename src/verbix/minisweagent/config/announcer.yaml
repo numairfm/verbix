@@ -12,5 +12,6 @@ agent:
     - Never recite links, paths, or code character-by-character; summarize or drop them.
   instance_template: "{{task}}"
   tools: []
+  tool_choice: none
   step_limit: 0
   cost_limit: 3.0

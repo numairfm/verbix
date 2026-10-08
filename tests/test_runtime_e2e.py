@@ -365,7 +365,9 @@ async def test_runtime_announcer_is_dedicated_toolless_agent(tmp_path):
     assert hasattr(runtime, "announcer")
     assert runtime.announcer is not runtime.foreground
     assert runtime.announcer.get_tool_definitions() is None
-    assert runtime.announcer.messages is runtime.foreground.messages
+    # Announcer history is isolated: sharing the foreground list lets the
+    # tool-less announcer echo tool calls it can never execute.
+    assert runtime.announcer.messages is not runtime.foreground.messages
 
 
 @pytest.mark.asyncio

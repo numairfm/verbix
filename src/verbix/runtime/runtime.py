@@ -485,7 +485,7 @@ class Runtime:
             tools=ToolRegistry(),
             config=announcer_config,
         )
-        self.announcer.messages = self.foreground.messages
+        self.announcer.messages = []
 
     @property
     def is_idle(self) -> bool:

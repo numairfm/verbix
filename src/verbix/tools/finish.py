@@ -9,6 +9,7 @@ class FinishTool:
     """Signals background worker task completion with an information-dense debrief."""
 
     name: str = "finish"
+    side_effecting: bool = False
     description: str = (
         "Call this tool when the task objective has been fully executed and verified. "
         "Provide an information-dense factual summary of actions taken, concrete numbers/metrics, "

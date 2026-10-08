@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -13,8 +12,8 @@ class FloorState(str, Enum):
     SPEAKING = "SPEAKING"
 
     # Backward compatibility aliases
-    FOREGROUND = "SPEAKING"
-    ANNOUNCING = "SPEAKING"
+    FOREGROUND = "SPEAKING"  # noqa: PIE796 - intentional alias for backward compatibility
+    ANNOUNCING = "SPEAKING"  # noqa: PIE796 - intentional alias for backward compatibility
 
 
 class FloorArbiter:

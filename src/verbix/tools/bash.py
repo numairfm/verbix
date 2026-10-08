@@ -10,6 +10,7 @@ from verbix.tools.sandbox import SandboxConfig, execute_sandboxed
 class BashTool:
     name: str = "bash"
     observation_cap: int = 10000
+    side_effecting: bool = False
     description: str = (
         "Executes a bash command inside an isolated default-deny sandbox."
     )

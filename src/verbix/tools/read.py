@@ -19,6 +19,7 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 class FileReadTool:
     name: str = "read"
+    side_effecting: bool = False
     description: str = (
         "Reads a file within the workspace with line numbers, lists a directory's entries, "
         "or opens an image (jpg/png/gif/webp) as a viewable picture."

@@ -13,6 +13,7 @@ class StatusTool:
 
     name: str = "status"
     observation_cap: int = 1500
+    side_effecting: bool = False
     description: str = (
         "Inspects background tasks. If task_id is omitted, lists tasks. "
         "Set full=true to inspect complete history."

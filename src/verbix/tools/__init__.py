@@ -89,6 +89,6 @@ def build_registry(
                 },
             },
             _make_handler(tool),
-            side_effecting=name in ("spawn", "cancel"),
+            side_effecting=getattr(tool, "side_effecting", False),
         )
     return registry

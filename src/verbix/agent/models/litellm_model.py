@@ -290,7 +290,7 @@ class LitellmModel:
             if cost > 0:
                 self.last_stream_cost += cost
                 GLOBAL_MODEL_STATS.add(cost)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("Streaming cost calculation failed", exc_info=True)
 
     def _calculate_cost(self, response: Any) -> dict[str, float]:

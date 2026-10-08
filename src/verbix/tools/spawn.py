@@ -13,6 +13,7 @@ class SpawnTool:
 
     name: str = "spawn"
     observation_cap: int = 1500
+    side_effecting: bool = True
     description: str = "Starts an autonomous background worker to execute a task."
 
     def __init__(self, runtime: Runtime) -> None:

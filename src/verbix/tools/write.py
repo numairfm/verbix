@@ -8,6 +8,7 @@ from verbix.tools.shared import check_fresh, record_version, resolve_contained_p
 
 class FileWriteTool:
     name: str = "write"
+    side_effecting: bool = False
     description: str = (
         "Writes content to a file within the workspace, creating parent directories."
     )

@@ -13,7 +13,6 @@ import yaml
 from verbix.agent.agents.default import AgentConfig, DefaultAgent
 from verbix.agent.environments.local import LocalEnvironment
 from verbix.agent.models.litellm_model import LitellmModel
-from verbix.agent.tools.registry import ToolRegistry
 from verbix.core.events import (
     AgentEvent,
 )
@@ -49,10 +48,7 @@ from verbix.provider.models import (
 from verbix.runtime.floor import FloorArbiter
 from verbix.runtime.ledger import TaskLedger
 from verbix.runtime.worker import WorkerTask
-from verbix.tools.base import ToolContext, ToolResult
-from verbix.tools.cancel import CancelTool
-from verbix.tools.spawn import SpawnTool
-from verbix.tools.status import StatusTool
+from verbix.tools import build_registry
 
 DEFAULT_VERBIX_PROMPT = """# IDENTITY & TONE
 You are Verbix, a voice-operated desktop assistant and calm, capable peer. You say "I," speak plainly, admit limits plainly, no flattery.
@@ -341,34 +337,9 @@ def build_foreground(
     runtime._turn_handle: TurnHandle = TurnHandle()
     runtime._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
 
-    # Foreground agent with strictly spawn, status, cancel tools
-    runtime.foreground_tools = [
-        SpawnTool(runtime),
-        StatusTool(runtime),
-        CancelTool(runtime),
-    ]
-    registry = ToolRegistry()
-    for tool in runtime.foreground_tools:
-        definition = {
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters_schema,
-            },
-        }
-
-        def _make_handler(t: Any) -> Callable[..., Any]:
-            async def _handler(args: dict[str, Any], **kwargs: Any) -> ToolResult:
-                ctx = ToolContext(workspace=runtime.workspace)
-                return await t.execute(args, ctx)
-
-            _handler.observation_cap = getattr(t, "observation_cap", 10000)  # type: ignore[attr-defined]
-            return _handler
-
-        registry.register(
-            tool.name, definition, _make_handler(tool), side_effecting=tool.name in ("spawn", "cancel")
-        )
+    # Foreground tools come from voice.yaml; unknown names raise loudly in build_registry.
+    fg_tool_names = agent_cfg_dict.get("tools") or ["spawn", "status", "cancel"]
+    registry = build_registry(fg_tool_names, runtime, runtime.workspace)
 
     agent_cfg_dict["system_template"] = runtime.system_prompt
     agent_cfg_dict["system_prompt"] = runtime.system_prompt

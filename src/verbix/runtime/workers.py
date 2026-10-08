@@ -60,7 +60,16 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
     env = LocalEnvironment(cwd=str(runtime.workspace), env=env_extra, timeout=timeout)
 
     model_to_use = adapt_provider(runtime.worker_model or runtime.provider)
-    worker_tools = build_worker_registry(workspace=runtime.workspace)
+    from verbix.tools import build_registry
+
+    worker_tool_names = agent_cfg_dict.get("tools") or [
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "finish",
+    ]
+    worker_tools = build_registry(worker_tool_names, workspace=runtime.workspace)
 
     worker_agent = DefaultAgent(
         model=model_to_use,

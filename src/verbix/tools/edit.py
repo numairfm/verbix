@@ -8,6 +8,7 @@ from verbix.tools.shared import check_fresh, record_version, resolve_contained_p
 
 class FileEditTool:
     name: str = "edit"
+    side_effecting: bool = False
     description: str = "Replaces an exact occurrence of old_str with new_str in a file."
 
     @property

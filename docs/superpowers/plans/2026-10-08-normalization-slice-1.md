@@ -279,7 +279,7 @@ def test_paths_hex_uuid_links():
     assert normalize_for_tts("path /home/user/ here") == "path home, user here"
     assert normalize_for_tts("open /home/user/my_file.txt") == "open home, user, my file dot txt"
     assert normalize_for_tts("see [docs](https://example.com/a_b)") == "see docs"
-    assert normalize_for_tts("val 0x1F here") == "val hex one eff here"
+    assert normalize_for_tts("val 0x1F here") == "val hex one ef here"
     assert normalize_for_tts("use __init__ here") == "use dunder init here"
     assert normalize_for_tts("see example.com/foo") == "see a link"
 ```

@@ -163,3 +163,23 @@ def test_years_and_decades():
     assert normalize_for_tts("the year 1900") == "the year nineteen hundred"
     assert normalize_for_tts("1990s decade") == "nineteen nineties decade"
     assert normalize_for_tts("No. 5 item") == "number five item"
+
+
+def test_fractions_and_operators():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("Score was 3/4 of total") == "Score was three quarters of total"
+    assert normalize_for_tts("C++ and x^2 math") == "C plus plus and x squared math"
+    assert normalize_for_tts("a=b equation") == "a equals b equation"
+    assert normalize_for_tts("I <3 this") == "I <3 this"
+
+
+def test_paths_hex_uuid_links():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("path /home/user/ here") == "path home, user here"
+    assert normalize_for_tts("open /home/user/my_file.txt") == "open home, user, my file dot txt"
+    assert normalize_for_tts("see [docs](https://example.com/a_b)") == "see docs"
+    assert normalize_for_tts("val 0x1F here") == "val hex one ef here"
+    assert normalize_for_tts("use __init__ here") == "use dunder init here"
+    assert normalize_for_tts("see example.com/foo") == "see a link"

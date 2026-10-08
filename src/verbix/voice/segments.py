@@ -26,7 +26,12 @@ _PROTECTED = re.compile(
 _CLAUSE = re.compile(r"[,;:—]")
 _SENT_END = re.compile(r"[.!?]+")
 _URL = re.compile(r"https?://\S+")
-_PATH = re.compile(r"(?:^|(?<=\s))(~?/(?:[\w.\-~]+/)*[\w.\-~]+)")
+_PATH = re.compile(r"(?:^|(?<=\s))(~?/(?:[\w.\-_~]+/)*[\w.\-_~]+/?)")
+_MDLINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_HEX = re.compile(r"(?<![\w.])0[xX][0-9A-Fa-f]+(?![\w.])")
+_UUID = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+_IP = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w.])")
+_MAC = re.compile(r"(?<![\w.])(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}(?![\w.])")
 _VERSION = re.compile(r"(?<![\w.])([A-Za-z])(\d+(?:\.\d+)+)(?![\w.])")
 _DECIMAL = re.compile(r"(?<![\w.])\d+(?:\.\d+)+\.?(?![\w.])")
 _COMMA_AMOUNT = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\w.])")
@@ -40,6 +45,14 @@ _HASH_SHARP = re.compile(r"([A-Za-z])#")
 _HASH_NUM = re.compile(r"#(\d+)")
 _HASH_TAG = re.compile(r"#([A-Za-z]\w*)")
 _GLOB = re.compile(r"\*\.(\w+)")
+_FRACTION = re.compile(r"(?<![\w.])(\d+)/(\d+)(?!/\d)(?![\w.])")
+_CPLUS = re.compile(r"\bC\+\+(?!\w)")
+_HEART = re.compile(r"</?3\b")
+_CMP = re.compile(r">=|<=|!=|==|<(?!3\b)(?!/)|(?<![=!<>])>(?!=)|(?<![=!<>])=(?!=)")
+_SQUARED = re.compile(r"(\w)\^2\b")
+_POWER = re.compile(r"\^")
+_DUNDER = re.compile(r"__(\w+)__")
+_BARE_DOMAIN = re.compile(r"(?<![\w@:/.])([\w-]+\.(?:com|org|net|io|dev|gov|edu)(?:/[\w.\-~/?#=&%]*)?)")
 _MONEY = re.compile(r"(?<![\w$€£¥])([$€£¥])\s*(\d[\d,]*)(?:\.(\d{1,2}))?")
 _WS = re.compile(r"\s+")
 
@@ -106,7 +119,7 @@ def _verbalize_path(m: re.Match[str]) -> str:
     if raw.endswith("."):
         raw, trail = raw[:-1], "."
     parts = [
-        "home" if p == "~" else p.replace(".", " dot ")
+        "home" if p == "~" else p.replace("_", " ").replace(".", " dot ")
         for p in re.split(r"/+", raw)
         if p not in ("", ".")
     ]
@@ -239,6 +252,44 @@ def _verbalize_decade(m: re.Match[str]) -> str:
     return f"{_under_100(int(stem[:2]))} {decade}"
 
 
+def _hex_char(c: str) -> str:
+    return _DIGIT_WORDS[c] if c.isdigit() else _LETTER_NAMES.get(c.lower(), c)
+
+
+def _verbalize_hex(m: re.Match[str]) -> str:
+    return "hex " + " ".join(_hex_char(c) for c in m.group(0)[2:])
+
+
+def _verbalize_ip(m: re.Match[str]) -> str:
+    return " dot ".join(" ".join(_DIGIT_WORDS[d] for d in g) for g in m.group(0).split("."))
+
+
+def _verbalize_mac(m: re.Match[str]) -> str:
+    return ", ".join(" ".join(_hex_char(c) for c in g) for g in m.group(0).split(":"))
+
+
+def _verbalize_fraction(m: re.Match[str]) -> str:
+    if m.group(0) == "9/11":
+        return m.group(0)
+    num, den = m.group(1), m.group(2)
+    if num == "1" and den == "2":
+        return "one half"
+    if den == "2":
+        return f"{_num_side(num)} halves"
+    if den == "4":
+        denom = "quarter" if num == "1" else "quarters"
+        return f"{_num_side(num)} {denom}"
+    return f"{_num_side(num)} {num2words(int(den), to='ordinal')}s"
+
+
+def _verbalize_cmp(m: re.Match[str]) -> str:
+    return {
+        ">=": " greater than or equal to ", "<=": " less than or equal to ",
+        "!=": " not equal to ", "==": " equals ", "<": " less than ",
+        ">": " greater than ", "=": " equals ",
+    }[m.group(0)]
+
+
 def _verbalize_hash_num(m: re.Match[str]) -> str:
     digits = m.group(1)
     words = _int_words(int(digits)) if len(digits) <= 4 else " ".join(_DIGIT_WORDS[d] for d in digits)
@@ -308,9 +359,17 @@ def _split_tail(s):
 
 
 def normalize_for_tts(text):
-    t = _URL.sub("a link", text)
-    t = t.replace("_", " ")
+    stashed: list[str] = []
+
+    def _stash(m):
+        stashed.append(m.group(0))
+        return "@@STASH" + str(len(stashed) - 1) + "@@"
+
+    t = _MDLINK.sub(r"\1", text)
+    t = _URL.sub("a link", t)
     t = _PATH.sub(_verbalize_path, t)
+    t = _DUNDER.sub(r"dunder \1", t)
+    t = t.replace("_", " ")
     # Bullets before numbers so "1. foo" drops the marker instead of
     # expanding it to "one. foo".
     t = _BULLET.sub("", t)
@@ -323,6 +382,10 @@ def normalize_for_tts(text):
     t = _EMERGENCY.sub(_verbalize_emergency, t)
     t = _IDIOM.sub(_verbalize_idiom, t)
     t = _YEAR_RANGE.sub(_verbalize_year_range, t)
+    t = _HEX.sub(_verbalize_hex, t)
+    t = _UUID.sub(_stash, t)
+    t = _IP.sub(_verbalize_ip, t)
+    t = _MAC.sub(_verbalize_mac, t)
     t = _TIME_AMPM.sub(_verbalize_time_ampm, t)
     t = _TIME.sub(_verbalize_time_bare, t)
     t = _COLON_FALLBACK.sub(_verbalize_colon_fallback, t)
@@ -336,10 +399,19 @@ def normalize_for_tts(text):
     t = _VERSION.sub(_verbalize_version, t)
     t = _COMMA_AMOUNT.sub(_verbalize_comma_amount, t)
     t = _DECIMAL.sub(_verbalize_decimal, t)
+    t = _FRACTION.sub(_verbalize_fraction, t)
     t = _ORDINAL.sub(_verbalize_ordinal, t)
     t = _TIMES.sub(_verbalize_times, t)
+    t = _CPLUS.sub("C plus plus", t)
+    t = _HEART.sub(_stash, t)
+    t = _CMP.sub(_verbalize_cmp, t)
+    t = _SQUARED.sub(r"\1 squared", t)
+    t = _POWER.sub(" to the power of ", t)
+    t = _BARE_DOMAIN.sub("a link", t)
     t = _INT.sub(_verbalize_int, t)
     t = _MD.sub("", t)
     t = t.replace("°F", " degrees Fahrenheit").replace("°C", " degrees C").replace("°", " degrees ")
     t = t.replace("%", " percent ").replace("&", " and ").replace("→", " to ")
+    for i, original in enumerate(stashed):
+        t = t.replace("@@STASH" + str(i) + "@@", original)
     return _WS.sub(" ", t).strip()

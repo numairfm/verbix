@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from verbix.agent.tools.registry import ToolRegistry
@@ -148,16 +150,24 @@ class FinishTool:
 
 
 def build_worker_registry() -> ToolRegistry:
-    """Background worker's four main tools: read, write, edit, finish.
+    """Background worker's tools: read, write, edit, bash, finish.
 
-    Bash stays available through the worker environment as the escape hatch,
-    not a registered tool — file work goes through these, identically on
-    every OS.
+    File work goes through the dedicated tools, identically on every OS;
+    bash is the escape hatch for what has no dedicated tool.
     """
+    from verbix.tools.bash import BashTool
     from verbix.tools.filesystem import FileEditTool, FileReadTool, FileWriteTool
 
+    ctx = ToolContext(workspace=Path.cwd())
     registry = ToolRegistry()
-    for tool in (FileReadTool(), FileWriteTool(), FileEditTool(), FinishTool()):
+
+    def _make_handler(t: Any) -> Callable[..., Any]:
+        async def _handler(args: dict[str, Any]) -> ToolResult:
+            return await t.execute(args, ctx)
+
+        return _handler
+
+    for tool in (FileReadTool(), FileWriteTool(), FileEditTool(), BashTool(), FinishTool()):
         registry.register(
             tool.name,
             {
@@ -168,6 +178,6 @@ def build_worker_registry() -> ToolRegistry:
                     "parameters": tool.parameters_schema,
                 },
             },
-            tool.execute,
+            _make_handler(tool),
         )
     return registry

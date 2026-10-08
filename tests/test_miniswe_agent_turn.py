@@ -162,12 +162,18 @@ async def test_agent_step_stream_executes_parallel_tool_calls():
 
 @pytest.mark.asyncio
 async def test_agent_step_stream_executes_env_tool():
-    mock_env = MagicMock()
-    mock_env.execute.return_value = {
-        "output": "total 0\n-rw-r--r-- 1 test test 0 test.py",
-        "returncode": 0,
-        "exception_info": "",
-    }
+    calls: list[dict] = []
+
+    def fake_bash(args):
+        calls.append(args)
+        return "total 0\n-rw-r--r-- 1 test test 0 test.py"
+
+    tools = ToolRegistry()
+    tools.register(
+        "bash",
+        {"type": "function", "function": {"name": "bash"}},
+        fake_bash,
+    )
 
     mock_model = MagicMock()
     call_count = 0
@@ -190,13 +196,14 @@ async def test_agent_step_stream_executes_env_tool():
 
     agent = DefaultAgent(
         model=mock_model,
-        env=mock_env,
+        tools=tools,
         tools_list=["bash"],
+        step_limit=10,
         system_prompt="You are an SWE assistant.",
     )
     events = [e async for e in agent.step_stream("list files")]
 
-    mock_env.execute.assert_called_once_with({"command": "ls -l"})
+    assert calls == [{"command": "ls -l"}]
     started = [e for e in events if isinstance(e, ToolCallStarted)]
     assert len(started) == 1
     assert started[0].tool_name == "bash"
@@ -208,16 +215,23 @@ async def test_agent_step_stream_executes_env_tool():
 
 @pytest.mark.asyncio
 async def test_agent_step_stream_catches_submitted_cleanly():
-    mock_env = MagicMock()
-    mock_env.execute.side_effect = Submitted(
-        {
-            "role": "exit",
-            "content": "Bug fix implemented and verified.",
-            "extra": {
-                "exit_status": "Submitted",
-                "submission": "Bug fix implemented and verified.",
-            },
-        }
+    def raising_bash(args):
+        raise Submitted(
+            {
+                "role": "exit",
+                "content": "Bug fix implemented and verified.",
+                "extra": {
+                    "exit_status": "Submitted",
+                    "submission": "Bug fix implemented and verified.",
+                },
+            }
+        )
+
+    tools = ToolRegistry()
+    tools.register(
+        "bash",
+        {"type": "function", "function": {"name": "bash"}},
+        raising_bash,
     )
 
     mock_model = MagicMock()
@@ -234,8 +248,9 @@ async def test_agent_step_stream_catches_submitted_cleanly():
 
     agent = DefaultAgent(
         model=mock_model,
-        env=mock_env,
+        tools=tools,
         tools_list=["bash"],
+        step_limit=10,
         system_prompt="Solve issue.",
     )
     events = [e async for e in agent.step_stream("fix issue")]
@@ -250,9 +265,6 @@ async def test_agent_step_stream_catches_submitted_cleanly():
 async def test_agent_step_stream_finish_tool_execution():
     from verbix.agent.tools.registry import ToolRegistry
     from verbix.runtime.tools import FinishTool
-
-    mock_env = MagicMock()
-    mock_env.execute.return_value = {"output": "83 passed in 7.2s", "returncode": 0}
 
     mock_model = MagicMock()
     turns_yielded = 0
@@ -292,16 +304,28 @@ async def test_agent_step_stream_finish_tool_execution():
         finish_tool.execute,
     )
 
+    bash_calls: list[dict] = []
+
+    def fake_bash(args):
+        bash_calls.append(args)
+        return "83 passed in 7.2s"
+
+    registry.register(
+        "bash",
+        {"type": "function", "function": {"name": "bash"}},
+        fake_bash,
+    )
+
     agent = DefaultAgent(
         model=mock_model,
-        env=mock_env,
         tools=registry,
         tools_list=["bash", "finish"],
+        step_limit=10,
         system_prompt="Execute tests.",
     )
     events = [e async for e in agent.step_stream("run tests")]
 
-    assert mock_env.execute.called
+    assert bash_calls == [{"command": "uv run pytest"}]
     finished_calls = [e for e in events if isinstance(e, ToolCallFinished)]
     assert any(e.call_id == "call_finish_1" for e in finished_calls)
 
@@ -417,25 +441,37 @@ async def test_agent_step_stream_unknown_tool():
 
 
 def test_agent_sync_run_and_save(tmp_path):
+    bash_calls: list[dict] = []
+
+    def fake_bash(args):
+        bash_calls.append(args)
+        return "done"
+
+    tools = ToolRegistry()
+    tools.register(
+        "bash",
+        {"type": "function", "function": {"name": "bash"}},
+        fake_bash,
+    )
+
     mock_model = MagicMock()
-    mock_model.query.return_value = {
-        "role": "assistant",
-        "content": "Done task",
-        "extra": {"actions": [{"command": "echo done"}]},
-    }
-    mock_model.serialize.return_value = {"model_info": "mock"}
-    mock_env = MagicMock()
-    mock_env.execute.side_effect = Submitted(
+    mock_model.query.side_effect = [
+        {
+            "role": "assistant",
+            "content": "Done task",
+            "extra": {"actions": [{"name": "bash", "arguments": {"command": "echo done"}}]},
+        },
         {
             "role": "exit",
             "content": "task completed",
             "extra": {"exit_status": "Submitted", "submission": "task completed"},
-        }
-    )
-    mock_env.serialize.return_value = {"env_info": "mock"}
+        },
+    ]
+    mock_model.serialize.return_value = {"model_info": "mock"}
 
-    agent = DefaultAgent(model=mock_model, env=mock_env, system_prompt="Sync agent")
+    agent = DefaultAgent(model=mock_model, tools=tools, step_limit=10, system_prompt="Sync agent")
     res = agent.run(task="sample task")
+    assert bash_calls == [{"command": "echo done"}]
     assert res.get("exit_status") == "Submitted"
     assert res.get("submission") == "task completed"
 
@@ -525,14 +561,18 @@ async def test_unknown_tool_with_env_attached_returns_tool_error():
 
 @pytest.mark.asyncio
 async def test_bash_observation_includes_returncode_on_failure():
-    mock_model = MagicMock()
-    mock_env = MagicMock()
-    mock_env.execute.return_value = {
-        "output": "cat: missing.txt: No such file or directory",
-        "returncode": 1,
-        "exception_info": "",
-    }
+    def failing_bash(args):
+        raise RuntimeError("cat: missing.txt: No such file or directory")
+
+    tools = ToolRegistry()
+    tools.register(
+        "bash",
+        {"type": "function", "function": {"name": "bash"}},
+        failing_bash,
+    )
     call_count = 0
+
+    mock_model = MagicMock()
 
     async def mock_stream(messages, tools=None):
         nonlocal call_count
@@ -549,13 +589,13 @@ async def test_bash_observation_includes_returncode_on_failure():
             yield TurnComplete(final_text="File was missing.")
 
     mock_model.query_stream = mock_stream
-    agent = DefaultAgent(mock_model, env=mock_env, tools_list=["bash"])
+    agent = DefaultAgent(mock_model, tools=tools, tools_list=["bash"], step_limit=10)
     events = [e async for e in agent.step_stream("read file")]
 
     finished = [e for e in events if isinstance(e, ToolCallFinished)]
     assert len(finished) == 1
     assert finished[0].is_error is True
-    assert "[Returncode: 1]" in finished[0].observation
+    assert "missing.txt" in finished[0].observation
 
 
 @pytest.mark.asyncio

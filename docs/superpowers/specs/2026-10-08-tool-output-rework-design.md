@@ -66,14 +66,16 @@ Look right so far?
 - New `bind_output(text, *, max_lines=2000, max_bytes=51200,
   spill_dir: Path | None) -> str`: port of their preview — head/tail lines
   first, then byte split. Under limits returns text unchanged. Over limits:
-  full text goes to `<workspace>/.verbix/tool-output/tool_<uuid4hex12>`
+  full text goes to `<workspace>/.verbix/logs/tool_<uuid4hex12>`
   (inside the workspace so the `read` containment rule lets workers
   re-open it), marker `... output truncated; full content saved to
   <workspace-relative path> ...` takes their wording. Each over-limit
   re-read writes a new file; the 7-day prune below bounds growth.
 - Bind runs in the registry `_make_handler` (`tools/__init__.py:72-77`,
   the one place with the session `ToolContext`), not in `_execute_tool`
-  (which has no workspace). `build_registry` gains
+  (which has no workspace). `.verbix/` is the machine-owned namespace in
+  the workspace: `logs/` holds spilled outputs today, `transcripts/` or
+  siblings can join later without disturbing it. `build_registry` gains
   `output_limits: tuple[int, int] | None = None` (stdlib typing, defaults
   to the module constants); the two call sites pass the yaml override
   through: `workers.py:72` from `agent_cfg_dict` (loaded at
@@ -81,9 +83,10 @@ Look right so far?
   `foreground.py:311`). New optional `AgentConfig.tool_output` dict carries
   it into config.
 - Kill site (exact): `default.py:203-205` must become
-  `ToolResult(bound_text, is_error=..., is_terminal=...,
-  attachments=res.attachments)`. A literal implementation that reconstructs
-  without `attachments=` reproduces the incident with a new marker string.
+  `ToolResult(obs, is_error=..., is_terminal=...,
+  attachments=res.attachments)` (same locals, plus preservation). A
+  literal implementation that reconstructs without `attachments=`
+  reproduces the incident with a new marker string.
 - Deletions (no two cap systems coexist): `cap_observation`
   (`default.py:88-93`), `observation_cap` on `spawn.py:15`,
   `status.py:15`, `cancel.py:15`, `bash.py:12`, and the stamp at
@@ -94,7 +97,8 @@ Look right so far?
   the shape at `actions_toolcall.py:115-117`.
 - List-content fallout (list tool messages are new; three str-only
   consumers choke on them): widen `CanonicalMessage.content`
-  (`core/models.py:29`, today `content: str = ""`) to `str | list`;
+  (`core/models.py:29`, today `content: str = ""`) to
+  `str | list[dict[str, Any]]`;
   the adapter (`foreground.py:195-203`, `content=m.get("content") or ""`)
   and the history proxy (`foreground.py:90-120`, same pattern) pass list
   content through, eliding image parts to `[image elided]`; same guard at
@@ -114,7 +118,10 @@ Look right so far?
 
 - Image branch (`read.py:65-83`) downscales with Pillow (added to project
   dependencies): longest edge 1568 px, RGBA flattened onto white, first
-  frame only for GIF, JPEG quality 82, metadata stripped. Returns
+  frame only for GIF, JPEG quality 82, metadata stripped. The 10 MB
+  pre-downscale refuse (`MAX_IMAGE_BYTES`) is deleted with it — size is
+  handled by shrinking, and Pillow's own decompression-bomb guard turns
+  absurd dimensions into an ordinary error result. Returns
   `ToolResult(observation=f"[image attached: {name}]",
   attachments=(FileAttachment(data, mime, name),))`. Marker strings stop
   being produced.
@@ -139,6 +146,7 @@ photo becomes a ~100 KB image part the model actually sees.
 
 - Oversized images are downscaled, never refused (their ingest refuses past
   20 MB; ours shrinks instead — friendlier on a small key, same spirit).
+  Pillow's decompression-bomb guard is the backstop for absurd dimensions.
 - Spill write failure degrades to capped text with no path.
 - Non-image tools are behavior-identical except overflow now spills instead
   of deleting. Each re-read of still-over-limit output writes one new spill

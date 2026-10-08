@@ -2,7 +2,7 @@ import asyncio
 import os
 import subprocess
 import pytest
-from verbix.minisweagent.environments.local import LocalEnvironment
+from verbix.agent.environments.local import LocalEnvironment
 
 @pytest.mark.asyncio
 async def test_local_env_kills_process_group_on_cancel():

@@ -1,7 +1,7 @@
 """Mini-SWE-Agent unified core vendored for Verbix."""
 
-from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent
-from verbix.minisweagent.exceptions import (
+from verbix.agent.agents.default import AgentConfig, DefaultAgent
+from verbix.agent.exceptions import (
     FormatError,
     InterruptAgentFlow,
     LimitsExceeded,

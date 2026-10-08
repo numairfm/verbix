@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from verbix.minisweagent.models.litellm_model import LitellmModel
+from verbix.agent.models.litellm_model import LitellmModel
 from verbix.voice.base import MockAudioSink, MockSpeechToText, MockTextToSpeech
 from verbix.voice.capture import PTTCapture
 from verbix.voice.pipeline import VoicePipeline

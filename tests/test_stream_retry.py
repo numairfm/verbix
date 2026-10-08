@@ -4,8 +4,8 @@ spoken; anything else (or failure after speech) surfaces immediately."""
 import litellm.exceptions
 import pytest
 
+from verbix.agent.models.litellm_model import LitellmModel
 from verbix.core.events import TextDelta, TurnComplete
-from verbix.minisweagent.models.litellm_model import LitellmModel
 
 
 def _text_chunk(content, finish=None):

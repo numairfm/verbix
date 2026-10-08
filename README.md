@@ -44,7 +44,7 @@ environment wins over file values (`cli.py:29`).
 | `VERBIX_BASE_URL` | provider default | custom endpoint |
 | `VERBIX_MAX_TOKENS` | `2048` | per-turn completion cap |
 
-Agent tuning lives in `src/verbix/minisweagent/config/`: `voice.yaml`
+Agent tuning lives in `src/verbix/agent/config/`: `voice.yaml`
 (foreground), `worker.yaml` / `swe_worker.yaml` (background workers).
 
 Audio extras are optional: `uv sync --extra audio` (`sounddevice`).
@@ -153,7 +153,7 @@ STATE: IDLE
 | `tools/` | `Tool`/`ToolContext`, `file_read`/`file_write`/`file_edit`, `bash` via bubblewrap (`bwrap` missing → raise, never silent fallback) |
 | `voice/` | `pipeline`, `capture`, `stt` (faster-whisper), `pocket_helper` (resident TTS process), `tts_assets` (pinned fetch), `player`, `output` (sentence streaming), `sinks`/`callback_sink`, `base` protocols + mocks |
 | `ipc/` | `server`/`client`/`protocol`: JSONL over Unix socket, `ping/prompt/status/cancel/toggle`, runtime event fan-out |
-| `minisweagent/` | vendored agent core: `agents/default`, `environments/local`, `models/litellm_model`, `tools/registry`, `config/*.yaml` |
+| `agent/` | agent core: `agents/default`, `environments/local`, `models/litellm_model`, `tools/registry`, `config/*.yaml` |
 
 ## IPC
 

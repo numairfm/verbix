@@ -11,8 +11,8 @@ from unittest.mock import Mock, NonCallableMock
 from verbix.core.events import TextDelta, ToolCallDelta, ToolCallStarted, TurnComplete
 
 if TYPE_CHECKING:
+    from verbix.agent.agents.default import DefaultAgent
     from verbix.core.agent import AgentSession
-    from verbix.minisweagent.agents.default import DefaultAgent
 
 TaskStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
 

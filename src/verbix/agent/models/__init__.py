@@ -37,7 +37,7 @@ class GlobalModelStats:
 
 GLOBAL_MODEL_STATS = GlobalModelStats()
 
-from verbix.minisweagent.models.litellm_model import (
+from verbix.agent.models.litellm_model import (
     LitellmModel,
     LitellmModelConfig,
 )

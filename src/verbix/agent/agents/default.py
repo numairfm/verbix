@@ -15,6 +15,20 @@ from typing import Any
 from jinja2 import StrictUndefined, Template
 from pydantic import BaseModel, model_validator
 
+from verbix.agent.exceptions import (
+    FormatError,
+    InterruptAgentFlow,
+    LimitsExceeded,
+    Submitted,
+    TimeExceeded,
+)
+from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.utils.compaction import compact_messages
+from verbix.agent.utils.history import (
+    CANCELLED_TOOL_CONTENT,
+    validate_and_repair_history,
+)
+from verbix.agent.utils.serialize import recursive_merge
 from verbix.core.events import (
     AgentEvent,
     TextDelta,
@@ -25,21 +39,7 @@ from verbix.core.events import (
     TurnComplete,
 )
 from verbix.core.telemetry import record_latency
-from verbix.minisweagent.exceptions import (
-    FormatError,
-    InterruptAgentFlow,
-    LimitsExceeded,
-    Submitted,
-    TimeExceeded,
-)
-from verbix.minisweagent.models.utils.actions_toolcall import BASH_TOOL
-from verbix.minisweagent.tools.registry import ToolRegistry
-from verbix.minisweagent.utils.compaction import compact_messages
-from verbix.minisweagent.utils.history import (
-    CANCELLED_TOOL_CONTENT,
-    validate_and_repair_history,
-)
-from verbix.minisweagent.utils.serialize import recursive_merge
+from verbix.tools.base import ToolResult
 from verbix.voice.segments import split_chunks
 
 
@@ -81,6 +81,8 @@ class AgentConfig(BaseModel):
     """Reset turn_calls/turn_cost at the start of each step_stream call (foreground agent)."""
     max_context_tokens: int | None = None
     """Tier 1 context budget for rolling compaction (None = default 16000)."""
+    tool_choice: str | None = None
+    """Provider tool-call policy (e.g. "none" for tool-less agents). Absent by default."""
 
 
 def cap_observation(text: str, max_chars: int = 10000) -> str:
@@ -89,10 +91,6 @@ def cap_observation(text: str, max_chars: int = 10000) -> str:
         return text
     keep = max(1, max_chars // 2)
     return text[:keep] + f"\n... [elided {len(text) - max_chars} chars] ...\n" + text[-keep:]
-
-
-FOREGROUND_TOOL_NAMES = frozenset({"spawn", "status", "cancel"})
-"""Foreground (voice-loop) tools get the tight observation cap; worker tools get the wide one."""
 
 
 class DefaultAgent:
@@ -177,9 +175,8 @@ class DefaultAgent:
         return list(messages)
 
     def get_tool_definitions(self) -> list[dict[str, Any]] | None:
-        """Return tool schemas configured for this agent, including registry and bash."""
+        """Return tool schemas configured for this agent from the registry."""
         definitions: list[dict[str, Any]] = []
-        registered_names: set[str] = set()
 
         if self.tools is not None:
             defs = (
@@ -187,69 +184,31 @@ class DefaultAgent:
                 if self.config.tools
                 else self.tools.get_definitions()
             )
-            for d in defs:
-                definitions.append(d)
-                fn_name = d.get("function", {}).get("name") or d.get("name")
-                if fn_name:
-                    registered_names.add(fn_name)
-
-        if self.config.tools:
-            for tool_name in self.config.tools:
-                if tool_name not in registered_names and tool_name == "bash":
-                    definitions.append(BASH_TOOL)
-                    registered_names.add("bash")
-        elif not definitions and self.env is not None:
-            definitions.append(BASH_TOOL)
+            definitions.extend(defs)
 
         return definitions if definitions else None
 
-    def _observation_cap(self, name: str) -> int:
-        return 1500 if name in FOREGROUND_TOOL_NAMES else 10000
-
-    async def _execute_tool(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
-        """Execute a tool via ToolRegistry or environment, returning (observation, is_error)."""
-        # 1. Check ToolRegistry first if available
+    async def _execute_tool(self, name: str, args: dict[str, Any]) -> ToolResult:
+        """Execute a tool via the ToolRegistry, returning the full ToolResult."""
         if self.tools is not None and name in self.tools._handlers:
+            cap = getattr(self.tools._handlers[name], "observation_cap", 10000)
             try:
                 res = await self.tools.aexecute(name, args)
-                obs = res if isinstance(res, str) else json.dumps(res)
-                return cap_observation(obs, max_chars=self._observation_cap(name)), False
-            except Submitted:
-                raise
-            except Exception as e:  # noqa: BLE001
-                return f"Error executing tool '{name}': {e}", True
-
-        # 2. Check environment for bash commands
-        if name == "bash":
-            if self.env is None:
-                return "Error: Cannot execute bash command because no environment is configured.", True
-
-            action = args if isinstance(args, dict) else {"command": str(args)}
-            try:
-                # Prefer async process-group execution; type-level check so
-                # MagicMock envs (auto-attrs) keep the sync path in tests.
-                if hasattr(type(self.env), "aexecute"):
-                    res = await self.env.aexecute(action)
+                if isinstance(res, ToolResult):
+                    obs, is_err, is_term = res.observation, res.is_error, res.is_terminal
+                elif isinstance(res, str):
+                    obs, is_err, is_term = res, False, False
                 else:
-                    res = await asyncio.to_thread(self.env.execute, action)
-                obs = res.get("output", "") if isinstance(res, dict) else str(res)
-                returncode = res.get("returncode", 0) if isinstance(res, dict) else 0
-                is_err = returncode != 0
-                if is_err and not obs and isinstance(res, dict) and res.get("exception_info"):
-                    obs = res["exception_info"]
-                if (
-                    is_err
-                    and f"returncode: {returncode}" not in obs.lower()
-                    and f"exit code: {returncode}" not in obs.lower()
-                ):
-                    obs = f"[Returncode: {returncode}]\n{obs}".strip()
-                return cap_observation(obs, max_chars=self._observation_cap(name)), is_err
+                    obs, is_err, is_term = str(res), False, False
+                return ToolResult(
+                    cap_observation(obs, max_chars=cap), is_error=is_err, is_terminal=is_term
+                )
             except Submitted:
                 raise
             except Exception as e:  # noqa: BLE001
-                return f"Error executing bash action: {e}", True
+                return ToolResult(f"Error executing tool '{name}': {e}", is_error=True)
 
-        return f"Error: Tool '{name}' is not registered or supported.", True
+        return ToolResult(f"Error: Tool '{name}' is not registered or supported.", is_error=True)
 
     def _model_stream_cost(self) -> float:
         """Cumulative streaming cost reported by the model, or 0.0 if it tracks none."""
@@ -329,7 +288,10 @@ class DefaultAgent:
 
                 # Single query_stream call site: pre-query hooks (e.g. compaction) go here.
                 self.messages[:] = compact_messages(self.messages, max_tokens=self.config.max_context_tokens or 16000)
-                stream = self.model.query_stream(self.messages, tools=tool_defs)
+                stream_kwargs: dict[str, Any] = {}
+                if self.config.tool_choice is not None:
+                    stream_kwargs["tool_choice"] = self.config.tool_choice
+                stream = self.model.query_stream(self.messages, tools=tool_defs, **stream_kwargs)
                 async for event in stream:
                     if isinstance(event, TextDelta):
                         if has_tool_calls:
@@ -448,40 +410,15 @@ class DefaultAgent:
 
                         yield ToolCallStarted(call_id=call_id, tool_name=name, arguments=args)
 
-                        if name == "finish":
-                            summary = str(args.get("summary", "")).strip() if isinstance(args, dict) else str(args).strip()
-                            obs = f"Task completed: {summary}" if summary else "Task completed."
-                            if self.tools is not None and "finish" in self.tools._handlers:
-                                try:
-                                    res = await self.tools.aexecute("finish", args)
-                                    if isinstance(res, str):
-                                        obs = res
-                                    elif hasattr(res, "observation"):
-                                        obs = res.observation
-                                    else:
-                                        obs = str(res)
-                                except Exception:  # noqa: BLE001, S110
-                                    pass
-                            tool_msg: dict[str, Any] = {
-                                "role": "tool",
-                                "tool_call_id": call_id,
-                                "name": name,
-                                "content": obs,
-                            }
-                            self.add_messages(tool_msg)
-                            yield ToolCallFinished(call_id=call_id, observation=obs, is_error=False)
-                            yield TurnComplete(final_text=summary)
-                            return
-
                         try:
                             if self.tools is not None and self.tools.is_side_effecting(name):
                                 pending = asyncio.ensure_future(self._execute_tool(name, args))
                                 try:
-                                    obs, is_err = await asyncio.shield(pending)
+                                    res = await asyncio.shield(pending)
                                 except asyncio.CancelledError:
                                     # Started side-effecting op runs to completion and is
                                     # recorded; cancellation then unwinds to repair below.
-                                    obs, is_err = await pending
+                                    res = await pending
                                     # cancel_turn() may have synchronously repaired already,
                                     # leaving a synthetic response; the real result replaces it.
                                     self.messages[:] = [
@@ -498,12 +435,12 @@ class DefaultAgent:
                                             "role": "tool",
                                             "tool_call_id": call_id,
                                             "name": name,
-                                            "content": obs,
+                                            "content": res.observation,
                                         }
                                     )
                                     raise
                             else:
-                                obs, is_err = await self._execute_tool(name, args)
+                                res = await self._execute_tool(name, args)
                         except Submitted as e:
                             self.add_messages(*e.messages)
                             submission = ""
@@ -516,15 +453,21 @@ class DefaultAgent:
                             yield TurnComplete(final_text=submission)
                             return
 
-                        yield ToolCallFinished(call_id=call_id, observation=obs, is_error=is_err)
+                        yield ToolCallFinished(
+                            call_id=call_id, observation=res.observation, is_error=res.is_error
+                        )
 
                         tool_msg: dict[str, Any] = {
                             "role": "tool",
                             "tool_call_id": call_id,
                             "name": name,
-                            "content": obs,
+                            "content": res.observation,
                         }
                         self.add_messages(tool_msg)
+
+                        if res.is_terminal:
+                            yield TurnComplete(final_text=res.observation)
+                            return
 
                     # Continue turn loop to let model produce response to observations
                     continue
@@ -653,19 +596,16 @@ class DefaultAgent:
         actions = message.get("extra", {}).get("actions", [])
         outputs: list[dict[str, Any]] = []
         for action in actions:
-            if self.env is not None:
-                outputs.append(self.env.execute(action))
-            elif self.tools is not None:
-                tool_name = action.get("name") or action.get("tool_name", "bash")
+            if self.tools is not None:
+                tool_name = action.get("name") or action.get("tool_name")
                 args = action.get("arguments", action)
                 try:
                     res = self.tools.execute(tool_name, args)
                     outputs.append({"output": str(res), "returncode": 0, "exception_info": ""})
                 except Exception as e:  # noqa: BLE001
                     outputs.append({"output": "", "returncode": -1, "exception_info": str(e)})
-
             else:
-                outputs.append({"output": "No environment or tools configured", "returncode": -1, "exception_info": ""})
+                outputs.append({"output": "No tools configured", "returncode": -1, "exception_info": ""})
         if hasattr(self.model, "format_observation_messages"):
             return self.add_messages(*self.model.format_observation_messages(message, outputs, self.get_template_vars()))
         observations = []

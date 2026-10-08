@@ -13,7 +13,8 @@ from verbix.core.events import (
     TurnComplete,
 )
 from verbix.provider.client import ProviderClient
-from verbix.tools.filesystem import FileReadTool, FileWriteTool
+from verbix.tools.read import FileReadTool
+from verbix.tools.write import FileWriteTool
 
 
 # Mock SSE server that simulates multi-step agent dialogues

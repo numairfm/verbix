@@ -2,7 +2,7 @@
 
 import copy
 
-from verbix.minisweagent.utils.compaction import compact_messages
+from verbix.agent.utils.compaction import compact_messages
 
 
 def test_compact_messages_preserves_recent_turns():
@@ -68,7 +68,7 @@ def test_compact_messages_worker_truncates_old_steps():
 
 
 def test_compact_messages_single_over_budget_group_is_capped():
-    from verbix.minisweagent.utils.compaction import estimate_tokens
+    from verbix.agent.utils.compaction import estimate_tokens
 
     msgs = [
         {"role": "system", "content": "sys"},

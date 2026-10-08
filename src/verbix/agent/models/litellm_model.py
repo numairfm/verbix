@@ -15,6 +15,21 @@ from pydantic import BaseModel, Field
 litellm.suppress_debug_info = True
 logging.getLogger("LiteLLM").setLevel(logging.ERROR)
 
+from verbix.agent.exceptions import FormatError
+from verbix.agent.models import GLOBAL_MODEL_STATS
+from verbix.agent.models.utils.actions_toolcall import (
+    format_toolcall_observation_messages,
+    parse_toolcall_actions,
+)
+from verbix.agent.models.utils.anthropic_utils import (
+    _reorder_anthropic_thinking_blocks,
+)
+from verbix.agent.models.utils.cache_control import set_cache_control
+from verbix.agent.models.utils.openai_multimodal import (
+    DEFAULT_MULTIMODAL_REGEX,
+    expand_multimodal_content,
+)
+from verbix.agent.models.utils.retry import retry
 from verbix.core.events import (
     AgentEvent,
     TextDelta,
@@ -23,22 +38,6 @@ from verbix.core.events import (
     TurnComplete,
 )
 from verbix.core.telemetry import record_latency
-from verbix.minisweagent.exceptions import FormatError
-from verbix.minisweagent.models import GLOBAL_MODEL_STATS
-from verbix.minisweagent.models.utils.actions_toolcall import (
-    BASH_TOOL,
-    format_toolcall_observation_messages,
-    parse_toolcall_actions,
-)
-from verbix.minisweagent.models.utils.anthropic_utils import (
-    _reorder_anthropic_thinking_blocks,
-)
-from verbix.minisweagent.models.utils.cache_control import set_cache_control
-from verbix.minisweagent.models.utils.openai_multimodal import (
-    DEFAULT_MULTIMODAL_REGEX,
-    expand_multimodal_content,
-)
-from verbix.minisweagent.models.utils.retry import retry
 
 logger = logging.getLogger("litellm_model")
 
@@ -117,7 +116,7 @@ class LitellmModel:
         kwargs_dict = dict(self.config.model_kwargs)
         kwargs_dict.update(kwargs)
         kwargs_dict.setdefault("num_retries", 3)
-        tools = kwargs_dict.pop("tools", [BASH_TOOL])
+        tools = kwargs_dict.pop("tools", None)
         try:
             return litellm.completion(
                 model=self.config.model_name,
@@ -291,7 +290,7 @@ class LitellmModel:
             if cost > 0:
                 self.last_stream_cost += cost
                 GLOBAL_MODEL_STATS.add(cost)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("Streaming cost calculation failed", exc_info=True)
 
     def _calculate_cost(self, response: Any) -> dict[str, float]:

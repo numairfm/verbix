@@ -33,7 +33,10 @@ class ToolRegistry:
         """Return tool definitions for the requested names, or all if names is None."""
         if names is None:
             return list(self._tools.values())
-        return [self._tools[name] for name in names if name in self._tools]
+        missing = [name for name in names if name not in self._tools]
+        if missing:
+            raise KeyError(f"Unknown tool(s) {missing}; valid tools: {sorted(self._tools)}")
+        return [self._tools[name] for name in names]
 
     def _call_handler(
         self, handler: Callable[..., Any], args: dict[str, Any], **kwargs: Any

@@ -313,7 +313,7 @@ async def test_status_includes_completed_task_result(tmp_path):
 
 @pytest.mark.asyncio
 async def test_runtime_uses_miniswe_agent(tmp_path):
-    from verbix.minisweagent.agents.default import DefaultAgent
+    from verbix.agent.agents.default import DefaultAgent
     from verbix.provider.client import ProviderClient
     from verbix.runtime.runtime import Runtime
     # Ensure runtime foreground is powered by DefaultAgent
@@ -365,7 +365,9 @@ async def test_runtime_announcer_is_dedicated_toolless_agent(tmp_path):
     assert hasattr(runtime, "announcer")
     assert runtime.announcer is not runtime.foreground
     assert runtime.announcer.get_tool_definitions() is None
-    assert runtime.announcer.messages is runtime.foreground.messages
+    # Announcer history is isolated: sharing the foreground list lets the
+    # tool-less announcer echo tool calls it can never execute.
+    assert runtime.announcer.messages is not runtime.foreground.messages
 
 
 @pytest.mark.asyncio

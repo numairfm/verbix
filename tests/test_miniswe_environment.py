@@ -1,4 +1,4 @@
-from verbix.minisweagent.environments.local import LocalEnvironment
+from verbix.agent.environments.local import LocalEnvironment
 
 
 def test_local_environment_echo(tmp_path):

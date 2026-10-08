@@ -1,6 +1,6 @@
 """Minisweagent environments."""
 
-from verbix.minisweagent.environments.local import (
+from verbix.agent.environments.local import (
     LocalEnvironment,
     LocalEnvironmentConfig,
 )

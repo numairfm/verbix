@@ -82,7 +82,7 @@ def test_no_glued_digit_expansion():
 
     assert normalize_for_tts("2word leading") == "2word leading"
     assert normalize_for_tts("100km race") == "100km race"
-    assert normalize_for_tts("3pm appointment") == "3pm appointment"
+    assert normalize_for_tts("3D movie") == "3D movie"
 
 
 def test_star_between_digits_is_times():
@@ -137,3 +137,29 @@ def test_degrees_and_percent_spacing():
 
     assert normalize_for_tts("5°C hot") == "five degrees C hot"
     assert normalize_for_tts("10%20% double") == "ten percent twenty percent double"
+
+
+def test_time_self_verbalizes():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("meet at 10:30") == "meet at ten thirty"
+    assert normalize_for_tts("meet at 3:05") == "meet at three oh five"
+    assert normalize_for_tts("3pm appointment") == "three pee em appointment"
+
+
+def test_dash_ladder():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("dial 9-1-1") == "dial nine one one"
+    assert normalize_for_tts("open 24-7") == "open twenty-four seven"
+    assert normalize_for_tts("pages 1-2") == "pages one to two"
+    assert normalize_for_tts("call 555-1234") == "call five five five, one two three four"
+    assert normalize_for_tts("range 1990-2000") == "range nineteen ninety to two thousand"
+
+
+def test_years_and_decades():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("the year 1900") == "the year nineteen hundred"
+    assert normalize_for_tts("1990s decade") == "nineteen nineties decade"
+    assert normalize_for_tts("No. 5 item") == "number five item"

@@ -43,6 +43,18 @@ _GLOB = re.compile(r"\*\.(\w+)")
 _MONEY = re.compile(r"(?<![\w$€£¥])([$€£¥])\s*(\d[\d,]*)(?:\.(\d{1,2}))?")
 _WS = re.compile(r"\s+")
 
+_EMERGENCY = re.compile(r"\b911\b|(?<![\w.])9-1-1(?![\w.])")
+_IDIOM = re.compile(r"(?<![\w.])24[/-]7(?![\w.])|(?<![\w.])50/50(?![\w.])")
+_YEAR_RANGE = re.compile(r"(?<![\w.])(1\d{3}|20\d{2})-(1\d{3}|20\d{2})(?![\w.])")
+_TIME_AMPM = re.compile(r"(?<![\w.])(\d{1,2}):(\d{2})(?::(\d{2}))?([APap])\.?\s*([Mm])\.?(?![\w.])")
+_TIME = re.compile(r"(?<![\w.])(\d{1,2}):(\d{2})(?::(\d{2}))?(?![\w.:])")
+_COLON_FALLBACK = re.compile(r"(\d+):(\d+)")
+_AMPM = re.compile(r"(\d+)\s*([AaPp])\.?\s*([Mm])\.?\b")
+_DASH_RUN = re.compile(r"(?<![\w.])\d+(?:-\d+)+(?![\w.])")
+_NO_NUM = re.compile(r"No\.(?=\s*\d)")
+_DECADE = re.compile(r"(?<![\w.])((?:1\d|20)\d)0[sS](?![\w.])")
+_YEAR = re.compile(r"(?<![\w.])(1\d{3})(?![\w.])")
+
 _CURRENCY_NAMES = {"$": ("dollar", "dollars"), "€": ("euro", "euros"), "£": ("pound", "pounds"),
                    "¥": ("yen", "yen")}
 
@@ -152,6 +164,81 @@ def _verbalize_money(m: re.Match[str]) -> str:
     return words
 
 
+def _year_words(n: int) -> str:
+    if n == 2000:
+        return "two thousand"
+    if 2001 <= n <= 2009:
+        return f"two thousand {_ONES[n % 10]}"
+    hi, lo = divmod(n, 100)
+    return _under_100(hi) + (" hundred" if lo == 0 else f" {_under_100(lo)}")
+
+
+def _digitwise(digits: str) -> str:
+    return " ".join(_DIGIT_WORDS[d] for d in digits)
+
+
+def _verbalize_emergency(m: re.Match[str]) -> str:
+    return _digitwise(m.group(0).replace("-", ""))
+
+
+def _verbalize_idiom(m: re.Match[str]) -> str:
+    return {"24-7": "twenty-four seven", "24/7": "twenty-four seven"}.get(
+        m.group(0), "fifty fifty"
+    )
+
+
+def _verbalize_year_range(m: re.Match[str]) -> str:
+    return f"{_year_words(int(m.group(1)))} to {_year_words(int(m.group(2)))}"
+
+
+def _minute_words(mi: str) -> str:
+    if mi == "00":
+        return "o'clock"
+    if len(mi) == 2 and mi.startswith("0"):
+        return f"oh {_ONES[int(mi[1])]}"
+    return _int_words(int(mi))
+
+
+def _verbalize_time(h: str, mi: str, sec: str | None, ampm: str | None) -> str:
+    out = f"{_int_words(int(h))} {_minute_words(mi)}"
+    if sec:
+        out += f" {_minute_words(sec)}"
+    if ampm:
+        out += " ay em" if ampm.lower() == "a" else " pee em"
+    return out
+
+
+def _verbalize_time_ampm(m: re.Match[str]) -> str:
+    return _verbalize_time(m.group(1), m.group(2), m.group(3), m.group(4))
+
+
+def _verbalize_time_bare(m: re.Match[str]) -> str:
+    return _verbalize_time(m.group(1), m.group(2), m.group(3), None)
+
+
+def _verbalize_ampm(m: re.Match[str]) -> str:
+    suffix = "ay em" if m.group(2).lower() == "a" else "pee em"
+    return f"{_num_side(m.group(1))} {suffix}"
+
+
+def _verbalize_colon_fallback(m: re.Match[str]) -> str:
+    return f"{_num_side(m.group(1))} to {_num_side(m.group(2))}"
+
+
+def _verbalize_dash_run(m: re.Match[str]) -> str:
+    parts = m.group(0).split("-")
+    if all(len(p) <= 2 for p in parts):
+        return " to ".join(_num_side(p) for p in parts)
+    return ", ".join(_digitwise(p) for p in parts)
+
+
+def _verbalize_decade(m: re.Match[str]) -> str:
+    stem = m.group(1)
+    tens = _TENS[int(stem[1])]
+    decade = tens[:-1] + "ies" if tens.endswith("y") else tens + "s"
+    return f"{_under_100(int(stem[:2]))} {decade}"
+
+
 def _verbalize_hash_num(m: re.Match[str]) -> str:
     digits = m.group(1)
     words = _int_words(int(digits)) if len(digits) <= 4 else " ".join(_DIGIT_WORDS[d] for d in digits)
@@ -233,6 +320,19 @@ def normalize_for_tts(text):
     t = _HASH_TAG.sub(r"hashtag \1", t)
     t = _GLOB.sub(r"star dot \1", t)
     t = _MONEY.sub(_verbalize_money, t)
+    t = _EMERGENCY.sub(_verbalize_emergency, t)
+    t = _IDIOM.sub(_verbalize_idiom, t)
+    t = _YEAR_RANGE.sub(_verbalize_year_range, t)
+    t = _TIME_AMPM.sub(_verbalize_time_ampm, t)
+    t = _TIME.sub(_verbalize_time_bare, t)
+    t = _COLON_FALLBACK.sub(_verbalize_colon_fallback, t)
+    t = _AMPM.sub(_verbalize_ampm, t)
+    t = _DASH_RUN.sub(_verbalize_dash_run, t)
+    t = _NO_NUM.sub("number", t)
+    t = _DECADE.sub(_verbalize_decade, t)
+    # Pre-2000 years pair-read ("nineteen hundred"); 2000+ stays cardinal
+    # per the pinned "in 2026" convention.
+    t = _YEAR.sub(lambda m: _year_words(int(m.group(1))), t)
     t = _VERSION.sub(_verbalize_version, t)
     t = _COMMA_AMOUNT.sub(_verbalize_comma_amount, t)
     t = _DECIMAL.sub(_verbalize_decimal, t)

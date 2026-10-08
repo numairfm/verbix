@@ -14,3 +14,11 @@ def test_engine_offers_no_tools_when_registry_empty():
     from verbix.agent.tools.registry import ToolRegistry
     agent = DefaultAgent(model=None, env=object(), tools=ToolRegistry(), config=AgentConfig(tools=[]))
     assert agent.get_tool_definitions() is None
+
+
+def test_unknown_tool_name_raises_loudly():
+    import pytest
+
+    from verbix.tools import build_registry
+    with pytest.raises(KeyError, match="raed"):
+        build_registry(["raed"], runtime=None)

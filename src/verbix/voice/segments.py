@@ -19,6 +19,7 @@ _CLAUSE = re.compile(r"[,;:—]")
 _SENT_END = re.compile(r"[.!?]+")
 _URL = re.compile(r"https?://\S+")
 _PATH = re.compile(r"(?:^|(?<=\s))(~?/(?:[\w.\-~]+/)*[\w.\-~]+)")
+_VERSION = re.compile(r"(?<![\w.])([A-Za-z])(\d+(?:\.\d+)+)(?![\w.])")
 _DECIMAL = re.compile(r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])")
 _INT = re.compile(r"(?<![\w.])\d[\d,]*(?!\d)")
 _BULLET = re.compile(r"(?m)^\s*(?:[-*+]|\d+[.)])\s+")
@@ -30,6 +31,13 @@ _TEENS = ["ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen
           "seventeen", "eighteen", "nineteen"]
 _TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
 _DIGIT_WORDS = {str(i): w for i, w in enumerate(_ONES)}
+_LETTER_NAMES = {
+    "a": "ay", "b": "bee", "c": "cee", "d": "dee", "e": "ee", "f": "ef",
+    "g": "gee", "h": "aych", "i": "eye", "j": "jay", "k": "kay", "l": "el",
+    "m": "em", "n": "en", "o": "oh", "p": "pee", "q": "cue", "r": "ar",
+    "s": "ess", "t": "tee", "u": "you", "v": "vee", "w": "doubleyou",
+    "x": "ex", "y": "why", "z": "zee",
+}
 
 
 def _under_100(n: int) -> str:
@@ -71,6 +79,12 @@ def _verbalize_path(m: "re.Match[str]") -> str:
         if p not in ("", ".")
     ]
     return ", ".join(p for p in parts if p) + trail
+
+
+def _verbalize_version(m: "re.Match[str]") -> str:
+    letter = _LETTER_NAMES.get(m.group(1).lower(), m.group(1))
+    groups = [" ".join(_DIGIT_WORDS[d] for d in g) for g in m.group(2).split(".")]
+    return f"{letter} {' point '.join(groups)}"
 
 
 def _verbalize_decimal(m: "re.Match[str]") -> str:
@@ -145,6 +159,7 @@ def normalize_for_tts(text):
     t = _URL.sub("a link", text)
     t = t.replace("_", " ")
     t = _PATH.sub(_verbalize_path, t)
+    t = _VERSION.sub(_verbalize_version, t)
     t = _DECIMAL.sub(_verbalize_decimal, t)
     t = _INT.sub(_verbalize_int, t)
     t = _BULLET.sub("", t)

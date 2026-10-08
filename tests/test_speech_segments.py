@@ -51,7 +51,11 @@ def test_normalizer_verbalizes_numbers():
     assert normalize_for_tts("Pi is 3.14") == "Pi is three point one four"
     assert normalize_for_tts("in 2026") == "in two thousand twenty-six"
     assert normalize_for_tts("call_4134918 done") == "call four one three four nine one eight done"
-    assert normalize_for_tts("plan v1.2.3 now") == "plan v1.2.3 now"
+    assert normalize_for_tts("plan v1.2.3 now") == "plan vee one point two point three now"
+    assert (
+        normalize_for_tts("firmware v1.2.3.4 ready")
+        == "firmware vee one point two point three point four ready"
+    )
 
 
 def test_normalizer_reads_comma_magnitudes_as_cardinals():

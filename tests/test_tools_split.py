@@ -66,9 +66,12 @@ def test_worker_with_spawn_tool_actually_spawns():
 def test_sync_path_routes_through_registry():
     from verbix.agent.agents.default import AgentConfig, DefaultAgent
     from verbix.agent.tools.registry import ToolRegistry
-    agent = DefaultAgent(model=None, env=object(), tools=ToolRegistry(), config=AgentConfig(tools=[]))
+    reg = ToolRegistry()
+    reg.register("bash", {"function": {"name": "bash"}}, lambda args: "routed-marker-xyz")
+    agent = DefaultAgent(model=None, env=object(), tools=reg, config=AgentConfig(tools=[]))
     out = agent.execute_actions({"extra": {"actions": [{"name": "bash", "arguments": {"command": "x"}}]}})
     assert out[0].get("returncode", -1) == -1
+    assert "routed-marker-xyz" in str(out[0])
 
 
 def test_worker_read_via_agent_gets_context(tmp_path):

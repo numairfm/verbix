@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 def test_split_tools_importable_from_new_paths():
     from verbix.tools.edit import FileEditTool
     from verbix.tools.read import FileReadTool
@@ -39,3 +42,41 @@ def test_runtime_modules_exist_with_one_job_header():
         text = pathlib.Path(f"src/verbix/runtime/{mod}.py").read_text()
         assert text.splitlines()[0].startswith('"""')
         assert mod in text[:500].lower(), mod
+
+
+class FakeRuntime:
+    workspace = Path(".")
+    async def spawn(self, objective):
+        assert objective
+        return "task-99"
+
+
+def test_worker_with_spawn_tool_actually_spawns():
+    import asyncio
+
+    from verbix.tools import build_registry
+    from verbix.tools.base import ToolContext
+    from verbix.tools.spawn import SpawnTool
+    reg = build_registry(["read", "spawn"], runtime=FakeRuntime(), workspace=Path("."))
+    assert "spawn" in [d["function"]["name"] for d in reg.get_definitions()]
+    res = asyncio.run(SpawnTool(FakeRuntime()).execute({"objective": "do it"}, ToolContext(workspace=Path("."))))
+    assert "task-99" in res.observation
+
+
+def test_sync_path_routes_through_registry():
+    from verbix.agent.agents.default import AgentConfig, DefaultAgent
+    from verbix.agent.tools.registry import ToolRegistry
+    agent = DefaultAgent(model=None, env=object(), tools=ToolRegistry(), config=AgentConfig(tools=[]))
+    out = agent.execute_actions({"extra": {"actions": [{"name": "bash", "arguments": {"command": "x"}}]}})
+    assert out[0].get("returncode", -1) == -1
+
+
+def test_worker_read_via_agent_gets_context(tmp_path):
+    import asyncio
+
+    from verbix.agent.agents.default import AgentConfig, DefaultAgent
+    from verbix.tools import build_registry
+    (tmp_path / "note.txt").write_text("hello")
+    agent = DefaultAgent(model=None, env=None, tools=build_registry(["read"], runtime=None, workspace=tmp_path), config=AgentConfig(tools=["read"]))
+    res = asyncio.run(agent._execute_tool("read", {"path": "note.txt"}))
+    assert res.is_error is False and "hello" in res.observation

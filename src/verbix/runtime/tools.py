@@ -15,6 +15,7 @@ class SpawnTool:
     """Spawns an autonomous background worker to perform a task."""
 
     name: str = "spawn"
+    observation_cap: int = 1500
     description: str = "Starts an autonomous background worker to execute a task."
 
     def __init__(self, runtime: Runtime) -> None:
@@ -50,6 +51,7 @@ class StatusTool:
     """Inspects active or completed background tasks."""
 
     name: str = "status"
+    observation_cap: int = 1500
     description: str = (
         "Inspects background tasks. If task_id is omitted, lists tasks. "
         "Set full=true to inspect complete history."
@@ -87,6 +89,7 @@ class CancelTool:
     """Cancels one or more background tasks."""
 
     name: str = "cancel"
+    observation_cap: int = 1500
     description: str = (
         "Cancels background tasks. If task_id is omitted and only one task is running, "
         "cancels it. Pass 'all' to cancel all tasks."
@@ -145,8 +148,7 @@ class FinishTool:
         summary = str(args.get("summary", "")).strip()
         if not summary:
             return ToolResult("error: 'summary' is required to finish work.", is_error=True)
-        return ToolResult(f"Task completed: {summary}")
-
+        return ToolResult(f"Task completed: {summary}", is_terminal=True)
 
 
 def build_worker_registry() -> ToolRegistry:
@@ -165,6 +167,7 @@ def build_worker_registry() -> ToolRegistry:
         async def _handler(args: dict[str, Any]) -> ToolResult:
             return await t.execute(args, ctx)
 
+        _handler.observation_cap = getattr(t, "observation_cap", 10000)  # type: ignore[attr-defined]
         return _handler
 
     for tool in (FileReadTool(), FileWriteTool(), FileEditTool(), BashTool(), FinishTool()):

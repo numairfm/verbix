@@ -35,4 +35,4 @@ class FinishTool:
         summary = str(args.get("summary", "")).strip()
         if not summary:
             return ToolResult("error: 'summary' is required to finish work.", is_error=True)
-        return ToolResult(f"Task completed: {summary}")
+        return ToolResult(f"Task completed: {summary}", is_terminal=True)

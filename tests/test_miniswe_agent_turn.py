@@ -331,7 +331,7 @@ async def test_agent_step_stream_finish_tool_execution():
 
     turn_completes = [e for e in events if isinstance(e, TurnComplete)]
     assert len(turn_completes) == 1
-    assert turn_completes[0].final_text == "All 83 tests passed in 7.2 seconds."
+    assert turn_completes[0].final_text == "Task completed: All 83 tests passed in 7.2 seconds."
 
 
 

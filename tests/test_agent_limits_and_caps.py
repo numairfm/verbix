@@ -1,8 +1,8 @@
 import pytest
 
-from verbix.core.events import TextDelta, TurnComplete
 from verbix.agent.agents.default import AgentConfig, DefaultAgent, cap_observation
 from verbix.agent.tools.registry import ToolRegistry
+from verbix.core.events import TextDelta, TurnComplete
 
 
 def test_cap_observation_bounds_large_outputs():
@@ -16,24 +16,30 @@ def test_cap_observation_bounds_large_outputs():
 
 def test_cap_observation_scales_with_tool_scope():
     tools = ToolRegistry()
+    def _fg(args):
+        return "s" * 5000
+    _fg.observation_cap = 1500
     tools.register(
         "status",
         {"type": "function", "function": {"name": "status"}},
-        lambda args: "s" * 5000,
+        _fg,
     )
+    def _wide(args):
+        return "w" * 5000
+    _wide.observation_cap = 10000
     tools.register(
         "mytool",
         {"type": "function", "function": {"name": "mytool"}},
-        lambda args: "w" * 5000,
+        _wide,
     )
     agent = DefaultAgent(model=None, tools=tools, system_prompt="sys")
     import asyncio
 
-    fg_obs, _ = asyncio.run(agent._execute_tool("status", {}))
-    worker_obs, _ = asyncio.run(agent._execute_tool("mytool", {}))
-    assert len(fg_obs) <= 1700
-    assert len(worker_obs) <= 10200
-    assert len(worker_obs) > len(fg_obs)
+    fg_res = asyncio.run(agent._execute_tool("status", {}))
+    worker_res = asyncio.run(agent._execute_tool("mytool", {}))
+    assert len(fg_res.observation) <= 1700
+    assert len(worker_res.observation) <= 10200
+    assert len(worker_res.observation) > len(fg_res.observation)
 
 
 class _CostStreamModel:

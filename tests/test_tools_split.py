@@ -22,3 +22,12 @@ def test_unknown_tool_name_raises_loudly():
     from verbix.tools import build_registry
     with pytest.raises(KeyError, match="raed"):
         build_registry(["raed"], runtime=None)
+
+
+def test_no_tool_names_in_engine():
+    import pathlib
+    src = pathlib.Path("src/verbix/agent/agents/default.py").read_text()
+    body = "\n".join(l for l in src.splitlines() if not l.strip().startswith(("#", '"', "'")))
+    for name in ("FOREGROUND_TOOL_NAMES", "finish", "spawn", "status", "cancel",
+                 "read", "write", "edit", "bash"):
+        assert f'"{name}"' not in body and f"'{name}'" not in body, name

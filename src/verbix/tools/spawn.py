@@ -12,6 +12,7 @@ class SpawnTool:
     """Spawns an autonomous background worker to perform a task."""
 
     name: str = "spawn"
+    observation_cap: int = 1500
     description: str = "Starts an autonomous background worker to execute a task."
 
     def __init__(self, runtime: Runtime) -> None:

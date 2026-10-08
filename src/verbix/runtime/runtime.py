@@ -62,7 +62,7 @@ from verbix.runtime.tools import (
     build_worker_registry,
 )
 from verbix.runtime.worker import WorkerTask
-from verbix.tools.base import ToolContext
+from verbix.tools.base import ToolContext, ToolResult
 
 DEFAULT_VERBIX_PROMPT = """# IDENTITY & TONE
 You are Verbix, a voice-operated desktop assistant and calm, capable peer. You say "I," speak plainly, admit limits plainly, no flattery.
@@ -438,11 +438,11 @@ class Runtime:
             }
 
             def _make_handler(t: Any) -> Callable[..., Any]:
-                async def _handler(args: dict[str, Any], **kwargs: Any) -> str:
+                async def _handler(args: dict[str, Any], **kwargs: Any) -> ToolResult:
                     ctx = ToolContext(workspace=self.workspace)
-                    res = await t.execute(args, ctx)
-                    return res.observation
+                    return await t.execute(args, ctx)
 
+                _handler.observation_cap = getattr(t, "observation_cap", 10000)  # type: ignore[attr-defined]
                 return _handler
 
             registry.register(

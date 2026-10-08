@@ -75,6 +75,7 @@ def build_registry(
         async def _handler(args: dict[str, Any]) -> ToolResult:
             return await t.execute(args, ctx)
 
+        _handler.observation_cap = getattr(t, "observation_cap", 10000)  # type: ignore[attr-defined]
         return _handler
 
     for name in names:

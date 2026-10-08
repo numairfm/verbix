@@ -6,14 +6,14 @@ from unittest.mock import AsyncMock, patch
 import litellm.exceptions
 import pytest
 
+from verbix.agent.models.litellm_model import LitellmModel, LitellmModelConfig
+from verbix.agent.tools.registry import ToolRegistry
 from verbix.core.events import (
     TextDelta,
     ThoughtDelta,
     ToolCallDelta,
     TurnComplete,
 )
-from verbix.minisweagent.models.litellm_model import LitellmModel, LitellmModelConfig
-from verbix.minisweagent.tools.registry import ToolRegistry
 
 
 def test_tool_registry():
@@ -301,7 +301,7 @@ def _call(name, args, call_id="call-1"):
 
 
 def test_parser_keeps_bash_shape_by_default():
-    from verbix.minisweagent.models.utils.actions_toolcall import parse_toolcall_actions
+    from verbix.agent.models.utils.actions_toolcall import parse_toolcall_actions
 
     actions = parse_toolcall_actions(
         [_call("bash", '{"command": "ls"}')], format_error_template="{{ error }}"
@@ -312,8 +312,8 @@ def test_parser_keeps_bash_shape_by_default():
 def test_parser_rejects_registry_tool_without_allowlist():
     import pytest
 
-    from verbix.minisweagent.exceptions import FormatError
-    from verbix.minisweagent.models.utils.actions_toolcall import parse_toolcall_actions
+    from verbix.agent.exceptions import FormatError
+    from verbix.agent.models.utils.actions_toolcall import parse_toolcall_actions
 
     with pytest.raises(FormatError):
         parse_toolcall_actions(
@@ -322,7 +322,7 @@ def test_parser_rejects_registry_tool_without_allowlist():
 
 
 def test_parser_accepts_allowlisted_registry_tool():
-    from verbix.minisweagent.models.utils.actions_toolcall import parse_toolcall_actions
+    from verbix.agent.models.utils.actions_toolcall import parse_toolcall_actions
 
     actions = parse_toolcall_actions(
         [_call("screenshot", '{"region": "full"}')],
@@ -337,8 +337,8 @@ def test_parser_accepts_allowlisted_registry_tool():
 def test_parser_still_rejects_unknown_tool_with_allowlist():
     import pytest
 
-    from verbix.minisweagent.exceptions import FormatError
-    from verbix.minisweagent.models.utils.actions_toolcall import parse_toolcall_actions
+    from verbix.agent.exceptions import FormatError
+    from verbix.agent.models.utils.actions_toolcall import parse_toolcall_actions
 
     with pytest.raises(FormatError):
         parse_toolcall_actions(
@@ -347,7 +347,7 @@ def test_parser_still_rejects_unknown_tool_with_allowlist():
 
 
 def test_images_survive_output_truncation():
-    from verbix.minisweagent.models.utils.actions_toolcall import (
+    from verbix.agent.models.utils.actions_toolcall import (
         format_toolcall_observation_messages,
     )
 
@@ -371,7 +371,7 @@ def test_images_survive_output_truncation():
 
 
 def test_long_plain_text_still_truncates():
-    from verbix.minisweagent.models.utils.actions_toolcall import (
+    from verbix.agent.models.utils.actions_toolcall import (
         format_toolcall_observation_messages,
     )
 

@@ -1,5 +1,5 @@
 from __future__ import annotations
 
-from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent
+from verbix.agent.agents.default import AgentConfig, DefaultAgent
 
 __all__ = ["AgentConfig", "DefaultAgent"]

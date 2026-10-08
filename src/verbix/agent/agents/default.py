@@ -15,6 +15,21 @@ from typing import Any
 from jinja2 import StrictUndefined, Template
 from pydantic import BaseModel, model_validator
 
+from verbix.agent.exceptions import (
+    FormatError,
+    InterruptAgentFlow,
+    LimitsExceeded,
+    Submitted,
+    TimeExceeded,
+)
+from verbix.agent.models.utils.actions_toolcall import BASH_TOOL
+from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.utils.compaction import compact_messages
+from verbix.agent.utils.history import (
+    CANCELLED_TOOL_CONTENT,
+    validate_and_repair_history,
+)
+from verbix.agent.utils.serialize import recursive_merge
 from verbix.core.events import (
     AgentEvent,
     TextDelta,
@@ -25,21 +40,6 @@ from verbix.core.events import (
     TurnComplete,
 )
 from verbix.core.telemetry import record_latency
-from verbix.minisweagent.exceptions import (
-    FormatError,
-    InterruptAgentFlow,
-    LimitsExceeded,
-    Submitted,
-    TimeExceeded,
-)
-from verbix.minisweagent.models.utils.actions_toolcall import BASH_TOOL
-from verbix.minisweagent.tools.registry import ToolRegistry
-from verbix.minisweagent.utils.compaction import compact_messages
-from verbix.minisweagent.utils.history import (
-    CANCELLED_TOOL_CONTENT,
-    validate_and_repair_history,
-)
-from verbix.minisweagent.utils.serialize import recursive_merge
 from verbix.voice.segments import split_chunks
 
 

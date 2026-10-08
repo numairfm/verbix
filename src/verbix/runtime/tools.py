@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from verbix.minisweagent.tools.registry import ToolRegistry
+from verbix.agent.tools.registry import ToolRegistry
 from verbix.tools.base import ToolContext, ToolResult
 
 if TYPE_CHECKING:

@@ -119,9 +119,9 @@ async def test_finish_tool_returns_task_completed_observation():
 
 @pytest.mark.asyncio
 async def test_finish_tool_observation_has_no_repr_leakage():
+    from verbix.agent.agents.default import DefaultAgent
+    from verbix.agent.tools.registry import ToolRegistry
     from verbix.core.events import ToolCallDelta
-    from verbix.minisweagent.agents.default import DefaultAgent
-    from verbix.minisweagent.tools.registry import ToolRegistry
     from verbix.runtime.tools import FinishTool
 
     registry = ToolRegistry()

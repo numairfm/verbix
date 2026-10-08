@@ -16,6 +16,11 @@ import yaml
 
 logger = logging.getLogger("verbix.runtime")
 
+from verbix.agent.agents.default import AgentConfig, DefaultAgent
+from verbix.agent.environments.local import LocalEnvironment
+from verbix.agent.models.litellm_model import LitellmModel
+from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.utils.history import validate_and_repair_history
 from verbix.core.events import (
     AgentEvent,
 )
@@ -32,11 +37,6 @@ from verbix.core.events import (
     TurnComplete as CoreTurnComplete,
 )
 from verbix.core.models import CanonicalMessage, CanonicalToolCall
-from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent
-from verbix.minisweagent.environments.local import LocalEnvironment
-from verbix.minisweagent.models.litellm_model import LitellmModel
-from verbix.minisweagent.tools.registry import ToolRegistry
-from verbix.minisweagent.utils.history import validate_and_repair_history
 from verbix.provider.models import (
     Finish as ProviderFinish,
 )
@@ -386,7 +386,7 @@ class Runtime:
         # Load voice.yaml configuration
         config_path = (
             Path(__file__).resolve().parent.parent
-            / "minisweagent"
+            / "agent"
             / "config"
             / "voice.yaml"
         )
@@ -464,7 +464,7 @@ class Runtime:
 
         announcer_cfg_path = (
             Path(__file__).resolve().parent.parent
-            / "minisweagent"
+            / "agent"
             / "config"
             / "announcer.yaml"
         )
@@ -629,7 +629,7 @@ class Runtime:
         self._task_counter += 1
         task_id = f"task-{self._task_counter}"
 
-        config_dir = Path(__file__).resolve().parent.parent / "minisweagent" / "config"
+        config_dir = Path(__file__).resolve().parent.parent / "agent" / "config"
         worker_path = config_dir / "worker.yaml"
         if not worker_path.is_file():
             worker_path = config_dir / "swe_worker.yaml"

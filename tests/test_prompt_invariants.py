@@ -6,7 +6,7 @@ from verbix.runtime.runtime import DEFAULT_WORKER_PROMPT
 
 
 def test_worker_config_exists_and_swe_worker_removed():
-    config_dir = Path("src/verbix/minisweagent/config")
+    config_dir = Path("src/verbix/agent/config")
     worker_yaml = config_dir / "worker.yaml"
     swe_worker_yaml = config_dir / "swe_worker.yaml"
 
@@ -15,7 +15,7 @@ def test_worker_config_exists_and_swe_worker_removed():
 
 
 def test_worker_prompt_contains_zero_examples_and_has_invariants():
-    config_dir = Path("src/verbix/minisweagent/config")
+    config_dir = Path("src/verbix/agent/config")
     worker_yaml = config_dir / "worker.yaml"
     assert worker_yaml.is_file()
     raw_text = worker_yaml.read_text(encoding="utf-8")
@@ -53,7 +53,7 @@ def test_default_worker_prompt_invariants():
 
 
 def test_companion_prompt_invariants():
-    config_dir = Path("src/verbix/minisweagent/config")
+    config_dir = Path("src/verbix/agent/config")
     voice_data = yaml.safe_load((config_dir / "voice.yaml").read_text(encoding="utf-8"))
     sys_prompt = voice_data["agent"]["system_template"]
 

@@ -1,4 +1,4 @@
-from verbix.minisweagent.utils.history import validate_and_repair_history
+from verbix.agent.utils.history import validate_and_repair_history
 
 
 def test_repair_unanswered_tool_calls():
@@ -26,9 +26,9 @@ import asyncio
 
 import pytest
 
+from verbix.agent.agents.default import AgentConfig, DefaultAgent
+from verbix.agent.tools.registry import ToolRegistry
 from verbix.core.events import ToolCallDelta
-from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent
-from verbix.minisweagent.tools.registry import ToolRegistry
 
 
 @pytest.mark.asyncio

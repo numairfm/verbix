@@ -313,7 +313,7 @@ async def test_status_includes_completed_task_result(tmp_path):
 
 @pytest.mark.asyncio
 async def test_runtime_uses_miniswe_agent(tmp_path):
-    from verbix.minisweagent.agents.default import DefaultAgent
+    from verbix.agent.agents.default import DefaultAgent
     from verbix.provider.client import ProviderClient
     from verbix.runtime.runtime import Runtime
     # Ensure runtime foreground is powered by DefaultAgent

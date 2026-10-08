@@ -11,7 +11,7 @@ def _announcer_path() -> Path:
         Path(__file__).resolve().parent.parent
         / "src"
         / "verbix"
-        / "minisweagent"
+        / "agent"
         / "config"
         / "announcer.yaml"
     )
@@ -55,9 +55,9 @@ def test_announcer_history_isolated_from_foreground(tmp_path):
 
 @pytest.mark.asyncio
 async def test_tool_choice_none_forwarded_when_configured():
+    from verbix.agent.agents.default import AgentConfig, DefaultAgent
+    from verbix.agent.tools.registry import ToolRegistry
     from verbix.core.events import TurnComplete
-    from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent
-    from verbix.minisweagent.tools.registry import ToolRegistry
 
     seen = {}
 
@@ -75,9 +75,9 @@ async def test_tool_choice_none_forwarded_when_configured():
 
 @pytest.mark.asyncio
 async def test_tool_choice_absent_by_default():
+    from verbix.agent.agents.default import AgentConfig, DefaultAgent
+    from verbix.agent.tools.registry import ToolRegistry
     from verbix.core.events import TurnComplete
-    from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent
-    from verbix.minisweagent.tools.registry import ToolRegistry
 
     seen = {}
 

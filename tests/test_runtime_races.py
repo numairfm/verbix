@@ -4,9 +4,9 @@ import subprocess
 import pytest
 from verbix.runtime.floor import FloorArbiter
 from verbix.runtime.ledger import TaskLedger
-from verbix.minisweagent.agents.default import DefaultAgent, AgentConfig
-from verbix.minisweagent.tools.registry import ToolRegistry
-from verbix.minisweagent.environments.local import LocalEnvironment
+from verbix.agent.agents.default import DefaultAgent, AgentConfig
+from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.environments.local import LocalEnvironment
 from verbix.core.events import ToolCallDelta
 
 @pytest.mark.asyncio

@@ -1,8 +1,8 @@
 import pytest
 
+from verbix.agent.agents.default import AgentConfig, DefaultAgent
+from verbix.agent.tools.registry import ToolRegistry
 from verbix.core.events import TextDelta, ToolCallDelta, TurnComplete
-from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent
-from verbix.minisweagent.tools.registry import ToolRegistry
 
 
 class ChunkThenToolModel:

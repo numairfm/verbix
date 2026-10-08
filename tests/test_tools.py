@@ -175,8 +175,8 @@ async def test_read_rejects_oversized_images(tmp_path: Path, monkeypatch):
 
 
 def test_multimodal_expansion_is_on_by_default():
-    from verbix.minisweagent.models.litellm_model import LitellmModelConfig
-    from verbix.minisweagent.models.utils.actions_toolcall import (
+    from verbix.agent.models.litellm_model import LitellmModelConfig
+    from verbix.agent.models.utils.actions_toolcall import (
         format_toolcall_observation_messages,
     )
 

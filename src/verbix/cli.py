@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from verbix.agent.models.litellm_model import LitellmModel, LitellmModelConfig
 from verbix.core.events import (
     AgentEvent,
     TextDelta,
@@ -20,9 +21,8 @@ from verbix.core.events import (
 )
 from verbix.ipc.client import VerbixClient
 from verbix.ipc.server import VerbixServer
-from verbix.minisweagent.models.litellm_model import LitellmModel, LitellmModelConfig
 from verbix.runtime.runtime import Runtime
- 
+
 logger = logging.getLogger(__name__)
 
 

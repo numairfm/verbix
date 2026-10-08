@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from verbix.minisweagent.utils.serialize import recursive_merge
+from verbix.agent.utils.serialize import recursive_merge
 
 _HEAD_CAP = 500_000
 _TAIL_CAP = 500_000

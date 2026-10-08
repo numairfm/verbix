@@ -4,6 +4,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from verbix.agent.agents.default import AgentConfig, DefaultAgent
+from verbix.agent.config import get_config_from_spec
+from verbix.agent.exceptions import Submitted
+from verbix.agent.tools.registry import ToolRegistry
 from verbix.core.events import (
     TextDelta,
     ThoughtDelta,
@@ -12,10 +16,6 @@ from verbix.core.events import (
     ToolCallStarted,
     TurnComplete,
 )
-from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent
-from verbix.minisweagent.config import get_config_from_spec
-from verbix.minisweagent.exceptions import Submitted
-from verbix.minisweagent.tools.registry import ToolRegistry
 
 
 @pytest.mark.asyncio
@@ -248,7 +248,7 @@ async def test_agent_step_stream_catches_submitted_cleanly():
 
 @pytest.mark.asyncio
 async def test_agent_step_stream_finish_tool_execution():
-    from verbix.minisweagent.tools.registry import ToolRegistry
+    from verbix.agent.tools.registry import ToolRegistry
     from verbix.runtime.tools import FinishTool
 
     mock_env = MagicMock()

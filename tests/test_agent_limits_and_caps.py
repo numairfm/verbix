@@ -1,8 +1,8 @@
 import pytest
 
 from verbix.core.events import TextDelta, TurnComplete
-from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent, cap_observation
-from verbix.minisweagent.tools.registry import ToolRegistry
+from verbix.agent.agents.default import AgentConfig, DefaultAgent, cap_observation
+from verbix.agent.tools.registry import ToolRegistry
 
 
 def test_cap_observation_bounds_large_outputs():

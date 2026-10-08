@@ -19,8 +19,7 @@ correct it.
 
 ## Project direction
 
-- `minisweagent/` is being reshaped into our own agent (verbix agent
-  branding, `verbix/agent/` package). Its config-list tool assignment is
+- `agent/` is our own agent (`verbix/agent/` package). Its config-list tool assignment is
   the mechanism we keep; the pollution around it goes.
 - Three agents, one engine: foreground (voice), worker, announcer.
   Foreground and announcer work hand in hand as one entity: same priority,

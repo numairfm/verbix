@@ -7,8 +7,8 @@ from typing import Any
 
 from jinja2 import StrictUndefined, Template
 
-from verbix.minisweagent.exceptions import FormatError
-from verbix.minisweagent.models.utils.openai_multimodal import expand_multimodal_content
+from verbix.agent.exceptions import FormatError
+from verbix.agent.models.utils.openai_multimodal import expand_multimodal_content
 
 BASH_TOOL = {
     "type": "function",

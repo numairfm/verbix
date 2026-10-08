@@ -4,8 +4,8 @@ turns — the session always survives."""
 import pytest
 
 from tests.conftest import assert_history_valid
+from verbix.agent.agents.default import AgentConfig, DefaultAgent
 from verbix.core.events import TextDelta, ToolCallDelta, TurnComplete
-from verbix.minisweagent.agents.default import AgentConfig, DefaultAgent
 
 
 class BlipModel:

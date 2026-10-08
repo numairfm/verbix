@@ -22,26 +22,42 @@ def resolve_contained_path(path_str: str, workspace: Path) -> Path:
 
 class FileReadTool:
     name: str = "read"
-    description: str = "Reads a file within the workspace with line numbers."
+    description: str = "Reads a file within the workspace with line numbers, or lists a directory's entries."
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Relative path to file"},
+                "path": {"type": "string", "description": "Relative path to file or directory"},
                 "start_line": {
                     "type": "integer",
-                    "description": "1-based starting line number",
+                    "description": "1-based starting line number (or directory entry offset)",
                     "default": 1,
                 },
                 "end_line": {
                     "type": "integer",
-                    "description": "1-based ending line number (inclusive)",
+                    "description": "1-based ending line number, inclusive (or last directory entry)",
                 },
             },
             "required": ["path"],
         }
+
+    def _read_dir(self, target: Path, path_str: str, args: dict[str, Any]) -> ToolResult:
+        try:
+            names = sorted(e.name for e in target.iterdir())
+        except OSError as e:
+            return ToolResult(f"error: could not list '{path_str}': {e}", is_error=True)
+        if not names:
+            return ToolResult(f"'{path_str}' is an empty directory")
+        rows = []
+        for name in names:
+            full = target / name
+            rows.append(f"{name}/ (directory)" if full.is_dir() else f"{name} ({full.stat().st_size} bytes)")
+        start_line = max(1, int(args.get("start_line", 1)))
+        end_line = args.get("end_line")
+        end_line = min(len(rows), int(end_line)) if end_line is not None else len(rows)
+        return ToolResult("\n".join(rows[start_line - 1 : end_line]))
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         path_str = args.get("path", "")
@@ -51,9 +67,11 @@ class FileReadTool:
                 return ToolResult(
                     f"error: file not found at '{path_str}'", is_error=True
                 )
+            if target.is_dir():
+                return self._read_dir(target, path_str, args)
             if not target.is_file():
                 return ToolResult(
-                    f"error: '{path_str}' is a directory, not a file",
+                    f"error: '{path_str}' is not a file",
                     is_error=True,
                 )
 

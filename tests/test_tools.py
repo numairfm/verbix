@@ -110,3 +110,34 @@ async def test_bubblewrap_sandbox_isolation(tmp_path: Path):
         or "Network is unreachable" in net_res.stdout
         or net_res.exit_code != 0
     )
+
+
+@pytest.mark.asyncio
+async def test_read_lists_directories_with_pagination(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    (workspace / "sub").mkdir(parents=True)
+    (workspace / "b.txt").write_text("b")
+    (workspace / "a.txt").write_text("a")
+    ctx = ToolContext(workspace=workspace)
+    read_tool = FileReadTool()
+
+    page1 = await read_tool.execute({"path": ".", "start_line": 1, "end_line": 2}, ctx)
+    assert page1.is_error is False
+    assert "a.txt" in page1.observation
+    assert "b.txt" in page1.observation
+    assert "sub/" not in page1.observation
+
+    page2 = await read_tool.execute({"path": ".", "start_line": 3, "end_line": 3}, ctx)
+    assert page2.is_error is False
+    assert "sub/" in page2.observation
+    assert "a.txt" not in page2.observation
+
+
+@pytest.mark.asyncio
+async def test_read_empty_directory(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    (workspace / "empty").mkdir(parents=True)
+    ctx = ToolContext(workspace=workspace)
+    res = await FileReadTool().execute({"path": "empty"}, ctx)
+    assert res.is_error is False
+    assert "empty" in res.observation

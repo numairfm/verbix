@@ -75,3 +75,17 @@ def test_normalizer_drops_numbered_bullets_before_expansion():
     from verbix.voice.segments import normalize_for_tts
 
     assert normalize_for_tts("1. foo") == "foo"
+
+
+def test_no_glued_digit_expansion():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("2word leading") == "2word leading"
+    assert normalize_for_tts("100km race") == "100km race"
+    assert normalize_for_tts("3pm appointment") == "3pm appointment"
+
+
+def test_star_between_digits_is_times():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("Price is 3*4 please") == "Price is three times four please"

@@ -30,7 +30,8 @@ _PATH = re.compile(r"(?:^|(?<=\s))(~?/(?:[\w.\-~]+/)*[\w.\-~]+)")
 _VERSION = re.compile(r"(?<![\w.])([A-Za-z])(\d+(?:\.\d+)+)(?![\w.])")
 _DECIMAL = re.compile(r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])")
 _ORDINAL = re.compile(r"(?<![\w.])(\d+)(st|nd|rd|th)\b", re.IGNORECASE)
-_INT = re.compile(r"(?<![\w.])\d[\d,]*(?!\d)")
+_TIMES = re.compile(r"(\d)\s*\*\s*(\d)")
+_INT = re.compile(r"(?<![\w.])\d[\d,]*(?!\w)")
 _BULLET = re.compile(r"(?m)^\s*(?:[-*+]|\d+[.)])\s+")
 _MD = re.compile(r"[*_#`]")
 _WS = re.compile(r"\s+")
@@ -108,6 +109,14 @@ def _verbalize_ordinal(m: re.Match[str]) -> str:
     return str(num2words(int(m.group(1)), to="ordinal"))
 
 
+def _num_side(digits: str) -> str:
+    return _int_words(int(digits)) if len(digits) <= 4 else " ".join(_DIGIT_WORDS[d] for d in digits)
+
+
+def _verbalize_times(m: re.Match[str]) -> str:
+    return f"{_num_side(m.group(1))} times {_num_side(m.group(2))}"
+
+
 def _verbalize_int(m: re.Match[str]) -> str:
     raw = m.group(0)
     digits = raw.replace(",", "")
@@ -178,6 +187,7 @@ def normalize_for_tts(text):
     t = _VERSION.sub(_verbalize_version, t)
     t = _DECIMAL.sub(_verbalize_decimal, t)
     t = _ORDINAL.sub(_verbalize_ordinal, t)
+    t = _TIMES.sub(_verbalize_times, t)
     t = _INT.sub(_verbalize_int, t)
     t = _MD.sub("", t)
     t = t.replace("%", " percent").replace("&", " and ").replace("→", " to ")

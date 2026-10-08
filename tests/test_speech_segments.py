@@ -89,3 +89,21 @@ def test_star_between_digits_is_times():
     from verbix.voice.segments import normalize_for_tts
 
     assert normalize_for_tts("Price is 3*4 please") == "Price is three times four please"
+
+
+def test_sentence_final_decimal():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("Pi is 3.14.") == "Pi is three point one four."
+
+
+def test_combined_comma_decimal():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("owed 1,000.50 now") == "owed one thousand point five zero now"
+
+
+def test_bad_grouping_reads_digitwise():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("I owe 1,00 euros") == "I owe one zero zero euros"

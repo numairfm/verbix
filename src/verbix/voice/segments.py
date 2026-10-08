@@ -28,7 +28,8 @@ _SENT_END = re.compile(r"[.!?]+")
 _URL = re.compile(r"https?://\S+")
 _PATH = re.compile(r"(?:^|(?<=\s))(~?/(?:[\w.\-~]+/)*[\w.\-~]+)")
 _VERSION = re.compile(r"(?<![\w.])([A-Za-z])(\d+(?:\.\d+)+)(?![\w.])")
-_DECIMAL = re.compile(r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])")
+_DECIMAL = re.compile(r"(?<![\w.])\d+(?:\.\d+)+\.?(?![\w.])")
+_COMMA_AMOUNT = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\w.])")
 _ORDINAL = re.compile(r"(?<![\w.])(\d+)(st|nd|rd|th)\b", re.IGNORECASE)
 _TIMES = re.compile(r"(\d)\s*\*\s*(\d)")
 _INT = re.compile(r"(?<![\w.])\d[\d,]*(?!\w)")
@@ -98,11 +99,23 @@ def _verbalize_version(m: re.Match[str]) -> str:
 
 
 def _verbalize_decimal(m: re.Match[str]) -> str:
-    chunks = m.group(0).split(".")
+    raw = m.group(0)
+    trail = ""
+    if raw.endswith("."):
+        raw, trail = raw[:-1], "."
+    chunks = raw.split(".")
     left = chunks[0]
     left_words = _int_words(int(left)) if len(left) <= 4 else " ".join(_DIGIT_WORDS[d] for d in left)
     right = " ".join(_DIGIT_WORDS[d] for d in "".join(chunks[1:]))
-    return f"{left_words} point {right}"
+    return f"{left_words} point {right}{trail}"
+
+
+def _verbalize_comma_amount(m: re.Match[str]) -> str:
+    raw = m.group(0)
+    if "." in raw:
+        head, frac = raw.split(".")
+        return f"{_int_words(int(head.replace(',', '')))} point {' '.join(_DIGIT_WORDS[d] for d in frac)}"
+    return _int_words(int(raw.replace(",", "")))
 
 
 def _verbalize_ordinal(m: re.Match[str]) -> str:
@@ -121,8 +134,10 @@ def _verbalize_int(m: re.Match[str]) -> str:
     raw = m.group(0)
     digits = raw.replace(",", "")
     if "," in raw:
-        # Comma grouping is an unambiguous magnitude marker ("1,000").
-        return _int_words(int(digits))
+        # Only strict US grouping counts as a magnitude ("1,00" is not).
+        if re.fullmatch(r"\d{1,3}(?:,\d{3})+", raw):
+            return _int_words(int(digits))
+        return " ".join(_DIGIT_WORDS[d] for d in digits)
     if len(digits) > 4:
         # IDs and long codes read digit by digit, never as magnitudes.
         return " ".join(_DIGIT_WORDS[d] for d in digits)
@@ -185,6 +200,7 @@ def normalize_for_tts(text):
     # expanding it to "one. foo".
     t = _BULLET.sub("", t)
     t = _VERSION.sub(_verbalize_version, t)
+    t = _COMMA_AMOUNT.sub(_verbalize_comma_amount, t)
     t = _DECIMAL.sub(_verbalize_decimal, t)
     t = _ORDINAL.sub(_verbalize_ordinal, t)
     t = _TIMES.sub(_verbalize_times, t)

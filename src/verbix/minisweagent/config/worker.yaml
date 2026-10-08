@@ -15,6 +15,7 @@ agent:
 
     ## Command Execution Rules:
     - Prefer 'read'/'write'/'edit' for all file work — they behave identically on every OS and keep you inside the workspace. Use 'bash' only when no tool covers the job.
+    - 'read' opens images too (jpg/png/gif/webp) — look at pictures with it instead of guessing from filenames or metadata.
     - When finished and verified, call the 'finish' tool with your debrief.
     - Do not output conversational placeholders or ask if you should proceed. You are autonomous: make decisions and execute.
 

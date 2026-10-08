@@ -141,3 +141,57 @@ async def test_read_empty_directory(tmp_path: Path):
     res = await FileReadTool().execute({"path": "empty"}, ctx)
     assert res.is_error is False
     assert "empty" in res.observation
+
+
+@pytest.mark.asyncio
+async def test_read_returns_images_as_viewable_content(tmp_path: Path):
+    import base64
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    )
+    (workspace / "tiny.png").write_bytes(png)
+    ctx = ToolContext(workspace=workspace)
+    res = await FileReadTool().execute({"path": "tiny.png"}, ctx)
+    assert res.is_error is False
+    assert "MSWEA_MULTIMODAL_CONTENT" in res.observation
+    assert "data:image/png;base64," in res.observation
+
+
+@pytest.mark.asyncio
+async def test_read_rejects_oversized_images(tmp_path: Path, monkeypatch):
+    from verbix.tools import filesystem as fs
+
+    monkeypatch.setattr(fs, "MAX_IMAGE_BYTES", 4)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "big.png").write_bytes(b"12345")
+    ctx = ToolContext(workspace=workspace)
+    res = await FileReadTool().execute({"path": "big.png"}, ctx)
+    assert res.is_error is True
+    assert "too large" in res.observation
+
+
+def test_multimodal_expansion_is_on_by_default():
+    from verbix.minisweagent.models.litellm_model import LitellmModelConfig
+    from verbix.minisweagent.models.utils.actions_toolcall import (
+        format_toolcall_observation_messages,
+    )
+
+    cfg = LitellmModelConfig(model_name="test/model")
+    assert cfg.multimodal_regex, "image expansion must be enabled by default"
+    tag = (
+        "<MSWEA_MULTIMODAL_CONTENT><CONTENT_TYPE>image_url</CONTENT_TYPE>"
+        "data:image/png;base64,AAA</MSWEA_MULTIMODAL_CONTENT>"
+    )
+    msgs = format_toolcall_observation_messages(
+        actions=[{"tool_call_id": "c1"}],
+        outputs=[{"output": tag, "returncode": 0, "exception_info": ""}],
+        observation_template="{{ output.output }}",
+        multimodal_regex=cfg.multimodal_regex,
+    )
+    parts = msgs[0]["content"]
+    assert isinstance(parts, list)
+    assert any(p.get("type") == "image_url" for p in parts)

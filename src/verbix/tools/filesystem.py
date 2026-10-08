@@ -6,6 +6,16 @@ from typing import Any
 
 from verbix.tools.base import ToolContext, ToolResult
 
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+IMAGE_MIMES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
 
 def resolve_contained_path(path_str: str, workspace: Path) -> Path:
     """Resolves a path and ensures it stays strictly within the workspace boundary."""
@@ -22,7 +32,10 @@ def resolve_contained_path(path_str: str, workspace: Path) -> Path:
 
 class FileReadTool:
     name: str = "read"
-    description: str = "Reads a file within the workspace with line numbers, or lists a directory's entries."
+    description: str = (
+        "Reads a file within the workspace with line numbers, lists a directory's entries, "
+        "or opens an image (jpg/png/gif/webp) as a viewable picture."
+    )
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
@@ -59,6 +72,26 @@ class FileReadTool:
         end_line = min(len(rows), int(end_line)) if end_line is not None else len(rows)
         return ToolResult("\n".join(rows[start_line - 1 : end_line]))
 
+    def _read_image(self, target: Path, path_str: str) -> ToolResult:
+        import base64
+
+        try:
+            raw = target.read_bytes()
+        except OSError as e:
+            return ToolResult(f"error: could not read file '{path_str}': {e}", is_error=True)
+        if len(raw) > MAX_IMAGE_BYTES:
+            return ToolResult(
+                f"error: image '{path_str}' is too large "
+                f"({len(raw)} bytes, max {MAX_IMAGE_BYTES})",
+                is_error=True,
+            )
+        mime = IMAGE_MIMES[target.suffix.lower()]
+        data = base64.b64encode(raw).decode("ascii")
+        return ToolResult(
+            "<MSWEA_MULTIMODAL_CONTENT><CONTENT_TYPE>image_url</CONTENT_TYPE>"
+            f"data:{mime};base64,{data}</MSWEA_MULTIMODAL_CONTENT>"
+        )
+
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         path_str = args.get("path", "")
         try:
@@ -69,6 +102,8 @@ class FileReadTool:
                 )
             if target.is_dir():
                 return self._read_dir(target, path_str, args)
+            if target.suffix.lower() in IMAGE_SUFFIXES:
+                return self._read_image(target, path_str)
             if not target.is_file():
                 return ToolResult(
                     f"error: '{path_str}' is not a file",

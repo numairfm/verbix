@@ -34,7 +34,10 @@ from verbix.minisweagent.models.utils.anthropic_utils import (
     _reorder_anthropic_thinking_blocks,
 )
 from verbix.minisweagent.models.utils.cache_control import set_cache_control
-from verbix.minisweagent.models.utils.openai_multimodal import expand_multimodal_content
+from verbix.minisweagent.models.utils.openai_multimodal import (
+    DEFAULT_MULTIMODAL_REGEX,
+    expand_multimodal_content,
+)
 from verbix.minisweagent.models.utils.retry import retry
 
 logger = logging.getLogger("litellm_model")
@@ -73,7 +76,7 @@ class LitellmModelConfig(BaseModel):
         "<returncode>{{output.returncode}}</returncode>\n<output>\n{{output.output}}</output>"
     )
     """Template used to render the observation after executing an action."""
-    multimodal_regex: str = ""
+    multimodal_regex: str = DEFAULT_MULTIMODAL_REGEX
     """Regex to extract multimodal content. Empty string disables multimodal processing."""
 
 

@@ -122,3 +122,18 @@ def test_glob_star():
     from verbix.voice.segments import normalize_for_tts
 
     assert normalize_for_tts("*.py files here") == "star dot py files here"
+
+
+def test_currency_with_cents():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("costs $3.50 total") == "costs three dollars fifty total"
+    assert normalize_for_tts("$1 now") == "one dollar now"
+    assert normalize_for_tts("$0.50 now") == "fifty cents now"
+
+
+def test_degrees_and_percent_spacing():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("5°C hot") == "five degrees C hot"
+    assert normalize_for_tts("10%20% double") == "ten percent twenty percent double"

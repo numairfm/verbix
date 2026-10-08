@@ -40,7 +40,11 @@ _HASH_SHARP = re.compile(r"([A-Za-z])#")
 _HASH_NUM = re.compile(r"#(\d+)")
 _HASH_TAG = re.compile(r"#([A-Za-z]\w*)")
 _GLOB = re.compile(r"\*\.(\w+)")
+_MONEY = re.compile(r"(?<![\w$€£¥])([$€£¥])\s*(\d[\d,]*)(?:\.(\d{1,2}))?")
 _WS = re.compile(r"\s+")
+
+_CURRENCY_NAMES = {"$": ("dollar", "dollars"), "€": ("euro", "euros"), "£": ("pound", "pounds"),
+                   "¥": ("yen", "yen")}
 
 _ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
 _TEENS = ["ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
@@ -135,6 +139,19 @@ def _verbalize_times(m: re.Match[str]) -> str:
     return f"{_num_side(m.group(1))} times {_num_side(m.group(2))}"
 
 
+def _verbalize_money(m: re.Match[str]) -> str:
+    singular, plural = _CURRENCY_NAMES[m.group(1)]
+    amount = int(m.group(2).replace(",", ""))
+    frac = m.group(3)
+    cents = int(frac.ljust(2, "0")) if frac else 0
+    if cents and not amount:
+        return f"{_int_words(cents)} cents"
+    words = f"{_int_words(amount)} {singular if amount == 1 else plural}"
+    if cents:
+        words += f" {_int_words(cents)}"
+    return words
+
+
 def _verbalize_hash_num(m: re.Match[str]) -> str:
     digits = m.group(1)
     words = _int_words(int(digits)) if len(digits) <= 4 else " ".join(_DIGIT_WORDS[d] for d in digits)
@@ -215,6 +232,7 @@ def normalize_for_tts(text):
     t = _HASH_NUM.sub(_verbalize_hash_num, t)
     t = _HASH_TAG.sub(r"hashtag \1", t)
     t = _GLOB.sub(r"star dot \1", t)
+    t = _MONEY.sub(_verbalize_money, t)
     t = _VERSION.sub(_verbalize_version, t)
     t = _COMMA_AMOUNT.sub(_verbalize_comma_amount, t)
     t = _DECIMAL.sub(_verbalize_decimal, t)
@@ -222,5 +240,6 @@ def normalize_for_tts(text):
     t = _TIMES.sub(_verbalize_times, t)
     t = _INT.sub(_verbalize_int, t)
     t = _MD.sub("", t)
-    t = t.replace("%", " percent").replace("&", " and ").replace("→", " to ")
+    t = t.replace("°F", " degrees Fahrenheit").replace("°C", " degrees C").replace("°", " degrees ")
+    t = t.replace("%", " percent ").replace("&", " and ").replace("→", " to ")
     return _WS.sub(" ", t).strip()

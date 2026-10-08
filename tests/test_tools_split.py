@@ -7,3 +7,10 @@ def test_split_tools_importable_from_new_paths():
     assert FileWriteTool().name == "write"
     assert FileEditTool().name == "edit"
     assert callable(resolve_contained_path)
+
+
+def test_engine_offers_no_tools_when_registry_empty():
+    from verbix.agent.agents.default import AgentConfig, DefaultAgent
+    from verbix.agent.tools.registry import ToolRegistry
+    agent = DefaultAgent(model=None, env=object(), tools=ToolRegistry(), config=AgentConfig(tools=[]))
+    assert agent.get_tool_definitions() is None

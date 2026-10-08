@@ -22,7 +22,6 @@ from verbix.agent.exceptions import (
     Submitted,
     TimeExceeded,
 )
-from verbix.agent.models.utils.actions_toolcall import BASH_TOOL
 from verbix.agent.tools.registry import ToolRegistry
 from verbix.agent.utils.compaction import compact_messages
 from verbix.agent.utils.history import (
@@ -179,9 +178,8 @@ class DefaultAgent:
         return list(messages)
 
     def get_tool_definitions(self) -> list[dict[str, Any]] | None:
-        """Return tool schemas configured for this agent, including registry and bash."""
+        """Return tool schemas configured for this agent from the registry."""
         definitions: list[dict[str, Any]] = []
-        registered_names: set[str] = set()
 
         if self.tools is not None:
             defs = (
@@ -189,19 +187,7 @@ class DefaultAgent:
                 if self.config.tools
                 else self.tools.get_definitions()
             )
-            for d in defs:
-                definitions.append(d)
-                fn_name = d.get("function", {}).get("name") or d.get("name")
-                if fn_name:
-                    registered_names.add(fn_name)
-
-        if self.config.tools:
-            for tool_name in self.config.tools:
-                if tool_name not in registered_names and tool_name == "bash":
-                    definitions.append(BASH_TOOL)
-                    registered_names.add("bash")
-        elif not definitions and self.env is not None:
-            definitions.append(BASH_TOOL)
+            definitions.extend(defs)
 
         return definitions if definitions else None
 
@@ -209,8 +195,7 @@ class DefaultAgent:
         return 1500 if name in FOREGROUND_TOOL_NAMES else 10000
 
     async def _execute_tool(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
-        """Execute a tool via ToolRegistry or environment, returning (observation, is_error)."""
-        # 1. Check ToolRegistry first if available
+        """Execute a tool via the ToolRegistry, returning (observation, is_error)."""
         if self.tools is not None and name in self.tools._handlers:
             try:
                 res = await self.tools.aexecute(name, args)
@@ -220,36 +205,6 @@ class DefaultAgent:
                 raise
             except Exception as e:  # noqa: BLE001
                 return f"Error executing tool '{name}': {e}", True
-
-        # 2. Check environment for bash commands
-        if name == "bash":
-            if self.env is None:
-                return "Error: Cannot execute bash command because no environment is configured.", True
-
-            action = args if isinstance(args, dict) else {"command": str(args)}
-            try:
-                # Prefer async process-group execution; type-level check so
-                # MagicMock envs (auto-attrs) keep the sync path in tests.
-                if hasattr(type(self.env), "aexecute"):
-                    res = await self.env.aexecute(action)
-                else:
-                    res = await asyncio.to_thread(self.env.execute, action)
-                obs = res.get("output", "") if isinstance(res, dict) else str(res)
-                returncode = res.get("returncode", 0) if isinstance(res, dict) else 0
-                is_err = returncode != 0
-                if is_err and not obs and isinstance(res, dict) and res.get("exception_info"):
-                    obs = res["exception_info"]
-                if (
-                    is_err
-                    and f"returncode: {returncode}" not in obs.lower()
-                    and f"exit code: {returncode}" not in obs.lower()
-                ):
-                    obs = f"[Returncode: {returncode}]\n{obs}".strip()
-                return cap_observation(obs, max_chars=self._observation_cap(name)), is_err
-            except Submitted:
-                raise
-            except Exception as e:  # noqa: BLE001
-                return f"Error executing bash action: {e}", True
 
         return f"Error: Tool '{name}' is not registered or supported.", True
 
@@ -658,19 +613,16 @@ class DefaultAgent:
         actions = message.get("extra", {}).get("actions", [])
         outputs: list[dict[str, Any]] = []
         for action in actions:
-            if self.env is not None:
-                outputs.append(self.env.execute(action))
-            elif self.tools is not None:
-                tool_name = action.get("name") or action.get("tool_name", "bash")
+            if self.tools is not None:
+                tool_name = action.get("name") or action.get("tool_name")
                 args = action.get("arguments", action)
                 try:
                     res = self.tools.execute(tool_name, args)
                     outputs.append({"output": str(res), "returncode": 0, "exception_info": ""})
                 except Exception as e:  # noqa: BLE001
                     outputs.append({"output": "", "returncode": -1, "exception_info": str(e)})
-
             else:
-                outputs.append({"output": "No environment or tools configured", "returncode": -1, "exception_info": ""})
+                outputs.append({"output": "No tools configured", "returncode": -1, "exception_info": ""})
         if hasattr(self.model, "format_observation_messages"):
             return self.add_messages(*self.model.format_observation_messages(message, outputs, self.get_template_vars()))
         observations = []

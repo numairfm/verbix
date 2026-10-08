@@ -18,7 +18,6 @@ logging.getLogger("LiteLLM").setLevel(logging.ERROR)
 from verbix.agent.exceptions import FormatError
 from verbix.agent.models import GLOBAL_MODEL_STATS
 from verbix.agent.models.utils.actions_toolcall import (
-    BASH_TOOL,
     format_toolcall_observation_messages,
     parse_toolcall_actions,
 )
@@ -117,7 +116,7 @@ class LitellmModel:
         kwargs_dict = dict(self.config.model_kwargs)
         kwargs_dict.update(kwargs)
         kwargs_dict.setdefault("num_retries", 3)
-        tools = kwargs_dict.pop("tools", [BASH_TOOL])
+        tools = kwargs_dict.pop("tools", None)
         try:
             return litellm.completion(
                 model=self.config.model_name,

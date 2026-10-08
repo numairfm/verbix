@@ -1,6 +1,7 @@
 """Parse actions & format observations with toolcalls."""
 
 import json
+import re
 import time
 from typing import Any
 
@@ -104,8 +105,21 @@ def format_toolcall_observation_messages(
     padded_outputs = outputs + [not_executed] * (len(actions) - len(outputs))
     results = []
     for action, output in zip(actions, padded_outputs):
+        # Pictures are atomic payloads: lift them out before the template
+        # (which may truncate long text) and reattach them afterwards.
+        images: list[dict[str, Any]] = []
+        raw_text = output.get("output", "")
+        if multimodal_regex and isinstance(raw_text, str):
+            for match in re.finditer(multimodal_regex, raw_text):
+                if match.group(1).strip() == "image_url":
+                    images.append(
+                        {"type": "image_url", "image_url": {"url": match.group(2).strip()}}
+                    )
+        render_from = dict(output)
+        if images and isinstance(raw_text, str):
+            render_from["output"] = re.sub(multimodal_regex, "[image attached]", raw_text)
         content = Template(observation_template, undefined=StrictUndefined).render(
-            output=output, **(template_vars or {})
+            output=render_from, **(template_vars or {})
         )
         msg: dict[str, Any] = {
             "content": content,
@@ -122,7 +136,9 @@ def format_toolcall_observation_messages(
             msg["role"] = "tool"
         else:
             msg["role"] = "user"  # human issued commands
-        if multimodal_regex:
+        if images:
+            msg["content"] = [{"type": "text", "text": content}, *images]
+        elif multimodal_regex:
             msg = expand_multimodal_content(msg, pattern=multimodal_regex)
         results.append(msg)
     return results

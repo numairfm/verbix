@@ -344,3 +344,42 @@ def test_parser_still_rejects_unknown_tool_with_allowlist():
         parse_toolcall_actions(
             [_call("nope", '{}')], format_error_template="{{ error }}", allowed_tools={"screenshot"}
         )
+
+
+def test_images_survive_output_truncation():
+    from verbix.minisweagent.models.utils.actions_toolcall import (
+        format_toolcall_observation_messages,
+    )
+
+    big_image = "data:image/png;base64," + "A" * 20000
+    tag = (
+        "<MSWEA_MULTIMODAL_CONTENT><CONTENT_TYPE>image_url</CONTENT_TYPE>"
+        + big_image
+        + "</MSWEA_MULTIMODAL_CONTENT>"
+    )
+    eliding_template = "{{ output.output[:10] }}"
+    msgs = format_toolcall_observation_messages(
+        actions=[{"tool_call_id": "c1"}],
+        outputs=[{"output": "seen: " + tag, "returncode": 0, "exception_info": ""}],
+        observation_template=eliding_template,
+        multimodal_regex=r"(?s)<MSWEA_MULTIMODAL_CONTENT><CONTENT_TYPE>(.+?)</CONTENT_TYPE>(.+?)</MSWEA_MULTIMODAL_CONTENT>",
+    )
+    content = msgs[0]["content"]
+    assert isinstance(content, list)
+    urls = [p["image_url"]["url"] for p in content if p.get("type") == "image_url"]
+    assert urls == [big_image]
+
+
+def test_long_plain_text_still_truncates():
+    from verbix.minisweagent.models.utils.actions_toolcall import (
+        format_toolcall_observation_messages,
+    )
+
+    long_text = "x" * 20000
+    msgs = format_toolcall_observation_messages(
+        actions=[{"tool_call_id": "c1"}],
+        outputs=[{"output": long_text, "returncode": 0, "exception_info": ""}],
+        observation_template="{{ output.output[:10] }}",
+        multimodal_regex=r"(?s)<MSWEA_MULTIMODAL_CONTENT><CONTENT_TYPE>(.+?)</CONTENT_TYPE>(.+?)</MSWEA_MULTIMODAL_CONTENT>",
+    )
+    assert msgs[0]["content"] == [{"type": "text", "text": "xxxxxxxxxx"}]

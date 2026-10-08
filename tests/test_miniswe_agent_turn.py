@@ -264,7 +264,7 @@ async def test_agent_step_stream_catches_submitted_cleanly():
 @pytest.mark.asyncio
 async def test_agent_step_stream_finish_tool_execution():
     from verbix.agent.tools.registry import ToolRegistry
-    from verbix.runtime.tools import FinishTool
+    from verbix.tools import FinishTool
 
     mock_model = MagicMock()
     turns_yielded = 0

@@ -12,16 +12,14 @@ from verbix.tools.base import (
 )
 from verbix.tools.bash import BashTool
 from verbix.tools.cancel import CancelTool
-from verbix.tools.filesystem import (
-    FileEditTool,
-    FileReadTool,
-    FileWriteTool,
-    resolve_contained_path,
-)
+from verbix.tools.edit import FileEditTool
 from verbix.tools.finish import FinishTool
+from verbix.tools.read import FileReadTool
 from verbix.tools.sandbox import SandboxConfig, SandboxResult, execute_sandboxed
+from verbix.tools.shared import resolve_contained_path
 from verbix.tools.spawn import SpawnTool
 from verbix.tools.status import StatusTool
+from verbix.tools.write import FileWriteTool
 
 if TYPE_CHECKING:
     from verbix.agent.tools.registry import ToolRegistry

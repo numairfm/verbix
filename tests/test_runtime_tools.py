@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from verbix.runtime.tools import CancelTool, SpawnTool, StatusTool
+from verbix.tools import CancelTool, SpawnTool, StatusTool
 from verbix.tools.base import ToolContext
 
 
@@ -82,7 +82,7 @@ async def test_cancel_tool_execution(dummy_runtime):
 
 @pytest.mark.asyncio
 async def test_finish_tool_execution():
-    from verbix.runtime.tools import FinishTool
+    from verbix.tools import FinishTool
 
     tool = FinishTool()
     assert tool.parameters_schema["required"] == ["summary"]

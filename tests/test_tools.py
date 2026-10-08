@@ -5,8 +5,10 @@ import pytest
 
 from verbix.tools.base import ToolContext, parse_lenient_json
 from verbix.tools.bash import BashTool
-from verbix.tools.filesystem import FileEditTool, FileReadTool, FileWriteTool
+from verbix.tools.edit import FileEditTool
+from verbix.tools.read import FileReadTool
 from verbix.tools.sandbox import SandboxConfig, execute_sandboxed
+from verbix.tools.write import FileWriteTool
 
 
 def test_parse_lenient_json():
@@ -162,7 +164,7 @@ async def test_read_returns_images_as_viewable_content(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_read_rejects_oversized_images(tmp_path: Path, monkeypatch):
-    from verbix.tools import filesystem as fs
+    from verbix.tools import read as fs
 
     monkeypatch.setattr(fs, "MAX_IMAGE_BYTES", 4)
     workspace = tmp_path / "workspace"

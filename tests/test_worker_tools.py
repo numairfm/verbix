@@ -1,6 +1,6 @@
 """Worker registry contract: the background agent's tools."""
 
-from verbix.runtime.tools import build_worker_registry
+from verbix.runtime.workers import build_worker_registry
 
 
 def test_worker_registry_has_five_main_tools():

@@ -111,7 +111,7 @@ async def test_spawn_broadcasts_ledger_transitions(tmp_path):
 
 @pytest.mark.asyncio
 async def test_finish_tool_returns_task_completed_observation():
-    from verbix.runtime.tools import FinishTool
+    from verbix.tools import FinishTool
 
     res = await FinishTool().execute({"summary": "All 83 tests passed."}, None)
     assert res.observation == "Task completed: All 83 tests passed."
@@ -122,7 +122,7 @@ async def test_finish_tool_observation_has_no_repr_leakage():
     from verbix.agent.agents.default import DefaultAgent
     from verbix.agent.tools.registry import ToolRegistry
     from verbix.core.events import ToolCallDelta
-    from verbix.runtime.tools import FinishTool
+    from verbix.tools import FinishTool
 
     registry = ToolRegistry()
     finish_tool = FinishTool()

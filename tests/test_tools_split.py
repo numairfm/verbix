@@ -31,3 +31,11 @@ def test_no_tool_names_in_engine():
     for name in ("FOREGROUND_TOOL_NAMES", "finish", "spawn", "status", "cancel",
                  "read", "write", "edit", "bash"):
         assert f'"{name}"' not in body and f"'{name}'" not in body, name
+
+
+def test_runtime_modules_exist_with_one_job_header():
+    import pathlib
+    for mod in ("foreground", "workers", "announcer"):
+        text = pathlib.Path(f"src/verbix/runtime/{mod}.py").read_text()
+        assert text.splitlines()[0].startswith('"""')
+        assert mod in text[:500].lower(), mod

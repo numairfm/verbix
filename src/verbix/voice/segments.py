@@ -33,8 +33,13 @@ _COMMA_AMOUNT = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\w.])")
 _ORDINAL = re.compile(r"(?<![\w.])(\d+)(st|nd|rd|th)\b", re.IGNORECASE)
 _TIMES = re.compile(r"(\d)\s*\*\s*(\d)")
 _INT = re.compile(r"(?<![\w.])\d[\d,]*(?!\w)")
+_MD = re.compile(r"[*_`]")
 _BULLET = re.compile(r"(?m)^\s*(?:[-*+]|\d+[.)])\s+")
-_MD = re.compile(r"[*_#`]")
+_HASH_HEADING = re.compile(r"(?m)^\s*#{1,6}\s+")
+_HASH_SHARP = re.compile(r"([A-Za-z])#")
+_HASH_NUM = re.compile(r"#(\d+)")
+_HASH_TAG = re.compile(r"#([A-Za-z]\w*)")
+_GLOB = re.compile(r"\*\.(\w+)")
 _WS = re.compile(r"\s+")
 
 _ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
@@ -130,6 +135,12 @@ def _verbalize_times(m: re.Match[str]) -> str:
     return f"{_num_side(m.group(1))} times {_num_side(m.group(2))}"
 
 
+def _verbalize_hash_num(m: re.Match[str]) -> str:
+    digits = m.group(1)
+    words = _int_words(int(digits)) if len(digits) <= 4 else " ".join(_DIGIT_WORDS[d] for d in digits)
+    return f"number {words}"
+
+
 def _verbalize_int(m: re.Match[str]) -> str:
     raw = m.group(0)
     digits = raw.replace(",", "")
@@ -199,6 +210,11 @@ def normalize_for_tts(text):
     # Bullets before numbers so "1. foo" drops the marker instead of
     # expanding it to "one. foo".
     t = _BULLET.sub("", t)
+    t = _HASH_HEADING.sub("", t)
+    t = _HASH_SHARP.sub(r"\1 sharp", t)
+    t = _HASH_NUM.sub(_verbalize_hash_num, t)
+    t = _HASH_TAG.sub(r"hashtag \1", t)
+    t = _GLOB.sub(r"star dot \1", t)
     t = _VERSION.sub(_verbalize_version, t)
     t = _COMMA_AMOUNT.sub(_verbalize_comma_amount, t)
     t = _DECIMAL.sub(_verbalize_decimal, t)

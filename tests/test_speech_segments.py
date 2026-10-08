@@ -107,3 +107,18 @@ def test_bad_grouping_reads_digitwise():
     from verbix.voice.segments import normalize_for_tts
 
     assert normalize_for_tts("I owe 1,00 euros") == "I owe one zero zero euros"
+
+
+def test_hashtag_trio():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("C# is great") == "C sharp is great"
+    assert normalize_for_tts("Issue #42 fixed") == "Issue number forty-two fixed"
+    assert normalize_for_tts("#tag trending") == "hashtag tag trending"
+    assert normalize_for_tts("# Heading one") == "Heading one"
+
+
+def test_glob_star():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("*.py files here") == "star dot py files here"

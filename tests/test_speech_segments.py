@@ -201,3 +201,20 @@ def test_splitter_never_cuts_inside_tokens():
         "He scored 1.",
         "She scored 2, and they both played really well today.",
     ]
+
+
+def test_emoji_dropped_narrowly():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("done 🎉") == "done"
+    assert normalize_for_tts("café → done") == "café to done"
+
+
+def test_raw_deferrals_pinned():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts('He said "hello" today') == 'He said "hello" today'
+    assert normalize_for_tts("Contact FBI headquarters") == "Contact FBI headquarters"
+    assert normalize_for_tts("don't stop") == "don't stop"
+    assert normalize_for_tts("TCP/IP is down") == "TCP/IP is down"
+    assert normalize_for_tts("well-known fact") == "well-known fact"

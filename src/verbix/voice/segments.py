@@ -48,6 +48,11 @@ _HASH_SHARP = re.compile(r"([A-Za-z])#")
 _HASH_NUM = re.compile(r"#(\d+)")
 _HASH_TAG = re.compile(r"#([A-Za-z]\w*)")
 _GLOB = re.compile(r"\*\.(\w+)")
+# Narrow emoji drop: pictograph/symbol blocks + ZWJ/VS16/RI/keycap machinery.
+# Deliberately excludes é — ° ± × © ® and other Latin-1/punctuation.
+_EMOJI = re.compile(
+    "[\U0001F300-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D\u20E3]"
+)
 _FRACTION = re.compile(r"(?<![\w.])(\d+)/(\d+)(?!/\d)(?![\w.])")
 _CPLUS = re.compile(r"\bC\+\+(?!\w)")
 _HEART = re.compile(r"</?3\b")
@@ -413,6 +418,7 @@ def normalize_for_tts(text):
     t = _BARE_DOMAIN.sub("a link", t)
     t = _INT.sub(_verbalize_int, t)
     t = _MD.sub("", t)
+    t = _EMOJI.sub(" ", t)
     t = t.replace("°F", " degrees Fahrenheit").replace("°C", " degrees C").replace("°", " degrees ")
     t = t.replace("%", " percent ").replace("&", " and ").replace("→", " to ")
     for i, original in enumerate(stashed):

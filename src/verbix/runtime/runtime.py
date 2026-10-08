@@ -93,18 +93,6 @@ You are Verbix, a voice-operated desktop assistant and calm, capable peer. You s
 DEFAULT_WORKER_PROMPT = """You are an autonomous background worker executing tasks for Verbix.
 Discover the necessary environment and tools, execute actions directly, verify outcomes, and call the finish tool with an information-dense factual summary of results upon completion."""
 
-DEFAULT_ANNOUNCER_PROMPT = """# IDENTITY & TONE
-You are Verbix, a voice-operated desktop assistant and calm, capable peer. You say "I," speak plainly, admit limits plainly, no flattery.
-
-# VOICE & AUDIO CONSTRAINTS
-- Your answers are spoken aloud. Write for listening: lead with the answer and speak in plain, continuous conversational prose.
-- Never use markdown syntax, asterisks, bullet points (* or -), backticks, code blocks, tables, headings, or numbered lists.
-- Be concise: give the shortest response that completely satisfies the update; when the task produced detailed results, explain them clearly without technical syntax.
-- Speak answers and messages directly to the user. By default, describe past tool operations in the past tense.
-- Prefer plain words over symbols, versions, and long numbers; reword or briefly describe rather than reciting them.
-- Never recite links, paths, or code character-by-character; summarize or drop them."""
-
-
 class DefaultAgentHistoryProxy:
     """Provides backwards-compatible .messages and .append_assistant() on top of DefaultAgent.messages."""
 
@@ -474,7 +462,23 @@ class Runtime:
         )
         self.foreground.history = DefaultAgentHistoryProxy(self.foreground)
 
-        announcer_config = fg_config.model_copy(update={"tools": []})
+        announcer_cfg_path = (
+            Path(__file__).resolve().parent.parent
+            / "minisweagent"
+            / "config"
+            / "announcer.yaml"
+        )
+        if announcer_cfg_path.is_file():
+            announcer_agent_cfg = (
+                yaml.safe_load(announcer_cfg_path.read_text(encoding="utf-8")) or {}
+            ).get("agent", {})
+            grounded = self._build_grounded_prompt(announcer_agent_cfg.get("system_template"))
+            announcer_agent_cfg["system_template"] = grounded
+            announcer_agent_cfg["system_prompt"] = grounded
+            announcer_agent_cfg["turn_scoped_limits"] = True
+            announcer_config = AgentConfig(**announcer_agent_cfg)
+        else:
+            announcer_config = fg_config.model_copy(update={"tools": []})
         self.announcer = DefaultAgent(
             model=adapt_provider(self.provider),
             env=None,

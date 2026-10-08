@@ -52,3 +52,10 @@ def test_normalizer_verbalizes_numbers():
     assert normalize_for_tts("in 2026") == "in two thousand twenty-six"
     assert normalize_for_tts("call_4134918 done") == "call four one three four nine one eight done"
     assert normalize_for_tts("plan v1.2.3 now") == "plan v1.2.3 now"
+
+
+def test_normalizer_reads_comma_magnitudes_as_cardinals():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("population 8,000,000") == "population eight million"
+    assert normalize_for_tts("owed 1,000") == "owed one thousand"

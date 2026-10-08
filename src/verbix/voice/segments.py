@@ -82,7 +82,11 @@ def _verbalize_decimal(m: "re.Match[str]") -> str:
 
 
 def _verbalize_int(m: "re.Match[str]") -> str:
-    digits = m.group(0).replace(",", "")
+    raw = m.group(0)
+    digits = raw.replace(",", "")
+    if "," in raw:
+        # Comma grouping is an unambiguous magnitude marker ("1,000").
+        return _int_words(int(digits))
     if len(digits) > 4:
         # IDs and long codes read digit by digit, never as magnitudes.
         return " ".join(_DIGIT_WORDS[d] for d in digits)

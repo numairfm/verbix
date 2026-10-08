@@ -1,6 +1,14 @@
-"""Clause-aware text segmentation + TTS normalization (pure; stdlib `re` only)."""
+"""Clause-aware text segmentation + TTS normalization.
+
+Segmentation is stdlib; normalization pairs small custom verbalizers
+(paths, versions, decimals, IDs) with num2words for ordinals. Cardinals
+stay hand-rolled: the pinned convention drops the "and" num2words emits
+("one hundred ninety-three", not "one hundred and ninety-three").
+"""
 
 import re
+
+from num2words import num2words
 
 SOFT_MAX = 130
 MAX_WORDS = 24
@@ -21,6 +29,7 @@ _URL = re.compile(r"https?://\S+")
 _PATH = re.compile(r"(?:^|(?<=\s))(~?/(?:[\w.\-~]+/)*[\w.\-~]+)")
 _VERSION = re.compile(r"(?<![\w.])([A-Za-z])(\d+(?:\.\d+)+)(?![\w.])")
 _DECIMAL = re.compile(r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])")
+_ORDINAL = re.compile(r"(?<![\w.])(\d+)(st|nd|rd|th)\b", re.IGNORECASE)
 _INT = re.compile(r"(?<![\w.])\d[\d,]*(?!\d)")
 _BULLET = re.compile(r"(?m)^\s*(?:[-*+]|\d+[.)])\s+")
 _MD = re.compile(r"[*_#`]")
@@ -68,7 +77,7 @@ def _int_words(n: int) -> str:
     return " ".join(parts)
 
 
-def _verbalize_path(m: "re.Match[str]") -> str:
+def _verbalize_path(m: re.Match[str]) -> str:
     raw = m.group(0)
     trail = ""
     if raw.endswith("."):
@@ -81,13 +90,13 @@ def _verbalize_path(m: "re.Match[str]") -> str:
     return ", ".join(p for p in parts if p) + trail
 
 
-def _verbalize_version(m: "re.Match[str]") -> str:
+def _verbalize_version(m: re.Match[str]) -> str:
     letter = _LETTER_NAMES.get(m.group(1).lower(), m.group(1))
     groups = [" ".join(_DIGIT_WORDS[d] for d in g) for g in m.group(2).split(".")]
     return f"{letter} {' point '.join(groups)}"
 
 
-def _verbalize_decimal(m: "re.Match[str]") -> str:
+def _verbalize_decimal(m: re.Match[str]) -> str:
     chunks = m.group(0).split(".")
     left = chunks[0]
     left_words = _int_words(int(left)) if len(left) <= 4 else " ".join(_DIGIT_WORDS[d] for d in left)
@@ -95,7 +104,11 @@ def _verbalize_decimal(m: "re.Match[str]") -> str:
     return f"{left_words} point {right}"
 
 
-def _verbalize_int(m: "re.Match[str]") -> str:
+def _verbalize_ordinal(m: re.Match[str]) -> str:
+    return str(num2words(int(m.group(1)), to="ordinal"))
+
+
+def _verbalize_int(m: re.Match[str]) -> str:
     raw = m.group(0)
     digits = raw.replace(",", "")
     if "," in raw:
@@ -159,10 +172,13 @@ def normalize_for_tts(text):
     t = _URL.sub("a link", text)
     t = t.replace("_", " ")
     t = _PATH.sub(_verbalize_path, t)
+    # Bullets before numbers so "1. foo" drops the marker instead of
+    # expanding it to "one. foo".
+    t = _BULLET.sub("", t)
     t = _VERSION.sub(_verbalize_version, t)
     t = _DECIMAL.sub(_verbalize_decimal, t)
+    t = _ORDINAL.sub(_verbalize_ordinal, t)
     t = _INT.sub(_verbalize_int, t)
-    t = _BULLET.sub("", t)
     t = _MD.sub("", t)
     t = t.replace("%", " percent").replace("&", " and ").replace("→", " to ")
     return _WS.sub(" ", t).strip()

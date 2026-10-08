@@ -63,3 +63,15 @@ def test_normalizer_reads_comma_magnitudes_as_cardinals():
 
     assert normalize_for_tts("population 8,000,000") == "population eight million"
     assert normalize_for_tts("owed 1,000") == "owed one thousand"
+
+
+def test_normalizer_reads_ordinals():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("finished 1st, then 2nd and 23rd") == "finished first, then second and twenty-third"
+
+
+def test_normalizer_drops_numbered_bullets_before_expansion():
+    from verbix.voice.segments import normalize_for_tts
+
+    assert normalize_for_tts("1. foo") == "foo"

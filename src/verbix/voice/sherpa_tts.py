@@ -53,6 +53,24 @@ def _resample_f32(samples: np.ndarray, from_rate: int, to_rate: int) -> np.ndarr
     return np.interp(pos, np.arange(len(samples)), samples).astype(np.float32)
 
 
+def _trim_silence(
+    samples: np.ndarray,
+    rate: int = 24000,
+    threshold: float = 0.01,
+    pad_ms: int = 30,
+) -> np.ndarray:
+    """Trims leading and trailing silence from synthesized audio, keeping a small natural pad."""
+    if samples.size == 0:
+        return samples
+    mask = np.abs(samples) >= threshold
+    if not np.any(mask):
+        return samples
+    pad = int(rate * (pad_ms / 1000.0))
+    start_idx = max(0, int(np.argmax(mask)) - pad)
+    end_idx = min(len(samples), len(samples) - int(np.argmax(mask[::-1])) + pad)
+    return samples[start_idx:end_idx]
+
+
 class SherpaTTS:
     """In-process Text-to-Speech engine using sherpa-onnx and Supertonic INT8."""
 
@@ -156,8 +174,11 @@ class SherpaTTS:
         # Resample from native rate (typically 44100) to 24000 f32
         resampled = _resample_f32(samples, native_rate, self.sample_rate)
 
+        # Trim model-generated leading and trailing dead silence
+        trimmed = _trim_silence(resampled, rate=self.sample_rate, pad_ms=30)
+
         # Yield raw float32 PCM bytes
-        yield resampled.tobytes()
+        yield trimmed.tobytes()
 
     async def aclose(self) -> None:
         """Cleans up resources."""

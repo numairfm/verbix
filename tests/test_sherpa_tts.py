@@ -104,3 +104,21 @@ def test_lazy_import_does_not_import_sherpa_onnx_at_module_load(monkeypatch):
     # Creating instance does not import sherpa_onnx
     tts = mod.SherpaTTS(model_dir=Path("/any"))
     assert not tts.is_loaded
+
+
+def test_trim_silence_removes_dead_air():
+    from verbix.voice.sherpa_tts import _trim_silence
+
+    # 1000 samples of 0s, 1000 samples of signal, 1000 samples of 0s
+    leading = np.zeros(1000, dtype=np.float32)
+    signal = np.ones(1000, dtype=np.float32) * 0.5
+    trailing = np.zeros(1000, dtype=np.float32)
+    raw = np.concatenate([leading, signal, trailing])
+
+    # pad_ms=10 -> 240 samples pad
+    trimmed = _trim_silence(raw, rate=24000, threshold=0.01, pad_ms=10)
+
+    # Should have trimmed ~760 samples from both ends
+    assert len(trimmed) < len(raw)
+    assert len(trimmed) == 1000 + 2 * 240
+

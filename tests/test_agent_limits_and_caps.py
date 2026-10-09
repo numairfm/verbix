@@ -1,45 +1,7 @@
 import pytest
 
-from verbix.agent.agents.default import AgentConfig, DefaultAgent, cap_observation
-from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.agents.default import AgentConfig, DefaultAgent
 from verbix.core.events import TextDelta, TurnComplete
-
-
-def test_cap_observation_bounds_large_outputs():
-    huge = "a" * 50000
-    capped = cap_observation(huge, max_chars=10000)
-    assert len(capped) <= 10200
-    assert "elided" in capped or "..." in capped
-    assert capped.startswith("aaaa")
-    assert capped.endswith("aaaa")
-
-
-def test_cap_observation_scales_with_tool_scope():
-    tools = ToolRegistry()
-    def _fg(args):
-        return "s" * 5000
-    _fg.observation_cap = 1500
-    tools.register(
-        "status",
-        {"type": "function", "function": {"name": "status"}},
-        _fg,
-    )
-    def _wide(args):
-        return "w" * 5000
-    _wide.observation_cap = 10000
-    tools.register(
-        "mytool",
-        {"type": "function", "function": {"name": "mytool"}},
-        _wide,
-    )
-    agent = DefaultAgent(model=None, tools=tools, system_prompt="sys")
-    import asyncio
-
-    fg_res = asyncio.run(agent._execute_tool("status", {}))
-    worker_res = asyncio.run(agent._execute_tool("mytool", {}))
-    assert len(fg_res.observation) <= 1700
-    assert len(worker_res.observation) <= 10200
-    assert len(worker_res.observation) > len(fg_res.observation)
 
 
 class _CostStreamModel:

@@ -12,7 +12,6 @@ class SpawnTool:
     """Spawns an autonomous background worker to perform a task."""
 
     name: str = "spawn"
-    observation_cap: int = 1500
     side_effecting: bool = True
     description: str = "Starts an autonomous background worker to execute a task."
 

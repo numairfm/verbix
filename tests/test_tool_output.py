@@ -52,3 +52,22 @@ def test_yaml_limits_drive_registry(tmp_path):
         output_limits=resolve_output_limits(cfg.get("tool_output")))
     res = asyncio.run(reg.aexecute("bash", {"command": "seq 1 100"}))
     assert "full content saved to" in res.observation
+
+
+def test_prune_spills_removes_only_old_files(tmp_path):
+    import os
+    import time
+
+    from verbix.tools.shared import prune_spills
+    spill = tmp_path / "logs"
+    spill.mkdir()
+    old = spill / "tool_old"
+    fresh = spill / "tool_fresh"
+    old.write_text("old")
+    fresh.write_text("fresh")
+    aged = time.time() - 8 * 86400
+    os.utime(old, (aged, aged))
+    prune_spills(spill)
+    assert not old.exists()
+    assert fresh.exists()
+    prune_spills(tmp_path / "missing")  # missing dir is a no-op

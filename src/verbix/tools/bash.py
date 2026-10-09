@@ -9,7 +9,6 @@ from verbix.tools.sandbox import SandboxConfig, execute_sandboxed
 
 class BashTool:
     name: str = "bash"
-    observation_cap: int = 10000
     side_effecting: bool = False
     description: str = (
         "Executes a bash command inside an isolated default-deny sandbox."
@@ -34,11 +33,9 @@ class BashTool:
         self,
         allow_network: bool = False,
         extra_binds: tuple[tuple[Path, Path, bool], ...] | None = None,
-        max_output_length: int = 50_000,
     ) -> None:
         self.allow_network = allow_network
         self.extra_binds = extra_binds or ()
-        self.max_output_length = max_output_length
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         command = str(args.get("command", "")).strip()
@@ -65,12 +62,6 @@ class BashTool:
                     output += "\n" + res.stderr
                 else:
                     output = res.stderr
-
-            if len(output) > self.max_output_length:
-                output = (
-                    f"[Output truncated: showing last {self.max_output_length} chars]\n"
-                    + output[-self.max_output_length :]
-                )
 
             is_error = res.exit_code != 0
             if is_error and not output:

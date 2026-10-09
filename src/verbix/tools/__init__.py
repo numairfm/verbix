@@ -91,7 +91,6 @@ def build_registry(
             )
             return replace(res, observation=bound)
 
-        _handler.observation_cap = getattr(t, "observation_cap", 10000)  # type: ignore[attr-defined]
         return _handler
 
     for name in names:

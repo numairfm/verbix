@@ -16,6 +16,7 @@ from verbix.runtime.foreground import (
     adapt_provider,
 )
 from verbix.runtime.worker import WorkerTask
+from verbix.tools.shared import prune_spills
 
 
 def build_worker_registry(workspace: Path | None = None) -> ToolRegistry:
@@ -33,6 +34,7 @@ def build_worker_registry(workspace: Path | None = None) -> ToolRegistry:
 
 async def spawn_worker(runtime: Any, objective: str) -> str:
     """Spawns an independent background worker with full workspace tools."""
+    prune_spills(Path(runtime.workspace) / ".verbix" / "logs")
     runtime._task_counter += 1
     task_id = f"task-{runtime._task_counter}"
 

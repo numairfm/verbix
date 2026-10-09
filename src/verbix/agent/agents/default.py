@@ -86,14 +86,6 @@ class AgentConfig(BaseModel):
     tool_output: dict | None = None
 
 
-def cap_observation(text: str, max_chars: int = 10000) -> str:
-    """Bound a tool observation, keeping head+tail so large outputs can't flood history."""
-    if len(text) <= max_chars:
-        return text
-    keep = max(1, max_chars // 2)
-    return text[:keep] + f"\n... [elided {len(text) - max_chars} chars] ...\n" + text[-keep:]
-
-
 class DefaultAgent:
     """Unified agent supporting both synchronous execution and async streaming."""
 
@@ -192,18 +184,18 @@ class DefaultAgent:
     async def _execute_tool(self, name: str, args: dict[str, Any]) -> ToolResult:
         """Execute a tool via the ToolRegistry, returning the full ToolResult."""
         if self.tools is not None and name in self.tools._handlers:
-            cap = getattr(self.tools._handlers[name], "observation_cap", 10000)
             try:
                 res = await self.tools.aexecute(name, args)
                 if isinstance(res, ToolResult):
-                    obs, is_err, is_term = res.observation, res.is_error, res.is_terminal
+                    obs, is_error, is_terminal = res.observation, res.is_error, res.is_terminal
+                    return ToolResult(
+                        obs, is_error=is_error, is_terminal=is_terminal, attachments=res.attachments
+                    )
                 elif isinstance(res, str):
-                    obs, is_err, is_term = res, False, False
+                    obs, is_error, is_terminal = res, False, False
                 else:
-                    obs, is_err, is_term = str(res), False, False
-                return ToolResult(
-                    cap_observation(obs, max_chars=cap), is_error=is_err, is_terminal=is_term
-                )
+                    obs, is_error, is_terminal = str(res), False, False
+                return ToolResult(obs, is_error=is_error, is_terminal=is_terminal)
             except Submitted:
                 raise
             except Exception as e:  # noqa: BLE001

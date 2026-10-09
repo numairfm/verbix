@@ -3,23 +3,22 @@
 Milestone 1 of 3. M2 adds the VAD-gated hands-free loop. M3 adds voice
 interruption with external AEC. Each milestone ships on its own.
 
-Revision 2: addresses critic rounds (accuracy, license, platform).
-Open question count is zero; every former question is decided below.
+Revision 3: addresses critic rounds 1–2. Open question count is zero.
 
 ## 1. Intent
 
 Replace Verbix's scattered Python voice backends (faster-whisper STT,
 PocketTTS.cpp helper, Silero-through-faster-whisper) with one native
 runtime, audio.cpp, covering VAD + ASR + TTS through a resident local
-server. Interaction stays push-to-talk, exactly as the user experiences
-it today, except voice quality and latency characteristics (bounded in
-§5). No behavior the user operates changes: same hotkey/toggle,
-same floor states, same barge-in.
+server. What the user operates is interaction-identical to today —
+same toggles, same floor states, same barge-in — except voice quality
+and latency characteristics (bounded in §5). This also removes
+faster-whisper (a base dependency, `pyproject.toml:11`) and its torch
+chain from the install.
 
 Locked decisions: half-duplex interaction (M2), server subprocess
-integration (not C ABI, not CLI-per-request), full swap including
-Supertonic 3, three milestones, no heuristic echo hacks,
-cross-platform in M1 (Linux/Windows/macOS).
+integration, full swap including Supertonic 3, three milestones, no
+heuristic echo hacks, cross-platform in M1 (Linux/Windows/macOS).
 
 Success: `uv run verbix --voice` works on all three OSes with no Python
 audio ML in-process, ASR at parity with `tiny.en` (§5), Supertonic voice
@@ -41,210 +40,231 @@ runtime/floor/announcer changes, ASR supremacy (parity is the bar).
 
 `voice/` keeps its one-concern-per-file layout:
 
-- `voice/audiocpp_server.py` (new): owns the process only — spawn,
-  `GET /health` wait, crash restart with model re-registration (the
-  server keeps loaded models/sessions in memory per process, so a
-  restart re-registers entries and later requests open fresh sessions;
-  nothing survives a process death by design), `aclose()`. Binds
-  `127.0.0.1`. No token auth: the server documents no auth mechanism,
-  and localhost binding is its documented posture.
+- `voice/audiocpp_server.py` (new): owns the process only — spawn with
+  the provisioned `server.json`, `GET /health` wait, crash respawn
+  (respawn reuses `server.json`; a restarted process owns no prior
+  sessions, so later requests open fresh ones — there is no
+  re-registration step, the config is the registration), `aclose()`.
+  Binds `127.0.0.1`. No auth: the server documents none.
 - `voice/audiocpp_vad.py` (new): one-shot no-speech gate only —
-  `POST /v1/tasks/run` with the configured Silero model id and
-  `{"request": {"audio_base64": "<wav>"}}`, returns speech/no-speech
-  from the result segments (same segment contract the CLI exposes via
-  `--segments-out`). No streaming session in M1; M2 adds it. Gate
-  failure (server down mid-session) is fail-closed: the turn errors to
-  the existing deterministic voice error path. Fail-open is wrong here
-  because a dead server also means STT/TTS are dead — silence would be
-  a lie, while today's local gate fails open only because the decoder
-  still works without it.
+  `POST /v1/tasks/run` with the configured Silero model entry id
+  (`silero-vad`, written by the provisioner) and
+  `{"request": {"audio_base64": "<wav>", "threshold": 0.5}}`
+  (threshold default 0.5, remaining tunables at documented defaults),
+  returning speech/no-speech from the result segments. No streaming
+  session in M1; M2 adds it. Gate failure is fail-closed: the turn
+  errors via the contract in §8 (a dead server also means STT/TTS are
+  dead — silence would be a lie).
 - `voice/audiocpp_stt.py` (new): one-shot `transcribe(buffered_pcm)`
-  via `POST /v1/audio/transcriptions` (multipart upload, OpenAI shape).
-  It does NOT implement `open_session`: M1 drops live incremental STT
-  during recording (see §4), so there is no live route to consume.
+  via `POST /v1/audio/transcriptions` (multipart upload), with
+  `language` pinned to `"en"` (today's forced-`en` behavior preserved).
+  No `open_session`: M1 drops live incremental STT (see §4).
 - `voice/audiocpp_tts.py` (new): `synthesize(text)` as an async
-  generator function (`async def` + `yield`, the convention
-  `PocketHelperEngine.synthesize` and both mocks already follow) via
-  `POST /v1/audio/speech` with the Supertonic model id and preset
-  voice id. Server returns `audio/wav` by default; the client strips
-  the WAV header and yields 24 kHz f32 mono PCM (numpy conversion, both
-  already dependencies), matching what `AudioPlayer`/sinks consume
-  today (`sinks.py:21-23`, `player.py:63-64` defaults). Voice request
-  sends the preset id only (server precedence level 2: preset wins;
-  no `voice_ref`, no `voice_dir`). Preset is `M1`, provisional pending
-  the provenance gate (§7).
-- `voice/capture.py` (edited, not untouched): adds a sounddevice input
-  backend alongside `pw-record`/`arecord` (`capture.py:27-32` today is
-  Linux-only: with neither binary, recording silently yields `b""` and
-  the turn idles). Backend order: `pw-record` → `arecord` →
-  sounddevice (lazy import, same pattern as
-  `callback_sink.py:55`). sounddevice is already a dependency
-  (`pyproject.toml:28`). No new dependency.
+  generator function, matching the convention `PocketHelperEngine`
+  and the mocks already follow (call without await, iterate chunks;
+  the abstract's sync-`def` wording is descriptive, implementations
+  are what the player consumes). Request: `POST /v1/audio/speech`
+  with the Supertonic model id and `"voice": "M1"` — this resolves via
+  server precedence level 4 (model-native id pass-through; no
+  `voice_ref`, no `voice_dir`, no server preset written). Voice `M1`
+  is provisional pending the provenance gate (§7). Latency metric is
+  request-to-complete-yield per sentence (one-shot offline synthesis;
+  "first-chunk" is undefined here). Output assumed 24 kHz f32 mono
+  (task 1 confirms the native rate; on mismatch the client converts —
+  numpy is already a dependency — or the sink rate is reconfigured,
+  named fallback, no silent resampling gap).
+- `voice/wavutil.py` (new, one job): stdlib-`wave` PCM↔WAV packaging
+  (16 kHz mono s16le capture bytes → WAV for `audio_base64` and
+  multipart uploads; WAV strip for TTS responses). Both server audio
+  inputs require WAV; capture returns raw s16le — this helper closes
+  that gap in one place.
+- `voice/capture.py` (edited): adds a sounddevice input backend.
+  Backend order: `pw-record` → `arecord` → sounddevice (lazy import,
+  same pattern as `callback_sink.py:55`). sounddevice is an OPTIONAL
+  extra (`pyproject.toml:26-29`, not a base dep): the provisioner
+  installs `verbix[audio]`, and voice startup raises with the provision
+  command when no backend is available — the silent-`b""` path becomes
+  unreachable by gate, not by luck. PortAudio rule: Linux needs the
+  system package (provisioner checks import, hints the `dnf` package on
+  failure); Windows/macOS ride the wheel-bundled library (import test
+  decides, same gate).
+- Playback rule (no `sinks.py` edit): voice startup requires a working
+  sink — callback sink via the installed extra, or a present
+  subprocess backend — else it raises with guidance. This makes the
+  no-backend discard path unreachable in voice mode instead of
+  silently no-op'ing on Win/Mac.
 - `voice/pipeline.py` (edited minimally): the `open_session` live
   branch (`pipeline.py:85-88`, finalize-preference `106-108`) is
-  deleted; stop always does one-shot transcribe. Everything else —
-  toggle flow, barge-in, floor transitions, empty-transcript idle —
-  is byte-for-byte behavior-identical.
-- `voice/base.py` (edited): protocols untouched; mocks extended to
-  cover the new clients' shapes. (Earlier "untouched" wording was
-  wrong; this is the correction.)
-- `voice/__init__.py` (edited): lazy re-exports
-  (`__init__.py:22-34`) switch from `PocketHelperEngine` /
-  `FasterWhisperSTT` to the new clients; old names raise
-  `AttributeError` as unknown names do today.
-- `src/verbix/cli.py` (edited): voice-mode wiring (`cli.py:306-312`)
-  constructs the supervisor + new clients; `ensure_tts_runtime` call
-  replaced by voice-runtime provisioning check with setup guidance.
+  deleted; stop always does one-shot transcribe. The pipeline diff is
+  limited to that deletion; toggles, barge-in, floor transitions, and
+  empty-transcript idle are otherwise unchanged.
+- `voice/base.py` (edited): protocols untouched; mocks extended. (The
+  revision-1 "untouched" wording was wrong; corrected.)
+- `voice/__init__.py` (edited): the `__getattr__` lazy re-exports
+  switch to the new clients; old names raise `AttributeError` as
+  unknown names do today.
+- `src/verbix/cli.py` (edited): the voice-mode wiring block
+  constructs supervisor + new clients; the `ensure_tts_runtime` call
+  becomes a voice-runtime provisioning check with setup guidance.
+- Test dispositions (suite must stay green): `test_pocket_helper.py`
+  → rewritten as the new-clients suite (its fake-HTTP-server pattern
+  is reused); `test_tts_assets.py` → rewritten against
+  `provision_voice.py`; `test_stt_nospeech.py` → rewritten against the
+  new STT; `test_incremental_stt.py` → DELETED (tests the dropped
+  session machinery; M2 reintroduces session tests);
+  `test_voice_loop_barge.py` → re-imported to the new modules,
+  behavior assertions unchanged.
 - Deleted in the same change: `voice/stt.py`, `voice/pocket_helper.py`,
   `voice/tts_assets.py`, `scripts/setup_tts_runtime.sh`,
   `scripts/build_tts_helper.sh`, `scripts/fetch_tts_assets.py` (all
-  PocketTTS-specific; the last two serve only the deleted setup path).
+  PocketTTS-specific). `scripts/benchmark_toggle_voice.py` is already
+  stale, is not collected by the suite, and is explicitly excluded
+  (not blessed, not fixed here).
 - Untouched: `voice/output.py`, `voice/player.py`, `voice/sinks.py`,
   `voice/callback_sink.py`, `voice/segments.py` (imported by
-  `agent/agents/default.py:44`, stays), `runtime/`, `core/`, `agent/`,
-  `scripts/benchmark_toggle_voice.py`, `scripts/spike_xdg_shortcuts.py`.
+  `agent/agents/default.py:44`, stays), `runtime/`, `core/`, `agent/`.
 
-audio.cpp surface relied on (all verified in-repo, not assumed):
-server keeps one loaded model + session per id across requests and
-documents `GET /health`, `GET /v1/models`, `POST /v1/audio/speech`
-(wav default, JSON-base64 and streaming options), `POST
-/v1/audio/transcriptions` (multipart/JSON-path, plus `/details` and
-`/live` variants), generic `POST /v1/tasks/run` (`model` + `request`
-object, `audio`/`audio_base64` WAV input), config-driven `server.json`
-with `backend` cpu/cuda/vulkan/metal, Silero `vad` offline+streaming
-with `--segments-out` segment contract, Supertonic 31 languages with
-offline+streaming GGUF and 10 preset voices (`M1`-`M5`/`F1`-`F5`).
-Implementation task 1 confirms three details against a live local
-server and records them here: VAD segment result shape over HTTP,
-Supertonic output rate/channels, WAV header size. Routes are pinned
-from docs; only value-level details are confirmed live.
+audio.cpp surface relied on (verified in-repo): warm model+session
+reuse per id; `GET /health`, `GET /v1/models`, `POST /v1/audio/speech`
+(wav default), `POST /v1/audio/transcriptions` (multipart), generic
+`POST /v1/tasks/run` (`model` + `request` with `audio`/`audio_base64`
+WAV); config-driven `server.json` with cpu/cuda/vulkan/metal; Silero
+`vad` offline+streaming with `--segments-out` contract and documented
+request tunables; Supertonic 31 languages, offline+streaming GGUF, 10
+preset voices. Implementation task 1 confirms three value-level
+details against a live local server and records them here: VAD segment
+result shape, Supertonic native rate/channels, WAV header size. Routes
+are pinned from docs; only values are confirmed live.
 
 ## 4. Data flow (M1)
 
-Toggle → capture records → stop → full-buffer bytes → VAD gate (one
-HTTP call) → silence: `IDLE`, no model call → speech: one-shot
-transcribe → `runtime.submit` → agent turn → TTS per-sentence
+Toggle → capture records → stop → raw bytes → `wavutil` package → VAD
+gate (one HTTP call) → silence: `IDLE`, no model call → speech:
+one-shot transcribe → `runtime.submit` → agent turn → TTS per-sentence
 synthesize → playback drains → `IDLE`. Deliberate change vs today:
 finalize pays full-buffer ASR instead of tail-only, because the live
-session is gone; §5 budgets it. Everything the user operates —
-toggles, barge-in, floor states, `delivered_text` trimming — is
-unchanged.
+session is gone; §5 budgets it.
 
 ## 5. Model selection and validation (concrete)
 
-- VAD: Silero, bundled `assets/framework/models` (1.2 MB, MIT). Fixed.
+- VAD: Silero, bundled (1.2 MB, MIT), entry id `silero-vad`,
+  threshold 0.5, tunables default. Fixed.
 - TTS: Supertonic 3, default `orig` package; `q8_0` only if CPU
-  first-chunk latency misses the bar below. Voice `M1` provisional.
+  synthesis latency misses the bar below. Voice `M1` provisional.
 - ASR shortlist with pre-cleared licenses: `fun_asr_nano`
   (Apache-2.0), `qwen3_asr` (Apache-2.0), `nemotron_asr` (OpenMDW-1.1:
   permission granted, retain agreement copy + origin notices on
   distribution, patent-retaliation termination, no output restrictions,
-  clear third-party rights yourself — compatible, obligations recorded
-  in `THIRD-PARTY-NOTICES.md`), `parakeet_tdt` nvidia variant
-  (CC-BY-4.0) ONLY — the `oruk/orukeet` CC-BY-SA-4.0 share-alike
-  variant is explicitly excluded (copyleft trap for closed-source).
-  `parakeet_tdt` is a community port: weaker support ownership, weighed
-  against it. ASR stays `UNRESOLVED` until a package id is pinned.
+  clear third-party rights yourself — obligations recorded in
+  `THIRD-PARTY-NOTICES.md`), `parakeet_tdt` nvidia official release
+  (CC-BY-4.0) ONLY — the `oruk/orukeet` variant is a community port
+  under CC-BY-SA-4.0 share-alike and is explicitly excluded (copyleft
+  trap for closed-source). ASR stays `UNRESOLVED` until a package id
+  is pinned.
 - Validation corpus: 10 fixed English sentences (listed in the
   implementation plan), recorded once on the dev machine, committed
   under `tests/fixtures/voice/` (16 kHz mono WAV, small). The repo
   currently contains zero WAVs, so the corpus is created, not found.
-- Bars (measured on the dev machine, server version + backend recorded
-  with results): ASR WER on the corpus no worse than `tiny.en` on the
-  identical audio; transcription real-time factor ≤ 0.5 on CPU;
-  stop-to-transcript p95 ≤ 3 s for ≤ 15 s utterances; TTS first-chunk
-  latency no worse than 1.25× today's PocketTTS on the same sentences.
-  Silence/noise response must be empty output (no hallucinated
-  punctuation — the reason today's gate exists).
+  WER harness is a stdlib-`difflib` script under `scripts/`
+  (validation-only, not product). Machine string + server version +
+  backend are recorded with every result.
+- Order matters: baselines (PocketTTS latency, `tiny.en` WER/latency)
+  are measured BEFORE the §3 deletions, on the same corpus and
+  machine. Bars: ASR WER no worse than `tiny.en` on identical audio;
+  transcription real-time factor ≤ 0.5 on CPU; stop-to-transcript p95
+  ≤ 3 s for ≤ 15 s utterances; TTS request-to-complete no worse than
+  1.25× today's PocketTTS on the same sentences. Silence/noise must
+  produce empty output (the reason today's gate exists).
 
 ## 6. Cross-platform shipping
 
 Prebuilt matrix (verified): Windows x64 CPU/Vulkan/CUDA (CUDA runtime
-in a separate archive that must sit next to the binaries), Ubuntu x64
-CPU/Vulkan, macOS arm64/x64 Metal (build via the documented Metal
-script). Provisioner is `scripts/provision_voice.py` — Python stdlib
-only, so it runs wherever `uv` runs; no `.sh`-on-Windows problem.
-Model installs go through the Python v2 model manager (no native
-manager build needed). Version strategy decided: pin release TAG, and
-the provisioner verifies per-OS artifact SHA256 at download (hashes
-recorded in the script).
+in a separate archive beside the binaries), Ubuntu x64 CPU/Vulkan,
+macOS arm64/x64 Metal (documented Metal script build). Version pinned:
+release TAG `v0.9.1`; per-OS artifact SHA256 recorded into a committed
+lockfile at first successful provision and verified on every later
+run. Provisioner is `scripts/provision_voice.py` — Python stdlib only,
+flags `--backend cpu|vulkan|metal` (default auto) and `--force-rebuild`
+— installing `verbix[audio]`, fetching binaries + pinned GGUFs via the
+Python v2 model manager, writing `server.json`, then gating exit 0 on
+health + VAD/ASR/TTS round-trips. Per-OS rules: Windows — CPU flavor
+default, CUDA flavor only with the cudart archive present; macOS —
+Metal, backend `metal`; Linux — `cuda` only with a local toolkit, else
+`cpu`, Vulkan via the flag. Fedora rule: try the Ubuntu binary, smoke
+check (`--list-devices`, health, round-trips); on failure, CPU source
+build. Layout keeps today's root convention under `VERBIX_VOICE_DIR`
+(new; legacy `VERBIX_TTS_DIR`/PocketTTS contents are incompatible and
+raise with the re-provision command — fail loudly). Windows/macOS
+capture + playback are validated by the engineer on hardware with this
+checklist: provision exit 0, record 5 s (backend named in log), hear
+the TTS sentence, toggle barge-in once. No OS-only behavior without a
+same-behavior fallback.
 
-Per-OS rules: Windows — CPU flavor default, CUDA flavor only with the
-cudart archive present, backend `cpu`/`cuda` to match; macOS — Metal
-build, backend `metal`; Linux — backend `cuda` only with a local
-toolkit, else `cpu` (Vulkan opt-in flag). Fedora rule: try the Ubuntu
-binary, smoke-check (`--list-devices`, `/health`, one VAD/ASR/TTS
-round-trip); on failure, CPU source build (GCC 13+). Gate: provisioner
-exits 0 only after health + all three round-trips pass.
-
-Layout keeps today's root convention with a new voice runtime dir;
-`VERBIX_VOICE_DIR` overrides, installed fallback as today. Legacy
-`VERBIX_TTS_DIR` / PocketTTS runtime contents are incompatible: if
-detected, voice startup raises naming the re-provision command (fail
-loudly, no silent reuse). No OS-only behavior without a same-behavior
-fallback. Windows/macOS capture paths are validated by the engineer on
-hardware; Linux paths run in CI via fakes.
-
-## 7. License gates (all closed in this change)
+## 7. License gates (2 blockers named; sign-off blocks release)
 
 Framework audio.cpp is Apache-2.0 (ShugoAI LLC) — clear. Silero VAD is
 MIT — clear. Supertonic 3 is BigScience OpenRAIL-M (license text read
-on its Hugging Face page; audio.cpp marks commercial use allowed with
-restrictions passed on). The FULL restriction set binds Verbix, not a
-trio: (a) obey all applicable law; (b) no harming/exploiting minors;
-(c) no verifiably false information to harm others; (d) no harmful
-PII; (e) machine-generated content must be expressly disclaimed;
-(f) no defamation/disparagement/harassment; (g) no impersonation
-(deepfakes) without consent — voice cloning implicates this; (h) no
-fully automated decisions adverse to legal rights or binding
-obligations; (i) no discrimination on behavior/predicted traits;
-(j) no exploiting group vulnerabilities causing harm; (k) no
-discrimination on protected characteristics; (l) no medical advice or
-results interpretation; (m) no justice/law-enforcement/immigration
-prediction uses. Deliverables in this change: license copy shipped
-under `LICENSES/`; `THIRD-PARTY-NOTICES.md` entry (hyphens — the
-underscored name used in revision 1 was wrong) retaining all notices;
-a user-facing distribution terms document carrying the §4a
-restrictions as enforceable terms with the §4b license pointer, the §6
+on its Hugging Face page; commercial use allowed with restrictions
+passed on). The FULL restriction set binds Verbix: (a) obey all
+applicable law; (b) no harming/exploiting minors; (c) no verifiably
+false information to harm others; (d) no harmful PII; (e)
+machine-generated content must be expressly disclaimed; (f) no
+defamation/disparagement/harassment; (g) no impersonation (deepfakes)
+without consent — voice cloning implicates this; (h) no fully
+automated decisions adverse to legal rights or binding obligations;
+(i) no discrimination on behavior/predicted traits; (j) no exploiting
+group vulnerabilities causing harm; (k) no discrimination on protected
+characteristics; (l) no medical advice or results interpretation; (m)
+no justice/law-enforcement/immigration prediction uses. Deliverables in
+this change: license copy shipped under `LICENSES/` (committed dir;
+provisioner asserts presence; installer bundles it — method named in
+the plan); `THIRD-PARTY-NOTICES.md` entry retaining all notices; a
+user-facing `DISTRIBUTION-TERMS.md` carrying the §4a restrictions as
+enforceable terms with the §4b license pointer, the §6
 output-accountability note, and the §7 latest-version duty (server
 version pinned per §6, re-validated on bump). Legal sign-off blocks
 release; anything unclear stays `UNRESOLVED` and blocks cutover.
-Preset voice `M1` is provisional pending a provenance/consent gate,
-same duty as the Alba voice-likeness clearance tracked in
-`THIRD-PARTY-NOTICES.md:19-22` (personality rights are not covered by
-model licenses).
+Blocker 1: ASR package pin (§5). Blocker 2: preset voice `M1`
+provisional pending a provenance/consent gate, same duty as the Alba
+voice-likeness clearance in `THIRD-PARTY-NOTICES.md:19-22` (model
+licenses do not cover personality rights).
 
 ## 8. Error handling
 
 Loud failures only: missing binary/weights/unhealthy server raise with
 the exact provision command — never silent fallback. Server crash
-mid-turn: supervisor respawns, re-registers model entries (a restarted
-process owns no prior sessions), in-flight turn errors to the existing
-deterministic voice error path. Bounds: health wait 10 s total;
-per-request timeouts — VAD gate 15 s, STT `max(30 s, 4× audio
-duration)`, TTS 60 s per sentence. Mapping: connection refused /
-missing model entry → setup guidance; 5xx → one supervised restart,
-then the error phrase; empty transcript → idle without a model call.
+mid-turn: supervisor respawns from `server.json`, in-flight turn
+errors to the deterministic path below. Toggle is today unguarded at
+both call sites (`ipc/server.py` toggle branch,
+`cli.py` voice loop): both get try/except returning
+`{"action": "error", "error": <message>}` with the floor reset to
+`IDLE` — that is the deterministic contract, specified here because it
+did not exist. Bounds: health wait 10 s total; VAD gate 15 s; STT
+`max(30 s, 4× audio duration)`; TTS 60 s per sentence. Mapping:
+connection refused / model-missing 4xx → setup guidance; 5xx → one
+supervised respawn, then the error contract; empty transcript → idle
+without a model call.
 
 ## 9. Testing
 
 Fake-server tests (no weights): VAD gate blocks silent audio and
-passes speech; gate failure errors (fail-closed); STT posts multipart
-and returns text; TTS strips WAV to 24 kHz f32 chunks; supervisor
-restarts a dead server and re-registers; missing binary raises with
-the provision command; pipeline never touches `open_session`; new
-clients follow the async-generator `synthesize` convention. Pinned, not
-worded: request shapes, segment/transition behavior — never
-model-generated wording. Manual validation per §5 on the dev machine
-plus engineer hardware checks for Windows/macOS capture. Gates: full
-suite + `ruff check` green before any completion claim.
+passes speech (multipart + `tasks/run` shapes asserted byte-level);
+gate failure errors (fail-closed); wavutil round-trips PCM↔WAV;
+supervisor restarts a dead server; missing binary raises with the
+provision command; pipeline never touches `open_session`; new clients
+follow the async-generator convention. Pinned, not worded: request
+shapes, segment/transition behavior — never model-generated wording.
+Manual validation per §5 on the dev machine plus the §6 hardware
+checklist. Gates: full suite + `ruff check` green before any
+completion claim.
 
 ## 10. Cutover
 
-Direct cut, no compat flag: new clients in, §3 deletions executed,
-same change, suite green via mocks + fake server. `README.md` module
-map updated (stale on `runtime/` paths today); this spec's file list is
-the authority until then. `docs/archive/` stays history.
+Direct cut, no compat flag: §3 file table executed in full (including
+test dispositions), same change, suite green via mocks + fake server.
+Baselines measured first (§5 order). `README.md` module map updated;
+this spec's file list is the authority until then. `docs/archive/`
+stays history.
 
 Spec grade pending engineer review. On approval at 8+, invoke
 writing-plans for the implementation plan.

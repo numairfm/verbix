@@ -36,3 +36,19 @@ def test_registry_spills_long_output_and_rereads(tmp_path):
     assert "full content saved to" in res.observation
     saved = res.observation.split("saved to")[1].split("...")[0].strip()
     assert (tmp_path / saved).read_text().splitlines()[0] == "1"
+
+
+def test_agent_config_carries_tool_output():
+    from verbix.agent.agents.default import AgentConfig
+    assert AgentConfig(tool_output={"max_lines": 10}).tool_output == {"max_lines": 10}
+
+
+def test_yaml_limits_drive_registry(tmp_path):
+    import asyncio
+    from verbix.tools import build_registry
+    from verbix.tools.shared import resolve_output_limits
+    cfg = {"tools": ["bash"], "tool_output": {"max_lines": 10, "max_bytes": 200}}
+    reg = build_registry(cfg["tools"], runtime=None, workspace=tmp_path,
+        output_limits=resolve_output_limits(cfg.get("tool_output")))
+    res = asyncio.run(reg.aexecute("bash", {"command": "seq 1 100"}))
+    assert "full content saved to" in res.observation

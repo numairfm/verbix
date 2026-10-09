@@ -61,6 +61,7 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
 
     model_to_use = adapt_provider(runtime.worker_model or runtime.provider)
     from verbix.tools import build_registry
+    from verbix.tools.shared import resolve_output_limits
 
     worker_tool_names = agent_cfg_dict.get("tools") or [
         "read",
@@ -69,7 +70,11 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
         "bash",
         "finish",
     ]
-    worker_tools = build_registry(worker_tool_names, workspace=runtime.workspace)
+    worker_tools = build_registry(
+        worker_tool_names,
+        workspace=runtime.workspace,
+        output_limits=resolve_output_limits(agent_cfg_dict.get("tool_output")),
+    )
 
     worker_agent = DefaultAgent(
         model=model_to_use,

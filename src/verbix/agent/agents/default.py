@@ -83,6 +83,7 @@ class AgentConfig(BaseModel):
     """Tier 1 context budget for rolling compaction (None = default 16000)."""
     tool_choice: str | None = None
     """Provider tool-call policy (e.g. "none" for tool-less agents). Absent by default."""
+    tool_output: dict | None = None
 
 
 def cap_observation(text: str, max_chars: int = 10000) -> str:

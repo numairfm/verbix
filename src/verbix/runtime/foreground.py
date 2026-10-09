@@ -339,7 +339,14 @@ def build_foreground(
 
     # Foreground tools come from voice.yaml; unknown names raise loudly in build_registry.
     fg_tool_names = agent_cfg_dict.get("tools") or ["spawn", "status", "cancel"]
-    registry = build_registry(fg_tool_names, runtime, runtime.workspace)
+    from verbix.tools.shared import resolve_output_limits
+
+    registry = build_registry(
+        fg_tool_names,
+        runtime,
+        runtime.workspace,
+        output_limits=resolve_output_limits(agent_cfg_dict.get("tool_output")),
+    )
 
     agent_cfg_dict["system_template"] = runtime.system_prompt
     agent_cfg_dict["system_prompt"] = runtime.system_prompt

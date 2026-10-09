@@ -12,7 +12,6 @@ class CancelTool:
     """Cancels one or more background tasks."""
 
     name: str = "cancel"
-    observation_cap: int = 1500
     side_effecting: bool = True
     description: str = (
         "Cancels background tasks. If task_id is omitted and only one task is running, "

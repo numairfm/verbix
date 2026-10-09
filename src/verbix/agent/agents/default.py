@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import platform
@@ -39,7 +40,7 @@ from verbix.core.events import (
     TurnComplete,
 )
 from verbix.core.telemetry import record_latency
-from verbix.tools.base import ToolResult
+from verbix.tools.base import FileAttachment, ToolResult
 from verbix.voice.segments import split_chunks
 
 
@@ -83,14 +84,23 @@ class AgentConfig(BaseModel):
     """Tier 1 context budget for rolling compaction (None = default 16000)."""
     tool_choice: str | None = None
     """Provider tool-call policy (e.g. "none" for tool-less agents). Absent by default."""
+    tool_output: dict | None = None
 
 
-def cap_observation(text: str, max_chars: int = 10000) -> str:
-    """Bound a tool observation, keeping head+tail so large outputs can't flood history."""
-    if len(text) <= max_chars:
-        return text
-    keep = max(1, max_chars // 2)
-    return text[:keep] + f"\n... [elided {len(text) - max_chars} chars] ...\n" + text[-keep:]
+def tool_message_content(
+    observation: str, attachments: tuple[FileAttachment, ...] = ()
+) -> str | list[dict[str, Any]]:
+    if not attachments:
+        return observation
+    parts: list[dict[str, Any]] = [{"type": "text", "text": observation}]
+    for a in attachments:
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{a.mime};base64,{base64.b64encode(a.data).decode()}"},
+            }
+        )
+    return parts
 
 
 class DefaultAgent:
@@ -191,18 +201,18 @@ class DefaultAgent:
     async def _execute_tool(self, name: str, args: dict[str, Any]) -> ToolResult:
         """Execute a tool via the ToolRegistry, returning the full ToolResult."""
         if self.tools is not None and name in self.tools._handlers:
-            cap = getattr(self.tools._handlers[name], "observation_cap", 10000)
             try:
                 res = await self.tools.aexecute(name, args)
                 if isinstance(res, ToolResult):
-                    obs, is_err, is_term = res.observation, res.is_error, res.is_terminal
+                    obs, is_error, is_terminal = res.observation, res.is_error, res.is_terminal
+                    return ToolResult(
+                        obs, is_error=is_error, is_terminal=is_terminal, attachments=res.attachments
+                    )
                 elif isinstance(res, str):
-                    obs, is_err, is_term = res, False, False
+                    obs, is_error, is_terminal = res, False, False
                 else:
-                    obs, is_err, is_term = str(res), False, False
-                return ToolResult(
-                    cap_observation(obs, max_chars=cap), is_error=is_err, is_terminal=is_term
-                )
+                    obs, is_error, is_terminal = str(res), False, False
+                return ToolResult(obs, is_error=is_error, is_terminal=is_terminal)
             except Submitted:
                 raise
             except Exception as e:  # noqa: BLE001
@@ -435,7 +445,7 @@ class DefaultAgent:
                                             "role": "tool",
                                             "tool_call_id": call_id,
                                             "name": name,
-                                            "content": res.observation,
+                                            "content": tool_message_content(res.observation, res.attachments),
                                         }
                                     )
                                     raise
@@ -461,7 +471,7 @@ class DefaultAgent:
                             "role": "tool",
                             "tool_call_id": call_id,
                             "name": name,
-                            "content": res.observation,
+                            "content": tool_message_content(res.observation, res.attachments),
                         }
                         self.add_messages(tool_msg)
 

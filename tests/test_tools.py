@@ -158,22 +158,26 @@ async def test_read_returns_images_as_viewable_content(tmp_path: Path):
     ctx = ToolContext(workspace=workspace)
     res = await FileReadTool().execute({"path": "tiny.png"}, ctx)
     assert res.is_error is False
-    assert "MSWEA_MULTIMODAL_CONTENT" in res.observation
-    assert "data:image/png;base64," in res.observation
+    assert res.observation == "[image attached: tiny.png]"
+    assert len(res.attachments) == 1
+    assert res.attachments[0].mime == "image/jpeg"
+    assert res.attachments[0].data[:2] == b"\xff\xd8"
+    assert "MSWEA_MULTIMODAL" not in res.observation
 
 
 @pytest.mark.asyncio
-async def test_read_rejects_oversized_images(tmp_path: Path, monkeypatch):
-    from verbix.tools import read as fs
+async def test_read_downscales_large_images_instead_of_refusing(tmp_path: Path):
+    from PIL import Image
 
-    monkeypatch.setattr(fs, "MAX_IMAGE_BYTES", 4)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "big.png").write_bytes(b"12345")
+    Image.new("RGB", (3000, 2000), "blue").save(workspace / "big.jpg")
     ctx = ToolContext(workspace=workspace)
-    res = await FileReadTool().execute({"path": "big.png"}, ctx)
-    assert res.is_error is True
-    assert "too large" in res.observation
+    res = await FileReadTool().execute({"path": "big.jpg"}, ctx)
+    assert res.is_error is False
+    assert len(res.attachments) == 1
+    assert len(res.attachments[0].data) < 150 * 1024
+    assert "MSWEA_MULTIMODAL" not in res.observation
 
 
 def test_multimodal_expansion_is_on_by_default():

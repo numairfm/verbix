@@ -17,6 +17,26 @@ if TYPE_CHECKING:
 TaskStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
 
 
+def _content_text(content: Any) -> str:
+    """Renders tool content as display text, eliding image parts."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "image_url":
+                    chunks.append("[image elided]")
+                elif part.get("type") == "text":
+                    chunks.append(str(part.get("text", "")))
+                else:
+                    chunks.append(str(part))
+            else:
+                chunks.append(str(part))
+        return "".join(chunks)
+    return str(content) if content is not None else ""
+
+
 def format_worker_event(task_id: str, event: Any) -> str | None:
     """One tagged CLI line per background event; None for events with no display."""
     if isinstance(event, TextDelta):
@@ -133,9 +153,11 @@ class WorkerTask:
                 for m in reversed(msgs):
                     role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
                     content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
-                    if role in ("tool", "observation") and content and content.strip():
-                        self._result = content.strip()
-                        break
+                    if role in ("tool", "observation") and content:
+                        text = _content_text(content).strip()
+                        if text:
+                            self._result = text
+                            break
             if not self._result:
                 self._result = "Task finished without output."
             self._status = "completed"
@@ -220,7 +242,8 @@ class WorkerTask:
                     calls = ", ".join(calls_list)
                     lines.append(f"- Assistant called: {calls}")
                 elif role == "tool":
-                    obs = content[:200] + ("..." if len(content) > 200 else "")
+                    text = _content_text(content)
+                    obs = text[:200] + ("..." if len(text) > 200 else "")
                     lines.append(f"- Tool result: {obs}")
                 elif content:
                     lines.append(f"- Assistant: {content}")
@@ -239,7 +262,7 @@ class WorkerTask:
                 )
                 action_lines.append(f"Called {names}")
             elif role == "tool" and content:
-                snippet = content[:100].replace("\n", " ").strip()
+                snippet = _content_text(content)[:100].replace("\n", " ").strip()
                 action_lines.append(f"Result: {snippet}")
 
         if action_lines:

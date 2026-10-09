@@ -94,7 +94,9 @@ class DefaultAgentHistoryProxy:
                 result.append(m)
             elif isinstance(m, dict):
                 role = m.get("role", "user")
-                content = m.get("content") or ""
+                content = m.get("content")
+                if content is None:
+                    content = ""
                 tc_list: list[CanonicalToolCall] | None = None
                 raw_tcs = m.get("tool_calls")
                 if raw_tcs:
@@ -195,7 +197,7 @@ class ProviderStreamAdapter:
                 converted_messages.append(
                     CanonicalMessage(
                         role=role,
-                        content=m.get("content") or "",
+                        content=m.get("content") if m.get("content") is not None else "",
                         tool_calls=tc_list,
                         tool_call_id=m.get("tool_call_id"),
                         name=m.get("name"),
@@ -339,7 +341,14 @@ def build_foreground(
 
     # Foreground tools come from voice.yaml; unknown names raise loudly in build_registry.
     fg_tool_names = agent_cfg_dict.get("tools") or ["spawn", "status", "cancel"]
-    registry = build_registry(fg_tool_names, runtime, runtime.workspace)
+    from verbix.tools.shared import resolve_output_limits
+
+    registry = build_registry(
+        fg_tool_names,
+        runtime,
+        runtime.workspace,
+        output_limits=resolve_output_limits(agent_cfg_dict.get("tool_output")),
+    )
 
     agent_cfg_dict["system_template"] = runtime.system_prompt
     agent_cfg_dict["system_prompt"] = runtime.system_prompt

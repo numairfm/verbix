@@ -3,18 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from verbix.tools.base import ToolContext, ToolResult
+from verbix.tools.base import FileAttachment, ToolContext, ToolResult
 from verbix.tools.shared import record_version, resolve_contained_path
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-IMAGE_MIMES = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-}
-MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 class FileReadTool:
@@ -22,7 +14,8 @@ class FileReadTool:
     side_effecting: bool = False
     description: str = (
         "Reads a file within the workspace with line numbers, lists a directory's entries, "
-        "or opens an image (jpg/png/gif/webp) as a viewable picture."
+        "or opens an image (jpg/png/gif/webp) as a viewable picture. "
+        "Line args are ignored for images and directories."
     )
 
     @property
@@ -63,24 +56,30 @@ class FileReadTool:
         return ToolResult(f"{header}\n{body}" if body else header)
 
     def _read_image(self, target: Path, path_str: str) -> ToolResult:
-        import base64
+        import io
+
+        from PIL import Image
 
         try:
-            raw = target.read_bytes()
+            with Image.open(target) as im:
+                try:
+                    im.seek(0)
+                except EOFError:
+                    pass
+                rgba = im.convert("RGBA")
+                bg = Image.new("RGB", rgba.size, (255, 255, 255))
+                bg.paste(rgba, mask=rgba.split()[3])
+                bg.thumbnail((1568, 1568), Image.LANCZOS)
+                buf = io.BytesIO()
+                bg.save(buf, "JPEG", quality=82)
+                return ToolResult(
+                    f"[image attached: {target.name}]",
+                    attachments=(
+                        FileAttachment(buf.getvalue(), "image/jpeg", target.name),
+                    ),
+                )
         except OSError as e:
             return ToolResult(f"error: could not read file '{path_str}': {e}", is_error=True)
-        if len(raw) > MAX_IMAGE_BYTES:
-            return ToolResult(
-                f"error: image '{path_str}' is too large "
-                f"({len(raw)} bytes, max {MAX_IMAGE_BYTES})",
-                is_error=True,
-            )
-        mime = IMAGE_MIMES[target.suffix.lower()]
-        data = base64.b64encode(raw).decode("ascii")
-        return ToolResult(
-            "<MSWEA_MULTIMODAL_CONTENT><CONTENT_TYPE>image_url</CONTENT_TYPE>"
-            f"data:{mime};base64,{data}</MSWEA_MULTIMODAL_CONTENT>"
-        )
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         path_str = args.get("path", "")

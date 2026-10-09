@@ -16,6 +16,7 @@ from verbix.runtime.foreground import (
     adapt_provider,
 )
 from verbix.runtime.worker import WorkerTask
+from verbix.tools.shared import prune_spills
 
 
 def build_worker_registry(workspace: Path | None = None) -> ToolRegistry:
@@ -33,6 +34,7 @@ def build_worker_registry(workspace: Path | None = None) -> ToolRegistry:
 
 async def spawn_worker(runtime: Any, objective: str) -> str:
     """Spawns an independent background worker with full workspace tools."""
+    prune_spills(Path(runtime.workspace) / ".verbix" / "logs")
     runtime._task_counter += 1
     task_id = f"task-{runtime._task_counter}"
 
@@ -61,6 +63,7 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
 
     model_to_use = adapt_provider(runtime.worker_model or runtime.provider)
     from verbix.tools import build_registry
+    from verbix.tools.shared import resolve_output_limits
 
     worker_tool_names = agent_cfg_dict.get("tools") or [
         "read",
@@ -69,7 +72,11 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
         "bash",
         "finish",
     ]
-    worker_tools = build_registry(worker_tool_names, workspace=runtime.workspace)
+    worker_tools = build_registry(
+        worker_tool_names,
+        workspace=runtime.workspace,
+        output_limits=resolve_output_limits(agent_cfg_dict.get("tool_output")),
+    )
 
     worker_agent = DefaultAgent(
         model=model_to_use,

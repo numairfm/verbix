@@ -60,14 +60,14 @@ runtime/floor/announcer changes, ASR supremacy (parity is the bar).
 - `voice/audiocpp_tts.py` (new): `synthesize(text)` as an async
   generator function, matching the convention `PocketHelperEngine`
   and the mocks already follow (call without await, iterate chunks).
-  Voice control is Supertonic's documented request option
-  `voice_id: "M1"` (same control as CLI `--voice-id`; the exact JSON
-  field on `POST /v1/audio/speech` is confirmed live in task 1 —
-  top-level `"voice"` is NOT used: it routes through
-  voice-library/clone fallback machinery and silently depends on no
-  `M1.wav` existing in `voice_dir`, so the provisioner both omits the
-  field and asserts `voice_dir` holds no `M1.wav`). Voice `M1` is
-  provisional pending the provenance gate (§7). Latency metric is
+  Voice control is Supertonic's documented request option `voice_id`:
+  body `{"options": {"voice_id": "M1"}}` (`options` object — only
+  enumerated top-level keys are copied into options, and `voice_id`
+  is not one, so a top-level `"voice_id"` would be silently ignored;
+  top-level `"voice"` is NOT sent: it routes through voice-library /
+  clone fallback machinery). The provisioner asserts `voice_dir`
+  holds no `M1.wav`, so the fallback hazard is unreachable by
+  construction. Voice `M1` is provisional pending the provenance gate (§7). Latency metric is
   request-to-complete-yield per sentence (one-shot offline synthesis).
   Output assumed 24 kHz f32 mono (task 1 confirms the native rate; on
   mismatch the client converts — numpy is already a dependency — or
@@ -123,9 +123,17 @@ runtime/floor/announcer changes, ASR supremacy (parity is the bar).
   unknown names do today.
 - `src/verbix/cli.py` (edited): the voice-mode wiring block
   constructs supervisor + new clients, adds the `"error"` branch to
-  the voice loop, extends the turn-failure callback with the printed
-  line; the `ensure_tts_runtime` call becomes a voice-runtime
-  provisioning check with setup guidance.
+  the in-process voice loop, extends the turn-failure callback with
+  the printed line, generalizes the daemon error message; the
+  `ensure_tts_runtime` call becomes a voice-runtime provisioning
+  check with setup guidance.
+- `src/verbix/ipc/client.py` (edited): `toggle()` today returns
+  `resp.data` only, discarding `status`/`error` — on error status it
+  raises `RuntimeError(resp.error)` instead. The daemon `--toggle`
+  path (`cli.py` daemon branch) prints it via the existing
+  `except (OSError, RuntimeError)` handler (message generalized to
+  neutral "Verbix daemon error:"); the in-process voice loop checks
+  the `"error"` action dict explicitly as specified below.
 - `pyproject.toml` + `uv.lock` (edited): faster-whisper removed from
   base dependencies (its absence breaks the old imports — intended,
   they are deleted in the same change); lockfile regenerated. No new
@@ -164,9 +172,9 @@ cpu/cuda/vulkan/metal; Silero `vad` offline+streaming with
 31 languages, offline+streaming GGUF, 10 preset voices controlled by
 `voice_id`. Implementation task 1 confirms four value-level details
 against a live local server and records them here: VAD segment result
-shape, Supertonic native rate/channels, WAV header size, and the exact
-JSON field carrying `voice_id` on `POST /v1/audio/speech`. Routes are
-pinned from docs; only values are confirmed live.
+shape, Supertonic native rate/channels, and WAV header size. (The
+`options.voice_id` field shape is normative per this section, not
+deferred.) Routes are pinned from docs; only values are confirmed live.
 
 ## 4. Data flow (M1)
 
@@ -295,24 +303,30 @@ errors via the §3 split contract. HTTP via httpx2 (already a base
 dep) with per-request timeouts; timeouts enter the transport bucket.
 Bounds: health wait 10 s total; VAD gate 15 s; STT `max(30 s, 4× audio
 duration)`; TTS 60 s per sentence. Mapping, three buckets: transport
-errors and timeouts (no HTTP status) → setup guidance; 4xx →
-model-missing 404 → setup guidance, all other 4xx (validation, busy)
+errors and timeouts (no HTTP status) → setup guidance; 4xx → setup
+guidance only when the body signals unknown model (the server throws
+plain `unknown model id`, which surfaces as 500 `server_error`, never
+404 — match the message, not the status); all other 4xx (validation)
 → error contract with NO respawn (the server is alive; respawning
-fixes nothing); 5xx → one supervised respawn, then the error
-contract. Empty transcript → idle without a model call.
+fixes nothing); the server reports contention as 503 `server_busy`,
+never 429 — 503 `server_busy` and 503 `insufficient_memory` → error
+contract, NO respawn (restarting fixes neither); any other 5xx → one
+supervised respawn, then the error contract. Empty transcript → idle
+without a model call.
 
 ## 9. Testing
 
 Fake-server tests (no weights): VAD gate blocks silent audio and
 passes speech (`tasks/run` shape asserted byte-level,
 `options.threshold` placement asserted); pre-submit failure returns
-the §8 dict at both call sites with floor `IDLE` and no turn spawned;
+the §3 dict at both call sites with floor `IDLE` and no turn spawned (plus the daemon `--toggle` raise path); 503s never respawn;
+unknown-model message (not status) routes to setup guidance;
 background failure logs via the turn callback with floor `IDLE`;
 wavutil round-trips PCM↔WAV and strips TTS responses; supervisor
 restarts a dead server; missing binary raises with the provision
 command; pipeline never touches `open_session`; new clients follow the
-async-generator convention; `voice_id` field shape asserted per task-1
-confirmation; committed corpus fixtures exist. Pinned, not worded:
+async-generator convention; `options.voice_id` field shape asserted
+(never top-level `"voice"`); committed corpus fixtures exist. Pinned, not worded:
 request shapes, segment/transition behavior — never model-generated
 wording. Manual validation per §5 on the dev machine plus the §6
 hardware checklist. Gates: full suite + `ruff check` green before any

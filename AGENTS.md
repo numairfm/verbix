@@ -37,7 +37,7 @@ correct it.
   SSE/JSON, retries). Provider wire never lives in the agent loop.
   `README.md` is the map. `docs/archive/` is history. Code wins on conflict.
 - Shipping: one command sets up the app (`uv sync`,
-  `scripts/setup_tts_runtime.sh`). Helpers and weights fetch automatically.
+  `uv run scripts/fetch_voice_models.py`). Helpers and weights fetch automatically.
   Never require manual copy into app folders.
 - Commercial: per-change license review for any new dependency, model, voice,
   font, icon, or audio. `THIRD_PARTY_NOTICES.md` is canonical and ships with

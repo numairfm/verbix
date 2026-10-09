@@ -118,7 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--voice",
         action="store_true",
-        help="Run in voice mode (Toggle -> Live STT -> Receptionist -> PocketTTS audio playback).",
+        help="Run in voice mode (Toggle -> Live STT -> Receptionist -> Supertonic TTS audio playback).",
     )
     parser.add_argument(
         "--audio-sink",
@@ -303,13 +303,11 @@ def _build_voice_pipeline(
     from verbix.voice.capture import PTTCapture
     from verbix.voice.pipeline import VoicePipeline
     from verbix.voice.player import AudioPlayer
-    from verbix.voice.pocket_helper import PocketHelperEngine
-    from verbix.voice.stt import FasterWhisperSTT
-    from verbix.voice.tts_assets import ensure_tts_runtime
+    from verbix.voice.sherpa_stt import SherpaSTT
+    from verbix.voice.sherpa_tts import SherpaTTS
 
-    stt = FasterWhisperSTT()
-    ensure_tts_runtime()
-    tts = PocketHelperEngine()
+    stt = SherpaSTT()
+    tts = SherpaTTS()
     sink = select_sink(
         getattr(args, "audio_sink", "auto"),
         sample_rate=24000,

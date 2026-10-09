@@ -72,22 +72,16 @@ def voice_harness(monkeypatch, tmp_path):
 
     runtime.cancel_turn = spy_cancel  # type: ignore[method-assign]
     monkeypatch.setattr(cli, "build_runtime", lambda args: runtime)
-    monkeypatch.setattr("verbix.voice.stt.FasterWhisperSTT", lambda: MockSpeechToText())
+    monkeypatch.setattr("verbix.voice.sherpa_stt.SherpaSTT", lambda *a, **k: MockSpeechToText())
     tts = MockTextToSpeech()
     tts.aclose = AsyncMock(return_value=None)  # type: ignore[attr-defined]
-    monkeypatch.setattr("verbix.voice.pocket_helper.PocketHelperEngine", lambda *a, **k: tts)
+    monkeypatch.setattr("verbix.voice.sherpa_tts.SherpaTTS", lambda *a, **k: tts)
     monkeypatch.setattr("verbix.voice.callback_sink.select_sink", lambda *a, **k: gate_sink)
 
     def fake_capture_cls(*a, **k):
         return capture
 
     monkeypatch.setattr("verbix.voice.capture.PTTCapture", fake_capture_cls)
-    rt_dir = tmp_path / "ttsrt"
-    (rt_dir / "bin").mkdir(parents=True)
-    monkeypatch.setattr(
-        "verbix.voice.tts_assets.ensure_tts_runtime",
-        lambda *a, **k: {"bin": rt_dir / "bin", "models": rt_dir / "models", "voices": rt_dir / "voices"},
-    )
     return {
         "cli": cli, "runtime": runtime, "entered": entered,
         "release_turn": release_turn, "sink": gate_sink,

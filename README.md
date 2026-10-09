@@ -48,12 +48,10 @@ Agent tuning lives in `src/verbix/agent/config/`: `voice.yaml`
 (foreground), `worker.yaml` / `swe_worker.yaml` (background workers).
 
 Audio extras are optional: `uv sync --extra audio` (`sounddevice`).
-Voice mode needs STT (faster-whisper, a main dependency) plus the TTS
-runtime: a resident PocketTTS.cpp helper, its model bundle, and one voice
-clip. First voice run pulls the bundle into `./tts-runtime` (repo-local,
-gitignored; `VERBIX_TTS_DIR` overrides, `~/.verbix/tts` is the installed
-fallback) with pinned byte-size checks — or run
-`scripts/setup_tts_runtime.sh` to forge everything from internet sources.
+Voice mode uses sherpa-onnx for on-device inference: Supertonic 3 INT8 for
+TTS and Canary 180M Flash INT8 for STT. Run `uv run scripts/fetch_voice_models.py`
+to download and verify models into `./voice-runtime` (`VERBIX_VOICE_DIR`
+overrides, `~/.verbix/voice` is the installed fallback).
 Without them, text and `--serve` modes still work.
 Attribution: `THIRD-PARTY-NOTICES.md`.
 
@@ -117,10 +115,9 @@ IDLE ──toggle──▶ LISTENING ──toggle──▶ SPEAKING ──draine
                                                  repair history, record)
 ```
 
-`VoicePipeline` (`voice/pipeline.py`): `PTTCapture` → live `FasterWhisperSTT`
-session → `runtime.submit(text, SpeechOutput)` → sentence-streamed helper
-TTS (`voice/pocket_helper.py`, resident PocketTTS.cpp process)
-→ `AudioPlayer` → single sink (`callback_sink`/`sinks`). Toggle during playback
+`VoicePipeline` (`voice/pipeline.py`): `PTTCapture` → live `SherpaSTT`
+session → `runtime.submit(text, SpeechOutput)` → sentence-streamed in-process
+`SherpaTTS` → `AudioPlayer` → single sink (`callback_sink`/`sinks`). Toggle during playback
 or a running turn interrupts first (`interrupted_and_recording`). Empty
 transcriptions return to `IDLE` without a model call. `SpeechOutput`
 (`voice/output.py`) owns sentence buffering and `delivered_text()`, which is
@@ -151,7 +148,7 @@ STATE: IDLE
 | `core/` | canonical messages/events, history repair, inner agent loop |
 | `provider/` | streaming OpenAI-compatible SSE client, errors, event types |
 | `tools/` | `Tool`/`ToolContext`, `file_read`/`file_write`/`file_edit`, `bash` via bubblewrap (`bwrap` missing → raise, never silent fallback) |
-| `voice/` | `pipeline`, `capture`, `stt` (faster-whisper), `pocket_helper` (resident TTS process), `tts_assets` (pinned fetch), `player`, `output` (sentence streaming), `sinks`/`callback_sink`, `base` protocols + mocks |
+| `voice/` | `pipeline`, `capture`, `sherpa_stt` (Canary ASR via sherpa-onnx), `sherpa_tts` (Supertonic TTS via sherpa-onnx), `player`, `output` (sentence streaming), `sinks`/`callback_sink`, `base` protocols + mocks |
 | `ipc/` | `server`/`client`/`protocol`: JSONL over Unix socket, `ping/prompt/status/cancel/toggle`, runtime event fan-out |
 | `agent/` | agent core: `agents/default`, `environments/local`, `models/litellm_model`, `tools/registry`, `config/*.yaml` |
 
@@ -170,8 +167,8 @@ uv run pyright src/verbix   # third-party import noise only (pydantic/httpx2/num
 ```
 
 Conventions: `ruff` clean, `pyright` no new errors. Voice/audio paths use the
-`Mock*` protocols in `voice/base.py` for headless tests. Live STT tests need
-cached faster-whisper weights.
+`Mock*` protocols in `voice/base.py` for headless tests. Live voice tests need
+provisioned models via `uv run scripts/fetch_voice_models.py`.
 
 ## Limits (as built)
 

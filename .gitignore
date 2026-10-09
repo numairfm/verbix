@@ -21,6 +21,7 @@ scratch/
 
 # Local TTS runtime (helper binary + weights, built/fetched per machine)
 tts-runtime/
+voice-runtime/
 
 # Local editor and IDE config
 .commandcode/

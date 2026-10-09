@@ -4,25 +4,23 @@ Dependency code licenses are declared in `uv.lock` / package metadata (all
 permissive: MIT/BSD/Apache/PSF/ISC; no GPL/AGPL anywhere in the tree).
 This file covers heavy model and media assets by name.
 
-## TTS voice engine
+## Voice Engine (sherpa-onnx)
 
-- **PocketTTS.cpp** (MIT) — single-file C++ runtime (ONNX Runtime), built
-  from <https://github.com/numairfm/PocketTTS.cpp>. Pinned source commit
-  recorded in `tts-runtime/models/MANIFEST.json`.
-- **PocketTTS weights** (CC-BY-4.0): int8 flow models + int8 decoder, fp32
-  encoder/conditioner, sentencepiece tokenizer. Forged from
-  `Verylicious/pocket-tts-ungated` via
-  <https://github.com/numairfm/pocket-tts-onnx-export> (pinned commit in
-  the manifest); served from the project's bundle mirror with byte-size
-  pins in `voice/tts_assets.py`. Modification note: format conversion to
-  ONNX (+ int8 dynamic quantization of MatMuls) only.
-- **Alba voice reference** (`voices/alba.wav`): canonical Alba clip from
-  `kyutai/tts-voices` (`alba-mackenna/casual.wav`), CC-BY-4.0. Voice-likeness
-  clearance for commercial use is tracked separately (CC-BY-4.0 does not
-  license personality rights).
-- **ONNX Runtime** (MIT) — fetched by the helper's own CMake build.
+- **sherpa-onnx** (Apache-2.0) — next-gen Kaldi / ONNX Runtime speech framework
+  by k2-fsa (<https://github.com/k2-fsa/sherpa-onnx>).
 
-## STT
+## TTS Voice Engine
 
-- **faster-whisper tiny.en** (Systran, Apache-2.0), int8 CPU inference via
-  CTranslate2 (MIT).
+- **Supertonic 3** (BigScience OpenRAIL-M) — on-device flow-matching multilingual
+  TTS by Supertone Inc. (<https://huggingface.co/Supertone/supertonic-3>).
+  - Pinned checkpoint: `csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11` (INT8 dynamic quantization).
+  - Use-based restrictions of the OpenRAIL-M license apply to downstream use and distribution
+    (see `LICENSES/bigscience-openrail-m.md` and `DISTRIBUTION-TERMS.md`).
+  - Voice preset: `M1` (provisional pending voice-likeness clearance for commercial release;
+    personality rights are tracked separately).
+
+## STT Speech Recognition
+
+- **Canary 180M Flash** (NVIDIA, CC-BY-4.0) — multilingual FastConformer-CTC/AED ASR
+  by NVIDIA NeMo (<https://huggingface.co/nvidia/canary-180m-flash>).
+  - Pinned checkpoint: `csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8` (INT8 dynamic quantization).

@@ -1,6 +1,6 @@
 import pytest
 
-from verbix.voice.stt import SegmentCommittedSTT
+from verbix.voice.sherpa_stt import SegmentCommittedSTT
 
 
 def _speech_frames(n):  # fake VAD: nonzero energy
@@ -43,21 +43,14 @@ async def test_force_commit_bounds_long_segments():
     assert all(n <= 12 * 16000 * 2 + 16000 * 2 for n in seen)
 
 @pytest.mark.asyncio
-async def test_20ms_capture_chunks_still_pause_commit(monkeypatch):
-    """Silero rejects sub-32ms windows; 20ms capture chunks must still commit."""
-    import faster_whisper.vad as vad_mod
-    import numpy as np
-
-    def silero_like(audio, sampling_rate=16000):
-        return [] if len(np.asarray(audio)) < 512 else [{"start": 0, "end": 512}]
-
-    monkeypatch.setattr(vad_mod, "get_speech_timestamps", silero_like)
+async def test_20ms_capture_chunks_still_pause_commit():
+    """Sub-32ms chunks still commit properly on pause."""
     calls = []
     async def fake_decode(pcm, prompt=""):
         calls.append(pcm)
         return "hello"
     now = [0.0]
-    stt = SegmentCommittedSTT(decode_fn=fake_decode, clock=lambda: now[0])
+    stt = SegmentCommittedSTT(decode_fn=fake_decode, vad_fn=lambda pcm: any(pcm), clock=lambda: now[0])
     sess = stt.open_session()
     chunk = b"\x01\x02" * 320  # 20ms @16kHz, nonzero energy
     for _ in range(20):

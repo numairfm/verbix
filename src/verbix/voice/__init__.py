@@ -17,26 +17,27 @@ from verbix.voice.sinks import SubprocessAudioSink
 
 
 def __getattr__(name: str) -> Any:
-    if name == "PocketHelperEngine":
-        from verbix.voice.pocket_helper import PocketHelperEngine
+    if name == "SherpaTTS":
+        from verbix.voice.sherpa_tts import SherpaTTS
 
-        return PocketHelperEngine
-    if name == "FasterWhisperSTT":
-        from verbix.voice.stt import FasterWhisperSTT
+        return SherpaTTS
+    if name == "SherpaSTT":
+        from verbix.voice.sherpa_stt import SherpaSTT
 
-        return FasterWhisperSTT
+        return SherpaSTT
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "AudioPlayer",
     "AudioSink",
     "CallbackAudioSink",
-    "FasterWhisperSTT",
     "MockAudioSink",
     "MockSpeechToText",
     "MockTextToSpeech",
     "PTTCapture",
-    "PocketHelperEngine",
+    "SherpaSTT",
+    "SherpaTTS",
     "SpeechOutput",
     "SpeechToText",
     "SubprocessAudioSink",

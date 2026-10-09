@@ -89,6 +89,13 @@ def compact_messages(messages: list[dict[str, Any]], max_tokens: int) -> list[di
         for m in g:
             if m.get("role") == "tool" and isinstance(m.get("content"), str):
                 m["content"] = ELIDED_OBSERVATION
+            elif m.get("role") == "tool" and isinstance(m.get("content"), list):
+                m["content"] = [
+                    {"type": "text", "text": ELIDED_OBSERVATION}
+                    if isinstance(p, dict) and p.get("type") == "image_url"
+                    else p
+                    for p in m["content"]
+                ]
             if m.get("role") == "assistant" and m.get("tool_calls"):
                 _truncate_args(m["tool_calls"])
     if estimate_tokens(assembled()) <= max_tokens:
@@ -104,6 +111,13 @@ def compact_messages(messages: list[dict[str, Any]], max_tokens: int) -> list[di
             for m in g:
                 if m.get("role") == "tool" and isinstance(m.get("content"), str):
                     m["content"] = ELIDED_OBSERVATION
+                elif m.get("role") == "tool" and isinstance(m.get("content"), list):
+                    m["content"] = [
+                        {"type": "text", "text": ELIDED_OBSERVATION}
+                        if isinstance(p, dict) and p.get("type") == "image_url"
+                        else p
+                        for p in m["content"]
+                    ]
                 if m.get("role") == "assistant" and m.get("tool_calls"):
                     _truncate_args(m["tool_calls"])
                 content = m.get("content")

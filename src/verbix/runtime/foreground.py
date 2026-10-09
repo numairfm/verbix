@@ -94,7 +94,9 @@ class DefaultAgentHistoryProxy:
                 result.append(m)
             elif isinstance(m, dict):
                 role = m.get("role", "user")
-                content = m.get("content") or ""
+                content = m.get("content")
+                if content is None:
+                    content = ""
                 tc_list: list[CanonicalToolCall] | None = None
                 raw_tcs = m.get("tool_calls")
                 if raw_tcs:
@@ -195,7 +197,7 @@ class ProviderStreamAdapter:
                 converted_messages.append(
                     CanonicalMessage(
                         role=role,
-                        content=m.get("content") or "",
+                        content=m.get("content") if m.get("content") is not None else "",
                         tool_calls=tc_list,
                         tool_call_id=m.get("tool_call_id"),
                         name=m.get("name"),

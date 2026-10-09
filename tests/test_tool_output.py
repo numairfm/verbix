@@ -142,3 +142,14 @@ def test_photo_attachments_survive_execute_tool(tmp_path):
         config=AgentConfig(tools=["read"]))
     res = asyncio.run(agent._execute_tool("read", {"path": "big.jpg"}))
     assert len(res.attachments) == 1
+
+
+def test_status_after_photo_does_not_crash():
+    from verbix.runtime.worker import WorkerTask
+    photo_msg = {"role": "tool", "tool_call_id": "c1", "name": "read",
+        "content": [{"type": "text", "text": "[image attached: a.jpg]"},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,eA=="}}]}
+    class FakePhotoSession:
+        messages = [photo_msg]
+    task = WorkerTask(id="t", description="d", session=FakePhotoSession())
+    assert "image" in task.get_status(full=True).lower()

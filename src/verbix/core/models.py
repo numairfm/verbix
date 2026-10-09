@@ -26,7 +26,7 @@ class CanonicalToolCall(BaseModel):
 
 class CanonicalMessage(BaseModel):
     role: Role
-    content: str = ""
+    content: str | list[dict[str, Any]] = ""
     tool_calls: list[CanonicalToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None

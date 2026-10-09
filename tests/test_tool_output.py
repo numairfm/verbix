@@ -71,3 +71,36 @@ def test_prune_spills_removes_only_old_files(tmp_path):
     assert not old.exists()
     assert fresh.exists()
     prune_spills(tmp_path / "missing")  # missing dir is a no-op
+
+
+def test_large_photo_returns_small_attachment(tmp_path):
+    from PIL import Image
+    from verbix.tools.base import ToolContext
+    from verbix.tools.read import FileReadTool
+    import asyncio
+    img = Image.new("RGB", (3000, 2000), "blue")
+    img.save(tmp_path / "big.jpg")
+    res = asyncio.run(FileReadTool().execute({"path": "big.jpg"}, ToolContext(workspace=tmp_path)))
+    assert len(res.attachments) == 1 and len(res.attachments[0].data) < 150 * 1024
+    assert "MSWEA_MULTIMODAL" not in res.observation
+
+
+def test_gif_read_returns_first_frame_only(tmp_path):
+    from PIL import Image
+    from verbix.tools.base import ToolContext
+    from verbix.tools.read import FileReadTool
+    import asyncio
+    frames = [Image.new("RGB", (100, 100), c) for c in ("red", "green")]
+    frames[0].save(tmp_path / "a.gif", save_all=True, append_images=frames[1:])
+    res = asyncio.run(FileReadTool().execute({"path": "a.gif"}, ToolContext(workspace=tmp_path)))
+    assert len(res.attachments) == 1 and res.attachments[0].mime == "image/jpeg"
+
+
+def test_rgba_flattens_onto_white(tmp_path):
+    from PIL import Image
+    from verbix.tools.base import ToolContext
+    from verbix.tools.read import FileReadTool
+    import asyncio
+    Image.new("RGBA", (100, 100), (0, 0, 0, 0)).save(tmp_path / "t.png")
+    res = asyncio.run(FileReadTool().execute({"path": "t.png"}, ToolContext(workspace=tmp_path)))
+    assert res.attachments[0].data[:2] == b"\xff\xd8"

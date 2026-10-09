@@ -3,7 +3,7 @@
 Milestone 1 of 3. M2 adds the VAD-gated hands-free loop. M3 adds voice
 interruption with external AEC. Each milestone ships on its own.
 
-Revision 5: addresses critic rounds 1–4. Open question count is zero.
+Revision 6: addresses critic rounds 1–5. Open question count is zero.
 
 ## 1. Intent
 
@@ -127,6 +127,9 @@ runtime/floor/announcer changes, ASR supremacy (parity is the bar).
   the printed line, generalizes the daemon error message; the
   `ensure_tts_runtime` call becomes a voice-runtime provisioning
   check with setup guidance.
+- `src/verbix/ipc/server.py` (edited): the toggle branch today
+  returns `status="ok"` unconditionally — it maps
+  `action=="error"` dicts to the error status shape above.
 - `src/verbix/ipc/client.py` (edited): `toggle()` today returns
   `resp.data` only, discarding `status`/`error` — on error status it
   raises `RuntimeError(resp.error)` instead. The daemon `--toggle`
@@ -187,7 +190,8 @@ session is gone; §5 budgets it.
 
 ## 5. Model selection and validation (concrete)
 
-- VAD: Silero, bundled (≈1.2 MB on disk, MIT), entry id `silero-vad`,
+- VAD: Silero, bundled (≈1.2 MB on disk, MIT per the upstream
+  model-license row), entry id `silero-vad`,
   threshold 0.5, tunables default. Fixed.
 - TTS: Supertonic 3, package `supertonic_3_orig` (default); fallback
   package `supertonic_3_f16` only if CPU synthesis latency misses the
@@ -303,10 +307,12 @@ errors via the §3 split contract. HTTP via httpx2 (already a base
 dep) with per-request timeouts; timeouts enter the transport bucket.
 Bounds: health wait 10 s total; VAD gate 15 s; STT `max(30 s, 4× audio
 duration)`; TTS 60 s per sentence. Mapping, three buckets: transport
-errors and timeouts (no HTTP status) → setup guidance; 4xx → setup
-guidance only when the body signals unknown model (the server throws
-plain `unknown model id`, which surfaces as 500 `server_error`, never
-404 — match the message, not the status); all other 4xx (validation)
+errors and timeouts (no HTTP status) → setup guidance; unknown-model
+→ setup guidance by matching the `unknown model id` message on ANY
+status (on the three M1 inference routes it surfaces as 500
+`server_error`, never 404 — match the message, not the status;
+unknown-model 404 variants exist only on model-management routes
+outside M1); all other 4xx (validation)
 → error contract with NO respawn (the server is alive; respawning
 fixes nothing); the server reports contention as 503 `server_busy`,
 never 429 — 503 `server_busy` and 503 `insufficient_memory` → error

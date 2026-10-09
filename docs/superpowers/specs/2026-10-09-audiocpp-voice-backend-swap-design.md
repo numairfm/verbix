@@ -19,9 +19,11 @@ Locked decisions: half-duplex interaction (M2), server subprocess
 integration, full swap including Supertonic 3, three milestones, no
 heuristic echo hacks, cross-platform in M1 (Linux/Windows/macOS).
 
-Success: `uv run verbix --voice` works on all three OSes with no Python
+Success: `uv run verbix --voice` works on Fedora with no Python
 audio ML in-process, ASR at parity with `tiny.en` (§5), Supertonic voice
 accepted, suite + `ruff` green, license gates closed (§7).
+Windows/macOS WILL be supported — that intent stands — but their
+hardware validation is deferred past M1 (§6).
 
 ## 2. Goals / non-goals
 
@@ -260,9 +262,11 @@ the supported-distro list. Layout keeps today's root convention under
 `VERBIX_VOICE_DIR` (new; legacy `VERBIX_TTS_DIR`/PocketTTS contents are
 incompatible and raise with the re-provision command — fail loudly).
 Windows/macOS capture + playback are validated by the engineer on
-hardware with this checklist: provision exit 0, record 5 s (backend
-named in log), hear the TTS sentence, toggle barge-in once. No OS-only
-behavior without a same-behavior fallback.
+hardware in a later slice, with this checklist: provision exit 0,
+record 5 s (backend named in log), hear the TTS sentence, toggle
+barge-in once. M1 exit gate is Fedora-green. Deferred, not dropped:
+no OS-only behavior without a same-behavior fallback anywhere in M1,
+because Windows/Mac support WILL come.
 
 ## 7. License gates (2 blockers named; sign-off blocks release)
 

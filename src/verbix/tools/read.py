@@ -7,13 +7,6 @@ from verbix.tools.base import FileAttachment, ToolContext, ToolResult
 from verbix.tools.shared import record_version, resolve_contained_path
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-IMAGE_MIMES = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-}
 
 
 class FileReadTool:

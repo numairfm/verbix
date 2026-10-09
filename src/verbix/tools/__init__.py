@@ -16,7 +16,7 @@ from verbix.tools.edit import FileEditTool
 from verbix.tools.finish import FinishTool
 from verbix.tools.read import FileReadTool
 from verbix.tools.sandbox import SandboxConfig, SandboxResult, execute_sandboxed
-from verbix.tools.shared import resolve_contained_path
+from verbix.tools.shared import bind_output, resolve_contained_path
 from verbix.tools.spawn import SpawnTool
 from verbix.tools.status import StatusTool
 from verbix.tools.write import FileWriteTool
@@ -58,20 +58,38 @@ TOOL_CATALOG: dict[str, Callable[[Any], Any]] = {
 
 
 def build_registry(
-    names: list[str], runtime: Any = None, workspace: Path | None = None
+    names: list[str],
+    runtime: Any = None,
+    workspace: Path | None = None,
+    output_limits: tuple[int, int] | None = None,
 ) -> ToolRegistry:
     """Build a registry for `names` sharing one session-scoped ToolContext."""
+    from dataclasses import replace
+
     from verbix.agent.tools.registry import ToolRegistry
 
     unknown = [name for name in names if name not in TOOL_CATALOG]
     if unknown:
         raise KeyError(f"Unknown tool(s) {unknown}; valid tools: {sorted(TOOL_CATALOG)}")
-    ctx = ToolContext(workspace=Path.cwd() if workspace is None else Path(workspace))
+    if output_limits is None:
+        output_limits = (2000, 51200)
+    max_lines, max_bytes = output_limits
+    ws = Path.cwd() if workspace is None else Path(workspace)
+    ctx = ToolContext(workspace=ws)
+    spill_dir = ws / ".verbix" / "logs"
     registry = ToolRegistry()
 
     def _make_handler(t: Any) -> Callable[..., Any]:
         async def _handler(args: dict[str, Any]) -> ToolResult:
-            return await t.execute(args, ctx)
+            res = await t.execute(args, ctx)
+            bound = bind_output(
+                res.observation,
+                max_lines=max_lines,
+                max_bytes=max_bytes,
+                spill_dir=spill_dir,
+                rel_to=ws,
+            )
+            return replace(res, observation=bound)
 
         _handler.observation_cap = getattr(t, "observation_cap", 10000)  # type: ignore[attr-defined]
         return _handler

@@ -104,3 +104,41 @@ def test_rgba_flattens_onto_white(tmp_path):
     Image.new("RGBA", (100, 100), (0, 0, 0, 0)).save(tmp_path / "t.png")
     res = asyncio.run(FileReadTool().execute({"path": "t.png"}, ToolContext(workspace=tmp_path)))
     assert res.attachments[0].data[:2] == b"\xff\xd8"
+
+
+def test_tool_message_carries_image_parts():
+    from verbix.agent.agents.default import tool_message_content
+    from verbix.tools.base import FileAttachment
+    content = tool_message_content("hi", (FileAttachment(data=b"x", mime="image/jpeg", name="a.jpg"),))
+    assert content[0] == {"type": "text", "text": "hi"}
+    assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert tool_message_content("hi", ()) == "hi"
+
+
+def test_over_limit_text_plus_image_keeps_image(tmp_path):
+    import asyncio
+    from verbix.agent.agents.default import AgentConfig, DefaultAgent, tool_message_content
+    from verbix.tools import build_registry
+    from verbix.tools.base import FileAttachment, ToolResult
+    big = ToolResult("line\n" * 3000,
+        attachments=(FileAttachment(data=b"x", mime="image/jpeg", name="a.jpg"),))
+    agent = DefaultAgent(model=None, env=None,
+        tools=build_registry(["bash"], runtime=None, workspace=tmp_path),
+        config=AgentConfig(tools=["bash"]))
+    res = asyncio.run(agent._execute_tool("bash", {"command": "seq 1 3000"}))
+    content = tool_message_content(res.observation, big.attachments)
+    assert any(p.get("type") == "image_url" for p in content)
+    assert "full content saved to" in content[0]["text"]
+
+
+def test_photo_attachments_survive_execute_tool(tmp_path):
+    from PIL import Image
+    from verbix.agent.agents.default import AgentConfig, DefaultAgent
+    from verbix.tools import build_registry
+    import asyncio
+    Image.new("RGB", (3000, 2000), "blue").save(tmp_path / "big.jpg")
+    agent = DefaultAgent(model=None, env=None,
+        tools=build_registry(["read"], runtime=None, workspace=tmp_path),
+        config=AgentConfig(tools=["read"]))
+    res = asyncio.run(agent._execute_tool("read", {"path": "big.jpg"}))
+    assert len(res.attachments) == 1

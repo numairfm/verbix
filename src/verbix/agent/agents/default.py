@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import platform
@@ -39,7 +40,7 @@ from verbix.core.events import (
     TurnComplete,
 )
 from verbix.core.telemetry import record_latency
-from verbix.tools.base import ToolResult
+from verbix.tools.base import FileAttachment, ToolResult
 from verbix.voice.segments import split_chunks
 
 
@@ -84,6 +85,22 @@ class AgentConfig(BaseModel):
     tool_choice: str | None = None
     """Provider tool-call policy (e.g. "none" for tool-less agents). Absent by default."""
     tool_output: dict | None = None
+
+
+def tool_message_content(
+    observation: str, attachments: tuple[FileAttachment, ...] = ()
+) -> str | list[dict[str, Any]]:
+    if not attachments:
+        return observation
+    parts: list[dict[str, Any]] = [{"type": "text", "text": observation}]
+    for a in attachments:
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{a.mime};base64,{base64.b64encode(a.data).decode()}"},
+            }
+        )
+    return parts
 
 
 class DefaultAgent:
@@ -428,7 +445,7 @@ class DefaultAgent:
                                             "role": "tool",
                                             "tool_call_id": call_id,
                                             "name": name,
-                                            "content": res.observation,
+                                            "content": tool_message_content(res.observation, res.attachments),
                                         }
                                     )
                                     raise
@@ -454,7 +471,7 @@ class DefaultAgent:
                             "role": "tool",
                             "tool_call_id": call_id,
                             "name": name,
-                            "content": res.observation,
+                            "content": tool_message_content(res.observation, res.attachments),
                         }
                         self.add_messages(tool_msg)
 

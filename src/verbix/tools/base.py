@@ -8,10 +8,18 @@ from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
+class FileAttachment:
+    data: bytes
+    mime: str
+    name: str
+
+
+@dataclass(frozen=True)
 class ToolResult:
     observation: str
     is_error: bool = False
     is_terminal: bool = False
+    attachments: tuple[FileAttachment, ...] = ()
 
 
 @dataclass(frozen=True)

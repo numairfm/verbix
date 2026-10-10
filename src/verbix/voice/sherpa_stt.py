@@ -33,34 +33,6 @@ def _resolve_threads() -> int:
     return min(4, max(1, n))
 
 
-# Exact decoder junk observed on noise/silence. The decoder exposes no
-# confidence score (ys_log_probs is empty on Canary), so these are matched
-# as data — never extended with per-case branches.
-_JUNK_PHRASES = frozenset(
-    {
-        "i'm not sure.",
-        "i am not sure.",
-        "thank you.",
-        "thank you",
-        "thanks for watching.",
-        "you",
-    }
-)
-
-_PUNCT_ONLY = frozenset(".,…_ \t-?!")
-
-
-def _looks_like_hallucination(text: str) -> bool:
-    """True for decoder output that is punctuation, known junk, or single-char soup."""
-    s = text.strip()
-    if not s or all(ch in _PUNCT_ONLY for ch in s):
-        return True
-    if s.lower() in _JUNK_PHRASES:
-        return True
-    toks = s.split()
-    return len(toks) > 1 and all(len(t) == 1 for t in toks)
-
-
 def _default_vad(sample_rate: int = 16000, rms_threshold: float = 300.0) -> Callable[[bytes], bool]:
     """Energy-based VAD for speech chunks. Pure silence / low-energy noise returns False."""
     def _is_speech(pcm: bytes) -> bool:
@@ -450,7 +422,7 @@ class SherpaSTT:
                 os.dup2(saved, 2)
                 os.close(devnull)
                 os.close(saved)
-            return "" if _looks_like_hallucination(res) else res
+            return res
 
         try:
             return await asyncio.to_thread(_sync_transcribe)

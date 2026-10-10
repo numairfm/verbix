@@ -24,16 +24,16 @@ REQUIRED_FILES = (
 )
 
 VOICE_MAP = {
-    "M1": 0,
-    "M2": 1,
-    "M3": 2,
-    "M4": 3,
-    "M5": 4,
-    "F1": 5,
-    "F2": 6,
-    "F3": 7,
-    "F4": 8,
-    "F5": 9,
+    "M1": 5,  # Verified male by ear (upstream M1/F1 labels are swapped in the INT8 voice.bin mapping)
+    "M2": 6,
+    "M3": 7,
+    "M4": 8,
+    "M5": 9,
+    "F1": 0,
+    "F2": 1,
+    "F3": 2,
+    "F4": 3,
+    "F5": 4,
 }
 
 

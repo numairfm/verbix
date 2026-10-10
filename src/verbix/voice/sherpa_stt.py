@@ -33,21 +33,32 @@ def _resolve_threads() -> int:
     return min(4, max(1, n))
 
 
-def _looks_like_hallucination(text: str) -> bool:
-    """True for punctuation-only or silence hallucinations."""
-    s = text.strip()
-    if not s:
-        return True
-    if all(ch in ".,…_ \t-?!" for ch in s):
-        return True
-    return s.lower() in (
+# Exact decoder junk observed on noise/silence. The decoder exposes no
+# confidence score (ys_log_probs is empty on Canary), so these are matched
+# as data — never extended with per-case branches.
+_JUNK_PHRASES = frozenset(
+    {
         "i'm not sure.",
         "i am not sure.",
         "thank you.",
         "thank you",
         "thanks for watching.",
         "you",
-    )
+    }
+)
+
+_PUNCT_ONLY = frozenset(".,…_ \t-?!")
+
+
+def _looks_like_hallucination(text: str) -> bool:
+    """True for decoder output that is punctuation, known junk, or single-char soup."""
+    s = text.strip()
+    if not s or all(ch in _PUNCT_ONLY for ch in s):
+        return True
+    if s.lower() in _JUNK_PHRASES:
+        return True
+    toks = s.split()
+    return len(toks) > 1 and all(len(t) == 1 for t in toks)
 
 
 def _default_vad(sample_rate: int = 16000, rms_threshold: float = 300.0) -> Callable[[bytes], bool]:
@@ -422,10 +433,23 @@ class SherpaSTT:
             await self.load()
 
         def _sync_transcribe() -> str:
-            stream = self._recognizer.create_stream()
-            stream.accept_waveform(16000, audio_float)
-            self._recognizer.decode_stream(stream)
-            res = stream.result.text.strip()
+            import os
+
+            # sherpa-onnx's native code logs an endoftext-fallback notice to
+            # stderr on every decode (upstream issue #3919). Silence the fd
+            # during the blocking call so turns stay readable.
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            saved = os.dup(2)
+            try:
+                os.dup2(devnull, 2)
+                stream = self._recognizer.create_stream()
+                stream.accept_waveform(16000, audio_float)
+                self._recognizer.decode_stream(stream)
+                res = stream.result.text.strip()
+            finally:
+                os.dup2(saved, 2)
+                os.close(devnull)
+                os.close(saved)
             return "" if _looks_like_hallucination(res) else res
 
         try:

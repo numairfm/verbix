@@ -85,6 +85,17 @@ def test_lazy_import_does_not_require_sherpa_onnx(monkeypatch):
     assert not stt.is_loaded
 
 
+def test_single_char_soup_is_hallucination():
+    from verbix.voice.sherpa_stt import _looks_like_hallucination
+
+    assert _looks_like_hallucination("1 I 1")
+    assert _looks_like_hallucination("a b c d")
+    assert not _looks_like_hallucination("I")
+    assert not _looks_like_hallucination("a")
+    assert not _looks_like_hallucination("OK")
+    assert not _looks_like_hallucination("Hello world")
+
+
 def test_open_session_creates_functional_session(monkeypatch, tmp_path):
     from verbix.voice.sherpa_stt import SherpaSTT, STTSession
 

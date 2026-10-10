@@ -33,6 +33,30 @@ def _resolve_threads() -> int:
     return min(4, max(1, n))
 
 
+_VOICED_FRAME_S = 0.032
+_MIN_VOICED_S = 0.25
+_VOICED_RMS = 500.0
+
+
+def _has_min_voiced_duration(audio_float: np.ndarray, sample_rate: int = 16000) -> bool:
+    """True when at least _MIN_VOICED_S of audio sits above the voicing floor.
+
+    Frame-level energy, not whole-clip RMS: a 100 ms click inside a second of
+    quiet passes an average-energy gate and decodes as "." — per-frame voicing
+    rejects it. Reads signal only, never words.
+    """
+    frame_len = int(sample_rate * _VOICED_FRAME_S)
+    if audio_float.size < frame_len:
+        return False
+    n_full = len(audio_float) // frame_len
+    voiced = 0
+    for i in range(n_full):
+        frame = audio_float[i * frame_len : (i + 1) * frame_len]
+        if np.sqrt(float(np.mean(frame**2)) * 32768.0**2) >= _VOICED_RMS:
+            voiced += 1
+    return voiced * _VOICED_FRAME_S >= _MIN_VOICED_S
+
+
 def _default_vad(sample_rate: int = 16000, rms_threshold: float = 300.0) -> Callable[[bytes], bool]:
     """Energy-based VAD for speech chunks. Pure silence / low-energy noise returns False."""
     def _is_speech(pcm: bytes) -> bool:
@@ -399,6 +423,13 @@ class SherpaSTT:
         # Energy pre-gate: skip model if RMS is under 200 (silence or pure mic hiss)
         rms = np.sqrt(np.mean((audio_float * 32768.0) ** 2))
         if rms < 200.0:
+            return ""
+
+        # Voiced-duration gate: require at least 250 ms of above-threshold
+        # 32 ms frames before decoding. Short noise blips pass the RMS gate
+        # on average energy alone and come back as "." or single chars; real
+        # utterances — including short answers — sustain voicing longer.
+        if not _has_min_voiced_duration(audio_float):
             return ""
 
         if not self.is_loaded:

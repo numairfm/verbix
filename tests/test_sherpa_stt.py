@@ -74,6 +74,57 @@ def test_transcribe_silence_returns_empty(monkeypatch, tmp_path):
     fake_offline_rec.from_nemo_canary.assert_not_called()
 
 
+def test_short_blip_never_reaches_model(monkeypatch, tmp_path):
+    """A 100 ms loud click passes whole-clip RMS but must not decode."""
+    from verbix.voice.sherpa_stt import SherpaSTT
+
+    model_dir = tmp_path / "canary-int8"
+    model_dir.mkdir(parents=True)
+    for fname in ["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"]:
+        (model_dir / fname).write_bytes(b"dummy")
+
+    fake_module = types.ModuleType("sherpa_onnx")
+    fake_offline_rec = MagicMock()
+    fake_module.OfflineRecognizer = fake_offline_rec
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", fake_module)
+
+    stt = SherpaSTT(model_dir=model_dir)
+    rng = np.random.default_rng(0)
+    pcm = np.zeros(16000, dtype=np.int16)
+    pcm[8000:9600] = (rng.normal(0, 8000, 1600)).astype(np.int16)  # 100 ms burst
+
+    import asyncio
+    assert asyncio.run(stt.transcribe(pcm.tobytes())) == ""
+    fake_offline_rec.from_nemo_canary.assert_not_called()
+
+
+def test_sustained_speech_reaches_model(monkeypatch, tmp_path):
+    """500 ms of voiced-level tone decodes (model faked)."""
+    from verbix.voice.sherpa_stt import SherpaSTT
+
+    model_dir = tmp_path / "canary-int8"
+    model_dir.mkdir(parents=True)
+    for fname in ["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"]:
+        (model_dir / fname).write_bytes(b"dummy")
+
+    fake_stream = MagicMock()
+    fake_stream.result.text = "yes"
+    fake_recognizer = MagicMock()
+    fake_recognizer.create_stream.return_value = fake_stream
+    fake_module = types.ModuleType("sherpa_onnx")
+    fake_offline_rec = MagicMock()
+    fake_offline_rec.from_nemo_canary.return_value = fake_recognizer
+    fake_module.OfflineRecognizer = fake_offline_rec
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", fake_module)
+
+    stt = SherpaSTT(model_dir=model_dir)
+    t = np.arange(8000) / 16000
+    tone = (np.sin(2 * np.pi * 220 * t) * 8000).astype(np.int16)
+
+    import asyncio
+    assert asyncio.run(stt.transcribe(tone.tobytes())) == "yes"
+
+
 def test_lazy_import_does_not_require_sherpa_onnx(monkeypatch):
     import importlib
 

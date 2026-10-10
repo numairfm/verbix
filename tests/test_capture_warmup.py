@@ -1,17 +1,43 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
 import pytest
 
 from verbix.agent.models.litellm_model import LitellmModel
 from verbix.voice.base import MockAudioSink, MockSpeechToText, MockTextToSpeech
-from verbix.voice.capture import PTTCapture
+from verbix.voice.capture import PTTCapture, _condition_s16le
 from verbix.voice.pipeline import VoicePipeline
 from verbix.voice.player import AudioPlayer
 
 
 def test_capture_reads_20ms_frames():
     assert PTTCapture(sample_rate=16000).frame_bytes == 640
+
+
+def _speech_like(n: int = 3200, seed: int = 7) -> np.ndarray:
+    """A voiced chunk: two partials plus noise, in s16le range."""
+    t = np.arange(n) / 16000
+    rng = np.random.default_rng(seed)
+    x = 3000 * np.sin(2 * np.pi * 220 * t) + 1500 * np.sin(2 * np.pi * 900 * t + 1.0)
+    x += rng.normal(0, 300, n)
+    return np.clip(x, -32768, 32767).astype(np.int16)
+
+
+def test_conditioning_strips_dc_bias_byte_exact():
+    """Biased speech and clean speech come out byte-equal: the fix is a no-op
+    on unbiased audio and exactly cancels a constant offset."""
+    src = _speech_like()
+    biased = (src.astype(np.int32) + 5757).astype(np.int16)
+    got, _ = _condition_s16le(biased.tobytes(), 16000, (0.0, None))
+    clean, _ = _condition_s16le(src.tobytes(), 16000, (0.0, None))
+    assert got == clean
+    assert abs(np.frombuffer(got, dtype=np.int16).mean()) <= 100
+
+
+def test_conditioning_keeps_silence_silent():
+    out, _ = _condition_s16le(np.full(3200, 5757, dtype=np.int16).tobytes(), 16000, (0.0, None))
+    assert out.count(0) == len(out)
 
 
 @pytest.mark.asyncio

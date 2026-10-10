@@ -1,27 +1,9 @@
-"""No-speech + hallucination guards at the single decode choke point."""
+"""No-speech guards at the single decode choke point (signal-based, no word lists)."""
 
 import numpy as np
 import pytest
 
-from verbix.voice.sherpa_stt import SherpaSTT, _looks_like_hallucination
-
-
-def test_dots_only_is_hallucination():
-    assert _looks_like_hallucination(". . . . . .")
-    assert _looks_like_hallucination("...")
-    assert _looks_like_hallucination("  ..  ..  ")
-
-
-def test_real_speech_is_not_hallucination():
-    assert not _looks_like_hallucination("Hello.")
-    assert not _looks_like_hallucination("Okay")
-    assert not _looks_like_hallucination("No, no, no")
-
-
-def test_common_silence_phrases_are_hallucination():
-    assert _looks_like_hallucination("I'm not sure.")
-    assert _looks_like_hallucination("Thank you.")
-    assert _looks_like_hallucination("Thanks for watching.")
+from verbix.voice.sherpa_stt import SherpaSTT
 
 
 @pytest.mark.asyncio

@@ -27,14 +27,25 @@ class VoicePipeline:
         player: AudioPlayer,
         capture: PTTCapture | None = None,
         printer: Any = None,
+        aec: Any = None,
     ) -> None:
         self.runtime = runtime
         self.stt = stt
         self.player = player
         self.capture = capture or PTTCapture()
         self.printer = printer
+        if aec is not None:
+            self.aec = aec
+        else:
+            from verbix.voice.aec import EchoCanceller
 
-        self._speech_output = SpeechOutput(player.tts, player.sink, printer=self.printer)
+            self.aec = EchoCanceller()
+        self._speech_output = SpeechOutput(
+            player.tts,
+            player.sink,
+            printer=self.printer,
+            on_audio=self.aec.feed_reference,
+        )
         if self.runtime is not None:
             self.runtime.wake_output = self._speech_output
 
@@ -139,12 +150,32 @@ class VoicePipeline:
                 self._live_stt.cancel()
             self._live_stt = None
 
+        if hasattr(self, "aec") and hasattr(self.aec, "reset"):
+            self.aec.reset()
+
         if hasattr(self.runtime, "floor"):
             from verbix.runtime.floor import FloorState
 
             self.runtime.floor.set_state(FloorState.IDLE)
 
         return {"action": "continuous_stopped"}
+
+    def _interrupt_active_speech(self) -> None:
+        """Interrupts ongoing speech playback immediately upon user speech detection."""
+        if not self._speech_output.is_playing:
+            return
+        heard = self._speech_output.delivered_text()
+        self._speech_output.interrupt()
+        if hasattr(self, "aec") and callable(getattr(self.aec, "reset", None)):
+            self.aec.reset()
+        if (
+            self.runtime is not None
+            and self._loop is not None
+            and not self._loop.is_closed()
+        ):
+            self._loop.call_soon_threadsafe(
+                lambda: asyncio.create_task(self.runtime.cancel_turn(heard=heard))
+            )
 
     @property
     def _is_speaking(self) -> bool:
@@ -185,8 +216,38 @@ class VoicePipeline:
             )
 
         def _feed_chunk(chunk: bytes) -> None:
-            if self._is_speaking:
+            if not self._is_continuous_active:
+                if self._is_speaking:
+                    return
+                if not self._gate_stt_feed and self._live_stt is not None:
+                    try:
+                        self._live_stt.feed(chunk)
+                    except (OSError, RuntimeError) as e:
+                        logger.debug("Error feeding STT chunk: %s", e)
                 return
+
+            # Barge-in: if Verbix is speaking, run AEC and test clean mic audio for user speech
+            if self._is_speaking:
+                clean_chunk = (
+                    self.aec.process_mic(chunk)
+                    if hasattr(self, "aec") and getattr(self.aec, "is_available", False)
+                    else chunk
+                )
+                if self._live_stt is not None and not self._gate_stt_feed:
+                    feed_barge_in = getattr(self._live_stt, "feed_barge_in", None)
+                    if callable(feed_barge_in):
+                        detected = False
+                        try:
+                            detected = feed_barge_in(clean_chunk)
+                        except (OSError, RuntimeError) as e:
+                            logger.debug("Error feeding STT chunk during playback: %s", e)
+                        if detected:
+                            self._interrupt_active_speech()
+                return
+
+            if hasattr(self, "aec") and getattr(self.aec, "_ref_buffer", None):
+                self.aec.reset()
+
             if not self._gate_stt_feed and self._live_stt is not None:
                 try:
                     self._live_stt.feed(chunk)
@@ -224,6 +285,9 @@ class VoicePipeline:
                         await self._setup_turn_listening()
                     continue
 
+                if self._is_continuous_active:
+                    await self._setup_turn_listening()
+
                 try:
                     await self.execute_voice_turn(transcribed_text)
                 except asyncio.CancelledError:
@@ -244,7 +308,7 @@ class VoicePipeline:
                         await asyncio.sleep(0.02)
                     await asyncio.sleep(0.15)
 
-                if self._is_continuous_active:
+                if self._is_continuous_active and self._live_stt is None:
                     await self._setup_turn_listening()
 
         except asyncio.CancelledError:
@@ -327,6 +391,8 @@ class VoicePipeline:
         try:
             return await self.runtime.submit(user_text, self._speech_output)
         finally:
+            if hasattr(self, "aec") and callable(getattr(self.aec, "reset", None)):
+                self.aec.reset()
             if (
                 self.runtime is not None
                 and hasattr(self.runtime, "floor")

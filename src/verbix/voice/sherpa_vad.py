@@ -12,7 +12,7 @@ PROVISION_CMD = "uv run scripts/fetch_voice_models.py"
 
 WINDOW = 512  # 32 ms @16kHz: Silero's native window, also its minimum input
 THRESHOLD = 0.5
-MIN_SILENCE_S = 0.25
+MIN_SILENCE_S = 1.0
 MIN_SPEECH_S = 0.15
 
 
@@ -64,6 +64,13 @@ class SileroSegmenter:
     @property
     def is_loaded(self) -> bool:
         return self._detector is not None
+
+    @property
+    def is_speech_detected(self) -> bool:
+        """Returns True if speech is actively detected by the Silero VAD model."""
+        if not self.is_loaded:
+            return False
+        return bool(self._detector.is_speech_detected())
 
     def ensure_loaded(self) -> None:
         """Synchronous, idempotent load. First feed of a turn pays ~50 ms once."""

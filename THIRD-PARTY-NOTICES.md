@@ -24,3 +24,7 @@ This file covers heavy model and media assets by name.
 - **Canary 180M Flash** (NVIDIA, CC-BY-4.0) — multilingual FastConformer-CTC/AED ASR
   by NVIDIA NeMo (<https://huggingface.co/nvidia/canary-180m-flash>).
   - Pinned checkpoint: `csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8` (INT8 dynamic quantization).
+
+## Acoustic Echo Cancellation (pywebrtc-audio)
+
+- **pywebrtc-audio** (BSD-3-Clause) — WebRTC AudioProcessingModule bindings for real-time acoustic echo cancellation (<https://github.com/strands-labs/pywebrtc-audio>).

@@ -83,6 +83,19 @@ class STTSession:
             except Exception as e:  # noqa: BLE001
                 logger.debug("on_endpoint callback error: %s", e)
 
+    @property
+    def is_speech_detected(self) -> bool:
+        if hasattr(self._segmenter, "is_speech_detected"):
+            return bool(self._segmenter.is_speech_detected)
+        return False
+
+    def feed_barge_in(self, pcm: bytes) -> bool:
+        """Feeds PCM during playback. Returns True if user voice activity is detected."""
+        if self._finalized or not pcm:
+            return False
+        self.feed(pcm)
+        return self.is_speech_detected
+
 
     async def finalize(self) -> str:
         """Decodes every speech span and returns the joined text."""

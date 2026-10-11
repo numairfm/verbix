@@ -36,10 +36,17 @@ def _sentences(text: str) -> list[str]:
 class SpeechOutput:
     """TurnOutput that speaks agent text without blocking the turn loop."""
 
-    def __init__(self, tts: Any, sink: Any, printer: Any = None) -> None:
+    def __init__(
+        self,
+        tts: Any,
+        sink: Any,
+        printer: Any = None,
+        on_audio: Any | None = None,
+    ) -> None:
         self.tts = tts
         self.sink = sink
         self.printer = printer
+        self.on_audio = on_audio
         self._buf = ""
         self._seen = ""
         self._delivered: list[str] = []
@@ -300,4 +307,9 @@ class SpeechOutput:
                     if first_write:
                         record_latency("sink_first_write")
                         first_write = False
+                    if self.on_audio:
+                        try:
+                            self.on_audio(audio)
+                        except Exception as e:  # noqa: BLE001
+                            logger.debug("on_audio error: %s", e)
                     yield audio

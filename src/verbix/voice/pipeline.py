@@ -115,7 +115,8 @@ class VoicePipeline:
                 from verbix.runtime.floor import FloorState
 
                 self.runtime.floor.set_state(FloorState.IDLE)
-            return {"action": "idle", "transcription": ""}
+            secs = len(audio_bytes) / 32000 if audio_bytes else 0.0
+            return {"action": "idle", "transcription": "", "detail": f"{secs:.1f}s captured"}
 
         # Launch turn execution in background so toggle command returns immediately
         self._active_voice_task = asyncio.create_task(

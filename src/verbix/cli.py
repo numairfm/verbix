@@ -428,9 +428,11 @@ async def async_main(args: argparse.Namespace) -> int:
                         if transcribed:
                             sys.stdout.write(f"[User spoke]: {transcribed}\n")
                         else:
-                            sys.stdout.write(
-                                "[No speech detected or audio too short]\n"
-                            )
+                            detail = stop_res.get("detail", "")
+                            msg = "[No speech detected or audio too short]"
+                            if detail:
+                                msg += f" ({detail})"
+                            sys.stdout.write(msg + "\n")
                         sys.stdout.flush()
                         active_task = getattr(pipeline, "_active_voice_task", None)
                         if active_task:

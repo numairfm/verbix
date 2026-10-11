@@ -161,8 +161,8 @@ class VoicePipeline:
         return {"action": "continuous_stopped"}
 
     def _interrupt_active_speech(self) -> None:
-        """Interrupts ongoing speech playback immediately upon user speech detection."""
-        if not self._speech_output.is_playing:
+        """Interrupts ongoing speech playback or active turn execution immediately upon user speech detection."""
+        if not self._is_speaking and not self._speech_output.is_playing:
             return
         heard = self._speech_output.delivered_text()
         self._speech_output.interrupt()
@@ -288,10 +288,14 @@ class VoicePipeline:
                 if self._is_continuous_active:
                     await self._setup_turn_listening()
 
+                turn_task = asyncio.create_task(
+                    self.execute_voice_turn(transcribed_text)
+                )
                 try:
-                    await self.execute_voice_turn(transcribed_text)
+                    await turn_task
                 except asyncio.CancelledError:
-                    raise
+                    # Turn was cancelled (e.g. by barge-in). The continuous loop must stay alive!
+                    pass
                 except Exception as e:  # noqa: BLE001
                     logger.warning("Turn failed during continuous loop: %s", e)
                     if hasattr(self.runtime, "floor"):
@@ -301,7 +305,7 @@ class VoicePipeline:
                     try:
                         await self.player.speak("Sorry, I ran into an error processing that.")
                     except asyncio.CancelledError:
-                        raise
+                        pass
                     except Exception as speak_err:  # noqa: BLE001
                         logger.warning("Failed to speak error message: %s", speak_err)
                     while self.player.is_playing:

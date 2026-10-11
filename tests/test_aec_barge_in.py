@@ -109,3 +109,144 @@ async def test_continuous_barge_in_interrupts_active_playback():
     assert sink.stopped is True
     await asyncio.sleep(0.01)
     runtime.cancel_turn.assert_called_once()
+
+
+def test_echo_canceller_accepts_float32_reference_audio():
+    """SherpaTTS produces 24kHz float32 mono PCM. AEC must accept float32 and convert to valid int16."""
+    aec = EchoCanceller(sample_rate=16000)
+    if not aec.is_available:
+        pytest.skip("pywebrtc_audio unavailable in current environment")
+
+    # 1 second synthetic 880Hz speaker tone @ 24kHz float32 in [-0.5, 0.5]
+    t_24k = np.linspace(0, 1, 24000, endpoint=False)
+    speaker_f32 = (np.sin(2 * np.pi * 880 * t_24k) * 0.5).astype(np.float32).tobytes()
+
+    aec.feed_reference(speaker_f32, source_sample_rate=24000)
+
+    # Reference buffer should contain resampled 16kHz int16 bytes
+    assert len(aec._ref_buffer) == 16000 * 2
+    ref_samples = np.frombuffer(bytes(aec._ref_buffer), dtype=np.int16)
+    # Scaled int16 amplitude should be around ~16384 (0.5 * 32767), not noise around 32767
+    assert np.max(np.abs(ref_samples)) <= 17000
+    assert np.max(np.abs(ref_samples)) >= 15000
+
+
+@pytest.mark.asyncio
+async def test_continuous_loop_survives_barge_in_cancellation():
+    """When a turn is cancelled by barge-in, the continuous loop task must survive and keep running."""
+    from verbix.runtime.runtime import TurnHandle
+
+    runtime = MagicMock()
+    runtime.floor = FloorArbiter()
+    runtime.is_idle = True
+    runtime.user_active = False
+
+    turn_cancelled = False
+
+    async def mock_submit(text, output):
+        nonlocal turn_cancelled
+        runtime.floor.set_state("SPEAKING")
+        current_task = asyncio.current_task()
+        runtime._turn_handle = TurnHandle(
+            task=current_task,
+            kind="foreground",
+            delivered_text_provider=lambda: "",
+        )
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            turn_cancelled = True
+            raise
+        return "finished"
+
+    async def mock_cancel_turn(heard=None):
+        if hasattr(runtime, "_turn_handle") and runtime._turn_handle.task:
+            runtime._turn_handle.task.cancel()
+
+    runtime.submit = mock_submit
+    runtime.cancel_turn = mock_cancel_turn
+
+    sink = MockAudioSink(playback_delay=0.1)
+    player = AudioPlayer(tts=MockTextToSpeech(), sink=sink)
+
+    fake_session = MagicMock()
+    fake_session.is_speech_detected = False
+    fake_session.feed = MagicMock()
+    fake_session.feed_barge_in = MagicMock(return_value=False)
+    fake_session.finalize = AsyncMock(return_value="tell me a story")
+
+    stt = MagicMock()
+    stt.open_session = MagicMock(return_value=fake_session)
+
+    pipeline = VoicePipeline(
+        runtime=runtime,
+        stt=stt,
+        player=player,
+        capture=FakeCapture(),
+    )
+
+    await pipeline.start_continuous_session()
+    assert pipeline._continuous_task is not None
+    assert not pipeline._continuous_task.done()
+
+    # 1. Trigger speech endpoint for Turn 1
+    pipeline._speech_endpoint_event.set()
+    await asyncio.sleep(0.05)
+
+    # Turn is now running in mock_submit
+    assert runtime.floor.is_speaking is True
+    assert not pipeline._continuous_task.done()
+
+    # 2. Barge in while turn is running
+    fake_session.is_speech_detected = True
+    fake_session.feed_barge_in = MagicMock(return_value=True)
+    pipeline.capture.on_chunk(b"\x10\x20" * 160)
+
+    await asyncio.sleep(0.05)
+
+    # Turn task was cancelled
+    assert turn_cancelled is True
+    # CRITICAL INVARIANT: The continuous loop task MUST NOT be dead
+    assert not pipeline._continuous_task.done(), "Continuous task was killed by cancel_turn!"
+    assert pipeline.is_continuous_active is True
+
+    await pipeline.stop_continuous_session()
+
+
+@pytest.mark.asyncio
+async def test_barge_in_cancels_turn_before_first_audio_playback():
+    """User speech while LLM is generating (floor is SPEAKING but is_playing is False) must cancel turn."""
+    runtime = MagicMock()
+    runtime.floor = FloorArbiter()
+    runtime.floor.set_state("SPEAKING")
+    runtime.cancel_turn = AsyncMock()
+
+    sink = MockAudioSink(playback_delay=0.1)
+    player = AudioPlayer(tts=MockTextToSpeech(), sink=sink)
+    fake_session = MagicMock()
+    fake_session.feed_barge_in = MagicMock(return_value=True)
+    stt = MagicMock()
+    stt.open_session = MagicMock(return_value=fake_session)
+
+    pipeline = VoicePipeline(
+        runtime=runtime,
+        stt=stt,
+        player=player,
+        capture=FakeCapture(),
+    )
+    pipeline._is_continuous_active = True
+    pipeline._loop = asyncio.get_running_loop()
+    await pipeline._setup_turn_listening()
+    # Turn begins: LLM generating tokens (floor acquired as SPEAKING)
+    runtime.floor.set_state("SPEAKING")
+
+    # SpeechOutput has NOT started playing yet
+    assert pipeline.turn_output.is_playing is False
+    assert runtime.floor.is_speaking is True
+
+    # User speaks "no no stop nevermind"
+    pipeline.capture.on_chunk(b"\x10\x20" * 160)
+
+    await asyncio.sleep(0.02)
+    runtime.cancel_turn.assert_called_once()
+

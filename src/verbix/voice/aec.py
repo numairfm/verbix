@@ -40,24 +40,44 @@ class EchoCanceller:
     def is_available(self) -> bool:
         return self._processor is not None
 
-    def feed_reference(self, pcm_bytes: bytes, source_sample_rate: int = 24000) -> None:
+    def feed_reference(
+        self,
+        pcm_bytes: bytes,
+        source_sample_rate: int = 24000,
+        audio_format: str = "auto",
+    ) -> None:
         """Enqueues reference speaker audio for echo cancellation."""
         if not pcm_bytes or self._processor is None:
             return
 
-        if source_sample_rate != self.sample_rate:
-            samples = np.frombuffer(pcm_bytes, dtype=np.int16)
-            if len(samples) > 0:
-                n_out = int(len(samples) * self.sample_rate / source_sample_rate)
-                if n_out > 0:
-                    resampled = np.interp(
-                        np.linspace(0, len(samples), n_out, endpoint=False),
-                        np.arange(len(samples)),
-                        samples,
-                    ).astype(np.int16)
-                    self._ref_buffer.extend(resampled.tobytes())
+        if audio_format == "auto":
+            # Detect float32 (normalized in [-1.0, 1.0]) vs int16
+            if len(pcm_bytes) % 4 == 0:
+                check = np.frombuffer(pcm_bytes[: min(len(pcm_bytes), 400)], dtype=np.float32)
+                if len(check) > 0 and np.all(np.abs(check) <= 1.5):
+                    audio_format = "f32"
+                else:
+                    audio_format = "s16"
+            else:
+                audio_format = "s16"
+
+        if audio_format in ("f32", "float", "float32"):
+            f32 = np.frombuffer(pcm_bytes, dtype=np.float32)
+            samples = (np.clip(f32, -1.0, 1.0) * 32767).astype(np.int16)
         else:
-            self._ref_buffer.extend(pcm_bytes)
+            samples = np.frombuffer(pcm_bytes, dtype=np.int16)
+
+        if source_sample_rate != self.sample_rate and len(samples) > 0:
+            n_out = int(len(samples) * self.sample_rate / source_sample_rate)
+            if n_out > 0:
+                resampled = np.interp(
+                    np.linspace(0, len(samples), n_out, endpoint=False),
+                    np.arange(len(samples)),
+                    samples,
+                ).astype(np.int16)
+                self._ref_buffer.extend(resampled.tobytes())
+        else:
+            self._ref_buffer.extend(samples.tobytes())
 
     def process_mic(self, mic_bytes: bytes) -> bytes:
         """Processes mic audio in 160-sample chunks, subtracting speaker echo."""

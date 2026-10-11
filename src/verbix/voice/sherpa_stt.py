@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -20,12 +19,6 @@ REQUIRED_FILES = (
     "tokens.txt",
 )
 
-_PAUSE_COMMIT_S = 0.25
-_FORCE_COMMIT_S = 12.0
-_FORCE_SEARCH_S = 1.0
-_FRAME_S = 0.032
-_PROMPT_TAIL = 200
-_WATCHDOG_INTERVAL_S = 0.05
 
 
 def _resolve_threads() -> int:
@@ -38,7 +31,6 @@ _MIN_VOICED_S = 0.16
 # Committed segments shorter than this are device transients (mic-open pop),
 # breaths, or clicks — never words. Dropped at commit time so they never
 # decode, instead of filtering their text after the fact.
-_MIN_COMMIT_S = 0.08
 _VOICED_RMS = 500.0
 
 
@@ -61,20 +53,6 @@ def _has_min_voiced_duration(audio_float: np.ndarray, sample_rate: int = 16000) 
     return voiced * _VOICED_FRAME_S >= _MIN_VOICED_S
 
 
-def _default_vad(sample_rate: int = 16000, rms_threshold: float = 300.0) -> Callable[[bytes], bool]:
-    """Energy-based VAD for speech chunks. Pure silence / low-energy noise returns False."""
-    def _is_speech(pcm: bytes) -> bool:
-        if not pcm or not any(pcm):
-            return False
-        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
-        if audio.size == 0 or not np.any(audio):
-            return False
-        rms = np.sqrt(np.mean(audio**2))
-        return bool(rms >= rms_threshold)
-
-    return _is_speech
-
-
 class _Segment:
     """One committed audio span; its bytes are decoded exactly once."""
 
@@ -87,31 +65,30 @@ class _Segment:
 
 
 class STTSession:
-    """Incremental transcription session with VAD-committed segments."""
+    """Incremental transcription session driven by Silero speech spans.
+
+    Bytes in, span boundaries out: the segmenter (neural VAD) decides what is
+    speech. Anything that never becomes a span — pops, breaths, noise,
+    silence — is never decoded. The whole turn is judged once at finalize();
+    per-segment re-gating would fragment real speech into sub-threshold
+    pieces, so segments decode freely and only the turn total is gated.
+    """
 
     def __init__(
         self,
         decode_fn: Callable[..., Awaitable[str]],
-        vad_fn: Callable[[bytes], bool],
-        clock: Callable[[], float],
+        segmenter: Any,
         sample_rate: int = 16000,
         on_partial: Callable[[str], Any] | None = None,
         on_endpoint: Callable[[str], Any] | None = None,
-        enable_watchdog: bool = False,
     ) -> None:
         self._decode_fn = decode_fn
-        self._vad_fn = vad_fn
-        self._clock = clock
+        self._segmenter = segmenter
         self.sample_rate = sample_rate
         self.on_partial = on_partial
         self.on_endpoint = on_endpoint
-        self._buf = bytearray()
         self._segments: list[_Segment] = []
-        self._last_speech_t: float | None = None
         self._finalized = False
-        self._watchdog_enabled = enable_watchdog
-        self._watchdog_task: asyncio.Task[None] | None = None
-        self._ensure_watchdog()
 
     @property
     def committed_text(self) -> str:
@@ -119,38 +96,27 @@ class STTSession:
         return " ".join(s.text for s in self._segments if s.text).strip()
 
     def feed(self, pcm: bytes) -> None:
-        """Buffers one PCM chunk (16-bit signed mono); drops pure silence."""
+        """Buffers one PCM chunk (16-bit signed mono) through the segmenter."""
         if self._finalized or not pcm:
             return
-        now = self._clock()
-        self._ensure_watchdog()
-        if self._is_silence(pcm):
-            self._maybe_pause_commit(now)
-            return
-        self._maybe_pause_commit(now)
-        self._buf.extend(pcm)
-        self._last_speech_t = now
-        self._maybe_force_commit()
+        self._segmenter.feed(pcm)
+        for span in self._segmenter.pop_segments():
+            self._push_segment(span)
 
     async def finalize(self) -> str:
-        """Decodes anything not yet decoded and returns full text."""
+        """Decodes every speech span and returns the joined text."""
         if self._finalized:
             return self.committed_text
         self._finalized = True
-        if self._watchdog_task is not None:
-            self._watchdog_task.cancel()
-            self._watchdog_task = None
-        # Turn-level voiced gate: the session already drops silence per chunk,
-        # so judge the whole turn once here instead of per segment. A blip turn
-        # (all fragments short) returns "" even if eager decodes already ran.
-        whole = b"".join(seg.pcm for seg in self._segments) + bytes(self._buf)
+        for span in self._segmenter.flush():
+            self._push_segment(span)
+        whole = b"".join(seg.pcm for seg in self._segments)
         if whole:
             audio_float = np.frombuffer(whole, dtype=np.int16).astype(np.float32) / 32768.0
             if not _has_min_voiced_duration(audio_float, self.sample_rate):
                 for seg in self._segments:
                     if seg.task is not None and not seg.task.done():
                         seg.task.cancel()
-                self._buf.clear()
                 return ""
         for seg in self._segments:
             if seg.text is None and seg.task is not None:
@@ -161,77 +127,18 @@ class STTSession:
             if seg.text is None:
                 seg.text = await self._decode_once(seg.pcm)
                 self._fire_callbacks(seg)
-        if self._buf:
-            tail = bytes(self._buf)
-            self._buf.clear()
-            min_bytes = int(self.sample_rate * _MIN_COMMIT_S) * 2
-            text = await self._decode_once(tail) if len(tail) >= min_bytes else ""
-            if text:
-                seg = _Segment(tail)
-                seg.text = text
-                self._segments.append(seg)
-                self._fire_callbacks(seg)
         return self.committed_text
 
     def cancel(self) -> None:
-        """Abandons the session: stops the watchdog, cancels pending decodes, drops audio."""
+        """Abandons the session: cancels pending decodes, drops audio."""
         self._finalized = True
-        if self._watchdog_task is not None:
-            self._watchdog_task.cancel()
-            self._watchdog_task = None
         for seg in self._segments:
             if seg.task is not None and not seg.task.done():
                 seg.task.cancel()
-        self._buf.clear()
-
-    def _is_silence(self, pcm: bytes) -> bool:
-        if not any(pcm):
-            return True
-        try:
-            return not self._vad_fn(pcm)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("VAD error, treating chunk as speech: %s", e)
-            return False
-
-    def _maybe_pause_commit(self, now: float) -> None:
-        if (
-            self._buf
-            and self._last_speech_t is not None
-            and now - self._last_speech_t >= _PAUSE_COMMIT_S
-        ):
-            self._push_segment(bytes(self._buf))
-            self._buf.clear()
-
-    def _maybe_force_commit(self) -> None:
-        limit = int(self.sample_rate * _FORCE_COMMIT_S) * 2
-        if len(self._buf) < limit:
-            return
-        cut = self._low_energy_cut(bytes(self._buf))
-        if cut <= 0 or cut > len(self._buf):
-            cut = len(self._buf)
-        self._push_segment(bytes(self._buf[:cut]))
-        del self._buf[:cut]
-
-    def _low_energy_cut(self, buf: bytes) -> int:
-        frame_bytes = int(self.sample_rate * _FRAME_S) * 2
-        window = buf[-int(self.sample_rate * _FORCE_SEARCH_S) * 2 :]
-        n_frames = len(window) // frame_bytes
-        if n_frames == 0:
-            return len(buf)
-        frames = (
-            np.frombuffer(window[: n_frames * frame_bytes], dtype=np.int16)
-            .reshape(n_frames, frame_bytes // 2)
-            .astype(np.float32)
-        )
-        cut_in_window = (int(np.argmin((frames**2).mean(axis=1))) + 1) * frame_bytes
-        return len(buf) - len(window) + cut_in_window
 
     def _push_segment(self, pcm: bytes) -> None:
         if not pcm:
             return
-        min_bytes = int(self.sample_rate * _MIN_COMMIT_S) * 2
-        if len(pcm) < min_bytes:
-            return  # sub-80 ms transient: breath, click, mic-open pop
         seg = _Segment(pcm)
         self._segments.append(seg)
         seg.task = self._spawn_decode(seg)
@@ -240,7 +147,7 @@ class STTSession:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            return None
+            return None  # fed outside a loop: finalize() decodes
         if self._finalized:
             return None
         return loop.create_task(self._decode_segment(seg))
@@ -256,7 +163,7 @@ class STTSession:
         self._fire_callbacks(seg)
 
     async def _decode_once(self, pcm: bytes) -> str:
-        text = await self._decode_fn(pcm, prompt=self.committed_text[-_PROMPT_TAIL:])
+        text = await self._decode_fn(pcm, prompt="")
         return text.strip() if text else ""
 
     def _fire_callbacks(self, seg: _Segment) -> None:
@@ -268,40 +175,16 @@ class STTSession:
         except Exception as e:  # noqa: BLE001
             logger.debug("STT callback error: %s", e)
 
-    def _ensure_watchdog(self) -> None:
-        if (
-            not self._watchdog_enabled
-            or self._watchdog_task is not None
-            or self._finalized
-        ):
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        self._watchdog_task = loop.create_task(self._watchdog_loop())
-
-    async def _watchdog_loop(self) -> None:
-        try:
-            while not self._finalized:
-                await asyncio.sleep(_WATCHDOG_INTERVAL_S)
-                if self._finalized:
-                    break
-                self._maybe_pause_commit(self._clock())
-        except asyncio.CancelledError:
-            pass
-
 
 class SegmentCommittedSTT:
-    """Streaming STT factory producing pause-committed `STTSession`s."""
+    """Session factory producing span-driven `STTSession`s."""
 
     def __init__(
         self,
         decode_fn: Callable[..., Awaitable[str]] | None = None,
-        vad_fn: Callable[[bytes], bool] | None = None,
-        clock: Callable[[], float] | None = None,
         sample_rate: int = 16000,
         stt: SherpaSTT | None = None,
+        segmenter: Any | None = None,
     ) -> None:
         self.sample_rate = sample_rate
         if decode_fn is None:
@@ -315,9 +198,7 @@ class SegmentCommittedSTT:
 
             decode_fn = _default_decode
         self._decode_fn = decode_fn
-        self._vad_fn = vad_fn if vad_fn is not None else _default_vad(sample_rate)
-        self._clock = clock if clock is not None else time.monotonic
-        self._realtime = clock is None
+        self._segmenter = segmenter
 
     def open_session(
         self,
@@ -325,14 +206,17 @@ class SegmentCommittedSTT:
         on_partial: Callable[[str], Any] | None = None,
         on_endpoint: Callable[[str], Any] | None = None,
     ) -> STTSession:
+        if self._segmenter is None:
+            raise RuntimeError(
+                "Session factory has no segmenter: pass segmenter= explicitly "
+                "(SherpaSTT.open_session always supplies one)."
+            )
         return STTSession(
             self._decode_fn,
-            self._vad_fn,
-            self._clock,
+            self._segmenter,
             sample_rate=sample_rate or self.sample_rate,
             on_partial=on_partial,
             on_endpoint=on_endpoint,
-            enable_watchdog=self._realtime,
         )
 
 
@@ -345,6 +229,7 @@ class SherpaSTT:
         threads: int | None = None,
         src_lang: str = "en",
         tgt_lang: str = "en",
+        segmenter: Any | None = None,
     ) -> None:
         self.model_dir = model_dir
         self.threads = threads if threads is not None else _resolve_threads()
@@ -354,6 +239,9 @@ class SherpaSTT:
         self._lock = asyncio.Lock()
         self._recognizer: Any = None
         self._loaded = False
+        # Injected segmenter (tests). Production always builds a fresh one per
+        # session: segmenter state must never leak across turns.
+        self._segmenter = segmenter
 
     @property
     def is_loaded(self) -> bool:
@@ -422,7 +310,12 @@ class SherpaSTT:
         sample_rate: int = 16000,
         initial_prompt: str | None = None,
     ) -> str:
-        """Transcribes raw PCM audio data (16-bit signed mono)."""
+        """Transcribes raw PCM audio data (16-bit signed mono).
+
+        Runs the same span pipeline as the live session: segment into speech
+        spans, judge the whole turn once, decode spans. One entry point, one
+        set of verdicts — no parallel gate logic to drift.
+        """
         if not audio_data or len(audio_data) < 320:
             return ""
 
@@ -430,58 +323,26 @@ class SherpaSTT:
         if audio_int.size == 0 or not np.any(audio_int):
             return ""
 
-        audio_float = audio_int.astype(np.float32) / 32768.0
-
         # Resample to 16 kHz if needed
-        if sample_rate != 16000 and len(audio_float) > 0:
+        if sample_rate != 16000 and len(audio_int) > 0:
+            audio_float = audio_int.astype(np.float32) / 32768.0
             n_target = int(len(audio_float) * 16000 / sample_rate)
             audio_float = np.interp(
                 np.linspace(0, len(audio_float) - 1, n_target),
                 np.arange(len(audio_float)),
                 audio_float,
             ).astype(np.float32)
+            audio_data = (np.clip(audio_float, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
 
-        # Energy pre-gate: skip model if RMS is under 200 (silence or pure mic hiss)
-        rms = np.sqrt(np.mean((audio_float * 32768.0) ** 2))
-        if rms < 200.0:
-            return ""
+        async def _decode(pcm: bytes, prompt: str = "") -> str:
+            audio_float = (
+                np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+            )
+            return await self.transcribe_raw(audio_float)
 
-        # Voiced-duration gate (~120 ms of above-threshold 32 ms frames).
-        # Short noise blips pass the RMS gate on average energy alone and come
-        # back as "." or single chars; real utterances sustain voicing longer.
-        # NOTE: the live session judges the whole turn at finalize() instead;
-        # this gate covers one-shot callers whose buffer is the full turn.
-        if not _has_min_voiced_duration(audio_float):
-            return ""
-
-        if not self.is_loaded:
-            await self.load()
-
-        def _sync_transcribe() -> str:
-            import os
-
-            # sherpa-onnx's native code logs an endoftext-fallback notice to
-            # stderr on every decode (upstream issue #3919). Silence the fd
-            # during the blocking call so turns stay readable.
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            saved = os.dup(2)
-            try:
-                os.dup2(devnull, 2)
-                stream = self._recognizer.create_stream()
-                stream.accept_waveform(16000, audio_float)
-                self._recognizer.decode_stream(stream)
-                res = stream.result.text.strip()
-            finally:
-                os.dup2(saved, 2)
-                os.close(devnull)
-                os.close(saved)
-            return res
-
-        try:
-            return await asyncio.to_thread(_sync_transcribe)
-        except (RuntimeError, OSError, ValueError) as e:
-            logger.warning("SherpaSTT transcription error: %s", e)
-            return ""
+        sess = STTSession(_decode, self._session_segmenter(), sample_rate=16000)
+        sess.feed(audio_data)
+        return await sess.finalize()
 
     async def transcribe_raw(self, audio_float: np.ndarray) -> str:
         """Model-only decode of 16 kHz float32 mono, no gates.
@@ -521,13 +382,25 @@ class SherpaSTT:
             logger.warning("SherpaSTT transcription error: %s", e)
             return ""
 
+    def _session_segmenter(self) -> Any:
+        """Fresh-or-reset segmenter per session: stream state must never leak
+        across turns."""
+        if self._segmenter is not None:
+            self._segmenter.reset()
+            return self._segmenter
+        from verbix.voice.sherpa_vad import SileroSegmenter
+
+        seg = SileroSegmenter()
+        seg.ensure_loaded()
+        return seg
+
     def open_session(
         self,
         sample_rate: int = 16000,
         on_partial: Callable[[str], Any] | None = None,
         on_endpoint: Callable[[str], Any] | None = None,
     ) -> STTSession:
-        """Creates a segment-committed incremental session."""
-        return SegmentCommittedSTT(stt=self, sample_rate=sample_rate).open_session(
-            on_partial=on_partial, on_endpoint=on_endpoint
-        )
+        """Creates a span-driven incremental session."""
+        return SegmentCommittedSTT(
+            stt=self, sample_rate=sample_rate, segmenter=self._session_segmenter()
+        ).open_session(on_partial=on_partial, on_endpoint=on_endpoint)

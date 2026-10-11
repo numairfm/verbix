@@ -77,6 +77,17 @@ MANIFEST: dict[str, dict] = {
             ),
         },
     },
+    "vad": {
+        "id": "silero-vad",
+        "license": "MIT",
+        "repo": "k2-fsa/sherpa-onnx (release asset asr-models)",
+        "files": {
+            "silero_vad.onnx": {
+                "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+                "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+            },
+        },
+    },
 }
 
 
@@ -131,12 +142,19 @@ def fetch_models(root: Path | None = None) -> dict[str, Path]:
         model_target_dir = models_dir / model_id
         model_target_dir.mkdir(parents=True, exist_ok=True)
 
-        for filename, (expected_sha, expected_size) in spec["files"].items():
+        for filename, file_spec in spec["files"].items():
+            if isinstance(file_spec, dict):
+                expected_sha = file_spec["sha256"]
+                url = file_spec.get("url")
+            else:
+                expected_sha, _ = file_spec
+                url = None
             file_dest = model_target_dir / filename
             if file_dest.is_file() and _verify_sha256(file_dest, expected_sha):
                 continue  # already verified and matches checksum
 
-            url = f"https://huggingface.co/{repo}/resolve/main/{filename}"
+            if url is None:
+                url = f"https://huggingface.co/{repo}/resolve/main/{filename}"
             sys.stdout.write(f"Fetching {model_id}/{filename} ...\n")
             sys.stdout.flush()
             _download_file(url, file_dest)

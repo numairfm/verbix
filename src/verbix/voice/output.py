@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from verbix.core.events import AgentEvent, TextDelta, TurnComplete
@@ -26,6 +28,15 @@ _TERMINAL = (".", "!", "?")
 _WARM_DEPTH = 2
 # Breath between sentences so seamless playback never sounds rushed.
 _GAP_SECONDS = 0.15
+
+
+@dataclass
+class InterruptionSnapshot:
+    """Exact boundary snapshot of an interrupted utterance."""
+
+    heard_text: str
+    unspoken_draft: str
+    timestamp: float = field(default_factory=time.time)
 
 
 def _sentences(text: str) -> list[str]:
@@ -55,6 +66,10 @@ class SpeechOutput:
         self._synth_tasks: set[asyncio.Task] = set()
         self._pump: asyncio.Task[None] | None = None
         self._warm: list[list] = []  # [tag, kind, payload, task|None] in frame order
+        self.last_interruption: InterruptionSnapshot | None = None
+        self._sent_spans: list[tuple[str, int, int]] = []
+        self._enqueued_samples: int = 0
+
 
     @property
     def is_playing(self) -> bool:
@@ -104,11 +119,53 @@ class SpeechOutput:
             return ""
         return f
 
-    def interrupt(self) -> None:
-        """Barge-in: silence audio now, discard everything not yet spoken."""
+    def interrupt(self) -> InterruptionSnapshot | None:
+        """Barge-in: silence audio now, capture boundary snapshot, and discard pending."""
         playing = self.is_playing
         if playing:
             record_latency("interrupt_called")
+
+        # Snapshot unvoiced frames before purging
+        unspoken_sentences: list[str] = []
+        for _, k, p, _ in self._warm:
+            if k == "text" and p:
+                unspoken_sentences.append(p)
+        while not self._frames.empty():
+            try:
+                tag, k, p = self._frames.get_nowait()
+                if k == "text" and p:
+                    unspoken_sentences.append(p)
+            except asyncio.QueueEmpty:
+                break
+        if self._buf.strip():
+            for s in _sentences(self._buf):
+                unspoken_sentences.append(s)
+
+        played_samples = getattr(self.sink, "played_samples", None)
+        heard_sentences: list[str] = []
+        unspoken_prefix: list[str] = []
+
+        if isinstance(played_samples, int) and self._sent_spans:
+            for sent, start, end in self._sent_spans:
+                if end <= played_samples:
+                    heard_sentences.append(sent)
+                else:
+                    unspoken_prefix.append(sent)
+        else:
+            heard_sentences = list(self._delivered)
+
+        heard_text = " ".join(heard_sentences).strip()
+        unspoken_draft = " ".join(unspoken_prefix + unspoken_sentences).strip()
+
+        snapshot: InterruptionSnapshot | None = None
+        if heard_text or unspoken_draft:
+            snapshot = InterruptionSnapshot(
+                heard_text=heard_text,
+                unspoken_draft=unspoken_draft,
+                timestamp=time.time(),
+            )
+            self.last_interruption = snapshot
+
         self._epoch += 1
         self.sink.stop()
         if playing:
@@ -121,23 +178,37 @@ class SpeechOutput:
                 task.cancel()
         self._synth_tasks.clear()
         self._drop_warm()
-        while not self._frames.empty():
-            try:
-                self._frames.get_nowait()
-            except asyncio.QueueEmpty:
-                break
         self._buf = ""
         self._seen = ""
         self._delivered.clear()
+        self._sent_spans.clear()
+        self._enqueued_samples = 0
+        return snapshot
 
     def delivered_text(self) -> str:
-        return " ".join(self._delivered).strip()
+        if self._delivered:
+            return " ".join(self._delivered).strip()
+        if self.last_interruption:
+            return self.last_interruption.heard_text
+        return ""
 
     def reset(self) -> None:
         self.interrupt()
 
     def reset_delivered(self) -> None:  # compat for WakeOutputFanOut/printer protocol
         self.reset()
+
+    async def speak_text(self, text: str) -> None:
+        """Enqueues and speaks an utterance directly without a prior AgentEvent."""
+        text = text.strip()
+        if not text:
+            return
+        for s in _sentences(text) or [text]:
+            self._frames.put_nowait((self._epoch, "text", s))
+        self._frames.put_nowait((self._epoch, "end", ""))
+        self._ensure_pump()
+        self._top_up()
+
 
     async def play_cue(self) -> None:
         """Earcon that never kills speech: direct play only when idle."""
@@ -303,6 +374,13 @@ class SpeechOutput:
                     yield self._gap_bytes()
                 spoken_any = True
                 self._delivered.append(payload)
+                fmt = getattr(self.sink, "audio_format", "f32")
+                sample_width = 4 if fmt in ("f32", "float", "f32le") else 2
+                chunk_samples = sum(len(p) // sample_width for p in parts)
+                start_sample = self._enqueued_samples
+                end_sample = start_sample + chunk_samples
+                self._enqueued_samples = end_sample
+                self._sent_spans.append((payload, start_sample, end_sample))
                 for audio in parts:
                     if first_write:
                         record_latency("sink_first_write")

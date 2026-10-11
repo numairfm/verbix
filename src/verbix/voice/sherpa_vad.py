@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Protocol
@@ -65,10 +64,6 @@ class SileroSegmenter:
     @property
     def is_loaded(self) -> bool:
         return self._detector is not None
-
-    async def load(self) -> None:
-        """Explicit preload (e.g. at startup). Otherwise lazy on first use."""
-        await asyncio.to_thread(self.ensure_loaded)
 
     def ensure_loaded(self) -> None:
         """Synchronous, idempotent load. First feed of a turn pays ~50 ms once."""

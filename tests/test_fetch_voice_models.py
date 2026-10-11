@@ -45,10 +45,24 @@ def test_fetch_downloads_and_verifies_files(tmp_path):
             "files": {
                 "test_file.bin": (test_sha, len(test_content)),
             },
-        }
+        },
+        "vad": {
+            "id": "silero-vad",
+            "license": "MIT",
+            "repo": "k2-fsa/sherpa-onnx",
+            "files": {
+                "test_vad.onnx": {
+                    "sha256": test_sha,
+                    "url": "https://custom.url/test_vad.onnx",
+                },
+            },
+        },
     }
 
+    downloaded_urls = []
+
     def fake_download(url, dest_path):
+        downloaded_urls.append(url)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         dest_path.write_bytes(test_content)
 
@@ -57,13 +71,17 @@ def test_fetch_downloads_and_verifies_files(tmp_path):
     ):
         paths = mod.fetch_models(root=tmp_path)
         assert (tmp_path / "models" / "supertonic-int8" / "test_file.bin").exists()
+        assert (tmp_path / "models" / "silero-vad" / "test_vad.onnx").exists()
+        assert "https://custom.url/test_vad.onnx" in downloaded_urls
         assert (tmp_path / "models" / "provenance.json").exists()
         assert paths["tts_dir"] == tmp_path / "models" / "supertonic-int8"
+        assert paths["vad_dir"] == tmp_path / "models" / "silero-vad"
 
         # Check provenance json
         prov = json.loads((tmp_path / "models" / "provenance.json").read_text())
         assert prov["tts"]["id"] == "supertonic-int8"
         assert prov["tts"]["license"] == "BigScience OpenRAIL-M"
+        assert prov["vad"]["id"] == "silero-vad"
 
 
 def test_fetch_raises_on_checksum_mismatch(tmp_path):

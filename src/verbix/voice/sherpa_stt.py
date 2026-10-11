@@ -31,9 +31,6 @@ def _resolve_threads() -> int:
 
 _VOICED_FRAME_S = 0.032
 _MIN_VOICED_S = 0.16
-# Committed segments shorter than this are device transients (mic-open pop),
-# breaths, or clicks — never words. Dropped at commit time so they never
-# decode, instead of filtering their text after the fact.
 _VOICED_RMS = 500.0
 
 
@@ -314,7 +311,6 @@ class SherpaSTT:
         self,
         audio_data: bytes,
         sample_rate: int = 16000,
-        initial_prompt: str | None = None,
     ) -> str:
         """Transcribes raw PCM audio data (16-bit signed mono).
 

@@ -164,6 +164,7 @@ async def test_concurrent_transcribe_raw_preserves_stderr(monkeypatch, tmp_path)
     import asyncio
     import os
     import time
+
     from verbix.voice.sherpa_stt import SherpaSTT
 
     model_dir = _model_dir(tmp_path)

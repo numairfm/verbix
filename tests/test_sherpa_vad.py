@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
-import numpy as np
-import pytest
 
-from verbix.voice.sherpa_vad import SileroSegmenter, WINDOW
+import numpy as np
+
+from verbix.voice.sherpa_vad import WINDOW, SileroSegmenter
 
 
 def test_flush_pads_and_accepts_pending_waveform():

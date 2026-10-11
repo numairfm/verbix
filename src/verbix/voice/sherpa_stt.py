@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ from typing import Any
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+_STDERR_LOCK = threading.Lock()
 
 PROVISION_CMD = "uv run scripts/fetch_voice_models.py"
 
@@ -363,18 +366,19 @@ class SherpaSTT:
         def _sync_transcribe() -> str:
             import os
 
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            saved = os.dup(2)
-            try:
-                os.dup2(devnull, 2)
-                stream = self._recognizer.create_stream()
-                stream.accept_waveform(16000, audio_float)
-                self._recognizer.decode_stream(stream)
-                return stream.result.text.strip()
-            finally:
-                os.dup2(saved, 2)
-                os.close(devnull)
-                os.close(saved)
+            with _STDERR_LOCK:
+                devnull = os.open(os.devnull, os.O_WRONLY)
+                saved = os.dup(2)
+                try:
+                    os.dup2(devnull, 2)
+                    stream = self._recognizer.create_stream()
+                    stream.accept_waveform(16000, audio_float)
+                    self._recognizer.decode_stream(stream)
+                    return stream.result.text.strip()
+                finally:
+                    os.dup2(saved, 2)
+                    os.close(devnull)
+                    os.close(saved)
 
         try:
             return await asyncio.to_thread(_sync_transcribe)

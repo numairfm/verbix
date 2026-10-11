@@ -156,3 +156,45 @@ def test_open_session_without_segmenter_or_model_raises(monkeypatch, tmp_path):
     stt = SherpaSTT(model_dir=tmp_path / "nonexistent")
     with pytest.raises(RuntimeError, match="fetch_voice_models.py"):
         stt.open_session()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_transcribe_raw_preserves_stderr(monkeypatch, tmp_path):
+    """Multiple parallel transcribe_raw calls must not corrupt process stderr (FD 2)."""
+    import asyncio
+    import os
+    import time
+    from verbix.voice.sherpa_stt import SherpaSTT
+
+    model_dir = _model_dir(tmp_path)
+    fake_stream = MagicMock()
+    fake_stream.result.text = "test"
+    fake_recognizer = MagicMock()
+
+    def slow_decode(stream):
+        time.sleep(0.05)
+
+    fake_recognizer.create_stream.return_value = fake_stream
+    fake_recognizer.decode_stream.side_effect = slow_decode
+
+    fake_module = types.ModuleType("sherpa_onnx")
+    fake_offline_rec = MagicMock()
+    fake_offline_rec.from_nemo_canary.return_value = fake_recognizer
+    fake_module.OfflineRecognizer = fake_offline_rec
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", fake_module)
+
+    stt = SherpaSTT(model_dir=model_dir)
+    audio = np.ones(1600, dtype=np.float32)
+
+    # Initial check: FD 2 points to a valid file/pipe/terminal
+    initial_stat = os.fstat(2)
+
+    # Launch two concurrent decodes
+    t1 = asyncio.create_task(stt.transcribe_raw(audio))
+    t2 = asyncio.create_task(stt.transcribe_raw(audio))
+    await asyncio.gather(t1, t2)
+
+    # After concurrent execution, FD 2 must match initial_stat (not pointing to closed or /dev/null)
+    final_stat = os.fstat(2)
+    assert (initial_stat.st_ino, initial_stat.st_dev) == (final_stat.st_ino, final_stat.st_dev)
+

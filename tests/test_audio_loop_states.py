@@ -1,5 +1,7 @@
 import pytest
+
 from verbix.runtime.floor import FloorArbiter, FloorState
+
 
 def test_floor_states_and_speaker_mute_semantics():
     events = []
@@ -33,10 +35,11 @@ def test_floor_states_and_speaker_mute_semantics():
 @pytest.mark.asyncio
 async def test_pipeline_ptt_mutes_playback_and_transitions_states():
     import asyncio
-    from verbix.voice.pipeline import VoicePipeline
-    from verbix.voice.base import MockAudioSink, MockTextToSpeech
-    from verbix.voice.player import AudioPlayer
+
     from verbix.core.events import TextDelta
+    from verbix.voice.base import MockAudioSink, MockTextToSpeech
+    from verbix.voice.pipeline import VoicePipeline
+    from verbix.voice.player import AudioPlayer
 
     floor_events = []
 
@@ -70,6 +73,7 @@ async def test_pipeline_ptt_mutes_playback_and_transitions_states():
     assert rt.floor.is_listening is True
 
     # Stop recording & execute voice turn: enters SPEAKING, then finishes at IDLE
+    await pipeline.capture.stop_recording()
     await pipeline.execute_voice_turn("User question")
     assert rt.floor.state == FloorState.IDLE
     assert rt.floor.is_idle is True

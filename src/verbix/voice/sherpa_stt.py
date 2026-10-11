@@ -55,10 +55,12 @@ class STTSession:
         decode_fn: Callable[..., Awaitable[str]],
         segmenter: Any,
         sample_rate: int = 16000,
+        on_endpoint: Callable[[], None] | None = None,
     ) -> None:
         self._decode_fn = decode_fn
         self._segmenter = segmenter
         self.sample_rate = sample_rate
+        self.on_endpoint = on_endpoint
         self._segments: list[_Segment] = []
         self._finalized = False
 
@@ -72,8 +74,15 @@ class STTSession:
         if self._finalized or not pcm:
             return
         self._segmenter.feed(pcm)
-        for span in self._segmenter.pop_segments():
+        spans = self._segmenter.pop_segments()
+        for span in spans:
             self._push_segment(span)
+        if spans and self.on_endpoint:
+            try:
+                self.on_endpoint()
+            except Exception as e:  # noqa: BLE001
+                logger.debug("on_endpoint callback error: %s", e)
+
 
     async def finalize(self) -> str:
         """Decodes every speech span and returns the joined text."""
@@ -301,6 +310,7 @@ class SherpaSTT:
     def open_session(
         self,
         sample_rate: int = 16000,
+        on_endpoint: Callable[[], None] | None = None,
     ) -> STTSession:
         """Creates a span-driven incremental session."""
         if sample_rate != 16000:
@@ -316,4 +326,5 @@ class SherpaSTT:
             _decode,
             self._session_segmenter(),
             sample_rate=16000,
+            on_endpoint=on_endpoint,
         )

@@ -118,7 +118,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--voice",
         action="store_true",
-        help="Run in voice mode (Toggle -> Live STT -> Receptionist -> Supertonic TTS audio playback).",
+        help="Run in voice mode (Live STT -> Receptionist -> Supertonic TTS audio playback).",
+    )
+    parser.add_argument(
+        "--voice-mode",
+        choices=("continuous", "ptt"),
+        default="continuous",
+        help="Voice interaction mode (default: continuous — hands-free conversation; ptt — push-to-talk).",
     )
     parser.add_argument(
         "--audio-sink",
@@ -385,14 +391,22 @@ async def async_main(args: argparse.Namespace) -> int:
         printer = CliPrinter(show_thoughts=getattr(args, "show_thoughts", False))
         pipeline, tts, sink = _build_voice_pipeline(runtime, args, printer=printer)
 
+        voice_mode = getattr(args, "voice_mode", "continuous")
         sys.stdout.write(
-            f"verbix voice mode (model: {args.model}, workspace: {runtime.workspace})\n"
+            f"verbix voice mode: {voice_mode} (model: {args.model}, workspace: {runtime.workspace})\n"
         )
-        sys.stdout.write(
-            "Toggle Mode: Press [Enter] to start recording, speak, then press [Enter] to stop.\n"
-            "If audio is playing, [Enter] halts playback and begins recording immediately.\n"
-            "Or type a prompt directly. Type 'exit' or 'quit' to end session.\n\n"
-        )
+        if voice_mode == "ptt":
+            sys.stdout.write(
+                "PTT Mode: Press [Enter] to start recording, speak, then press [Enter] to stop.\n"
+                "If audio is playing, [Enter] halts playback and begins recording immediately.\n"
+                "Or type a prompt directly. Type 'exit' or 'quit' to end session.\n\n"
+            )
+        else:
+            sys.stdout.write(
+                "Continuous Mode: Press [Enter] once to start hands-free session, then speak.\n"
+                "Verbix replies and automatically listens for your next turn.\n"
+                "Press [Enter] again to close session. Type 'exit' or 'quit' to end.\n\n"
+            )
         sys.stdout.flush()
 
         loop = asyncio.get_running_loop()
@@ -410,33 +424,52 @@ async def async_main(args: argparse.Namespace) -> int:
                     break
 
                 if not text:
-                    res = await pipeline.toggle()
-                    state = res.get("action")
-                    if state in ("recording", "interrupted_and_recording"):
-                        if state == "interrupted_and_recording":
-                            sys.stdout.write("[Playback interrupted]\n")
-                        sys.stdout.write(
-                            "[Recording mic... Press Enter when done speaking]\n"
-                        )
-                        sys.stdout.flush()
-                        await loop.run_in_executor(None, drain_stdin)
-                        await loop.run_in_executor(None, sys.stdin.readline)
-                        sys.stdout.write("[Capture stopped. Earcon cue playing...]\n")
-                        sys.stdout.flush()
-                        stop_res = await pipeline.toggle()
-                        transcribed = stop_res.get("transcription", "")
-                        if transcribed:
-                            sys.stdout.write(f"[User spoke]: {transcribed}\n")
+                    if voice_mode == "continuous":
+                        if pipeline.is_continuous_active:
+                            await pipeline.stop_continuous_session()
+                            sys.stdout.write("[Session closed. Mic idle.]\n")
+                            sys.stdout.flush()
                         else:
-                            detail = stop_res.get("detail", "")
-                            msg = "[No speech detected or audio too short]"
-                            if detail:
-                                msg += f" ({detail})"
-                            sys.stdout.write(msg + "\n")
-                        sys.stdout.flush()
-                        active_task = getattr(pipeline, "_active_voice_task", None)
-                        if active_task:
-                            active_task.add_done_callback(_note_turn_failed)
+                            was_playing = (
+                                pipeline.turn_output.is_playing
+                                or not pipeline.runtime.is_idle
+                            )
+                            await pipeline.start_continuous_session()
+                            if was_playing:
+                                sys.stdout.write("[Playback interrupted]\n")
+                            sys.stdout.write(
+                                "[Continuous session open... Speak freely. Press Enter to end session.]\n"
+                            )
+                            sys.stdout.flush()
+
+                    else:
+                        res = await pipeline.toggle()
+                        state = res.get("action")
+                        if state in ("recording", "interrupted_and_recording"):
+                            if state == "interrupted_and_recording":
+                                sys.stdout.write("[Playback interrupted]\n")
+                            sys.stdout.write(
+                                "[Recording mic... Press Enter when done speaking]\n"
+                            )
+                            sys.stdout.flush()
+                            await loop.run_in_executor(None, drain_stdin)
+                            await loop.run_in_executor(None, sys.stdin.readline)
+                            sys.stdout.write("[Capture stopped. Earcon cue playing...]\n")
+                            sys.stdout.flush()
+                            stop_res = await pipeline.toggle()
+                            transcribed = stop_res.get("transcription", "")
+                            if transcribed:
+                                sys.stdout.write(f"[User spoke]: {transcribed}\n")
+                            else:
+                                detail = stop_res.get("detail", "")
+                                msg = "[No speech detected or audio too short]"
+                                if detail:
+                                    msg += f" ({detail})"
+                                sys.stdout.write(msg + "\n")
+                            sys.stdout.flush()
+                            active_task = getattr(pipeline, "_active_voice_task", None)
+                            if active_task:
+                                active_task.add_done_callback(_note_turn_failed)
                 else:
                     live = getattr(pipeline, "_active_voice_task", None)
                     if live is not None and not live.done():
@@ -452,6 +485,8 @@ async def async_main(args: argparse.Namespace) -> int:
         except (KeyboardInterrupt, asyncio.CancelledError):
             sys.stdout.write("\n")
         finally:
+            if getattr(pipeline, "is_continuous_active", False):
+                await pipeline.stop_continuous_session()
             live = getattr(pipeline, "_active_voice_task", None)
             if live is not None and not live.done():
                 live.cancel()

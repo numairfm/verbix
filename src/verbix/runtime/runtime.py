@@ -202,6 +202,7 @@ class Runtime:
                 if output and getattr(output, "is_playing", False):
                     while output.is_playing:
                         await asyncio.sleep(0.02)
+                    await asyncio.sleep(0.15)
             finally:
                 self._turn_handle.task = None
         return final_text

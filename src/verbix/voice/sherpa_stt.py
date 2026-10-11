@@ -55,14 +55,10 @@ class STTSession:
         decode_fn: Callable[..., Awaitable[str]],
         segmenter: Any,
         sample_rate: int = 16000,
-        on_partial: Callable[[str], Any] | None = None,
-        on_endpoint: Callable[[str], Any] | None = None,
     ) -> None:
         self._decode_fn = decode_fn
         self._segmenter = segmenter
         self.sample_rate = sample_rate
-        self.on_partial = on_partial
-        self.on_endpoint = on_endpoint
         self._segments: list[_Segment] = []
         self._finalized = False
 
@@ -96,7 +92,6 @@ class STTSession:
                         raise
             if seg.text is None:
                 seg.text = await self._decode_once(seg.pcm)
-                self._fire_callbacks(seg)
         return self.committed_text
 
     def cancel(self) -> None:
@@ -130,64 +125,10 @@ class STTSession:
         except Exception as e:  # noqa: BLE001
             logger.debug("Segment decode error, will retry at finalize: %s", e)
             return
-        self._fire_callbacks(seg)
 
     async def _decode_once(self, pcm: bytes) -> str:
         text = await self._decode_fn(pcm, prompt="")
         return text.strip() if text else ""
-
-    def _fire_callbacks(self, seg: _Segment) -> None:
-        try:
-            if seg.text and self.on_endpoint is not None:
-                self.on_endpoint(seg.text)
-            if self.on_partial is not None:
-                self.on_partial(self.committed_text)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("STT callback error: %s", e)
-
-
-class SegmentCommittedSTT:
-    """Session factory producing span-driven `STTSession`s."""
-
-    def __init__(
-        self,
-        decode_fn: Callable[..., Awaitable[str]] | None = None,
-        sample_rate: int = 16000,
-        stt: SherpaSTT | None = None,
-        segmenter: Any | None = None,
-    ) -> None:
-        self.sample_rate = sample_rate
-        if decode_fn is None:
-            stt_obj = stt if stt is not None else SherpaSTT()
-
-            async def _default_decode(pcm: bytes, prompt: str = "") -> str:
-                audio_float = (
-                    np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-                )
-                return await stt_obj.transcribe_raw(audio_float)
-
-            decode_fn = _default_decode
-        self._decode_fn = decode_fn
-        self._segmenter = segmenter
-
-    def open_session(
-        self,
-        sample_rate: int | None = None,
-        on_partial: Callable[[str], Any] | None = None,
-        on_endpoint: Callable[[str], Any] | None = None,
-    ) -> STTSession:
-        if self._segmenter is None:
-            raise RuntimeError(
-                "Session factory has no segmenter: pass segmenter= explicitly "
-                "(SherpaSTT.open_session always supplies one)."
-            )
-        return STTSession(
-            self._decode_fn,
-            self._segmenter,
-            sample_rate=sample_rate or self.sample_rate,
-            on_partial=on_partial,
-            on_endpoint=on_endpoint,
-        )
 
 
 class SherpaSTT:
@@ -293,16 +234,8 @@ class SherpaSTT:
         if audio_int.size == 0 or not np.any(audio_int):
             return ""
 
-        # Resample to 16 kHz if needed
-        if sample_rate != 16000 and len(audio_int) > 0:
-            audio_float = audio_int.astype(np.float32) / 32768.0
-            n_target = int(len(audio_float) * 16000 / sample_rate)
-            audio_float = np.interp(
-                np.linspace(0, len(audio_float) - 1, n_target),
-                np.arange(len(audio_float)),
-                audio_float,
-            ).astype(np.float32)
-            audio_data = (np.clip(audio_float, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+        if sample_rate != 16000:
+            raise ValueError(f"SherpaSTT requires 16000 Hz audio, got {sample_rate} Hz.")
 
         async def _decode(pcm: bytes, prompt: str = "") -> str:
             audio_float = (
@@ -368,10 +301,19 @@ class SherpaSTT:
     def open_session(
         self,
         sample_rate: int = 16000,
-        on_partial: Callable[[str], Any] | None = None,
-        on_endpoint: Callable[[str], Any] | None = None,
     ) -> STTSession:
         """Creates a span-driven incremental session."""
-        return SegmentCommittedSTT(
-            stt=self, sample_rate=sample_rate, segmenter=self._session_segmenter()
-        ).open_session(on_partial=on_partial, on_endpoint=on_endpoint)
+        if sample_rate != 16000:
+            raise ValueError(f"SherpaSTT requires 16000 Hz audio, got {sample_rate} Hz.")
+
+        async def _decode(pcm: bytes, prompt: str = "") -> str:
+            audio_float = (
+                np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+            )
+            return await self.transcribe_raw(audio_float)
+
+        return STTSession(
+            _decode,
+            self._session_segmenter(),
+            sample_rate=16000,
+        )

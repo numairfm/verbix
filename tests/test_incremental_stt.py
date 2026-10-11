@@ -5,7 +5,7 @@ import asyncio
 import numpy as np
 import pytest
 
-from verbix.voice.sherpa_stt import SegmentCommittedSTT, STTSession
+from verbix.voice.sherpa_stt import STTSession
 
 
 class FakeSegmenter:
@@ -148,42 +148,7 @@ async def test_cancel_abandons_pending_decodes():
     assert started == [loud]  # task began, never completed into text
 
 
-@pytest.mark.asyncio
-async def test_endpoint_callbacks_fire_per_span():
-    endpoints = []
-    partials = []
 
-    async def fake_decode(pcm, prompt=""):
-        return "seg"
-
-    seg = FakeSegmenter(scripts=[[b"a" * 6400], [b"b" * 6400]])
-    sess = STTSession(
-        fake_decode,
-        seg,
-        on_partial=lambda t: partials.append(t),
-        on_endpoint=lambda t: endpoints.append(t),
-    )
-    sess.feed(b"\x01\x02" * 320)
-    await sess.finalize()
-    assert endpoints == ["seg", "seg"]
-    assert partials[-1] == "seg seg"
-
-
-def test_factory_builds_sessions_with_segmenter():
-    async def fake_decode(pcm, prompt=""):
-        return "x"
-
-    seg = FakeSegmenter()
-    stt = SegmentCommittedSTT(decode_fn=fake_decode, segmenter=seg)
-    sess = stt.open_session()
-    assert isinstance(sess, STTSession)
-    assert sess._segmenter is seg
-
-
-def test_factory_without_segmenter_raises_loudly():
-    stt = SegmentCommittedSTT(decode_fn=lambda pcm, prompt="": "")
-    with pytest.raises(RuntimeError, match="segmenter"):
-        stt.open_session()
 
 
 @pytest.mark.asyncio

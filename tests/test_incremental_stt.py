@@ -104,3 +104,24 @@ async def test_blip_turn_finalizes_empty():
     now[0] += 0.3
     sess.feed(b"\x00\x00" * 320)
     assert await sess.finalize() == ""
+
+
+@pytest.mark.asyncio
+async def test_sub_80ms_segment_never_decodes():
+    """Mic-open pops and breaths commit alone and must not reach the decoder."""
+    import numpy as np
+
+    calls = []
+    async def fake_decode(pcm, prompt=""):
+        calls.append(pcm)
+        return "."
+    now = [0.0]
+    stt = SegmentCommittedSTT(decode_fn=fake_decode, vad_fn=lambda pcm: any(pcm), clock=lambda: now[0])
+    sess = stt.open_session()
+    rng = np.random.default_rng(3)
+    pop = (rng.normal(0, 9000, 960)).astype(np.int16).tobytes()  # 60 ms loud pop
+    sess.feed(pop)
+    now[0] += 0.3
+    sess.feed(b"\x00\x00" * 320)
+    assert await sess.finalize() == ""
+    assert calls == []

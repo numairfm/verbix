@@ -35,6 +35,10 @@ def _resolve_threads() -> int:
 
 _VOICED_FRAME_S = 0.032
 _MIN_VOICED_S = 0.16
+# Committed segments shorter than this are device transients (mic-open pop),
+# breaths, or clicks — never words. Dropped at commit time so they never
+# decode, instead of filtering their text after the fact.
+_MIN_COMMIT_S = 0.08
 _VOICED_RMS = 500.0
 
 
@@ -160,7 +164,8 @@ class STTSession:
         if self._buf:
             tail = bytes(self._buf)
             self._buf.clear()
-            text = await self._decode_once(tail)
+            min_bytes = int(self.sample_rate * _MIN_COMMIT_S) * 2
+            text = await self._decode_once(tail) if len(tail) >= min_bytes else ""
             if text:
                 seg = _Segment(tail)
                 seg.text = text
@@ -224,6 +229,9 @@ class STTSession:
     def _push_segment(self, pcm: bytes) -> None:
         if not pcm:
             return
+        min_bytes = int(self.sample_rate * _MIN_COMMIT_S) * 2
+        if len(pcm) < min_bytes:
+            return  # sub-80 ms transient: breath, click, mic-open pop
         seg = _Segment(pcm)
         self._segments.append(seg)
         seg.task = self._spawn_decode(seg)
@@ -483,6 +491,11 @@ class SherpaSTT:
         fragment real speech into sub-threshold pieces. One-shot callers use
         transcribe(), which gates the full buffer as the full turn.
         """
+        # The encoder's frontend needs a minimum frame count; anything shorter
+        # raises ConvInteger {0,128} inside ORT. Skip silently — a sub-10 ms
+        # span carries no word in any language.
+        if audio_float.size < 160:
+            return ""
         if not self.is_loaded:
             await self.load()
 

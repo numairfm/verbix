@@ -123,6 +123,9 @@ class SileroSegmenter:
         if speech, or not at all.
         """
         det = self._require()
+        if len(self._pending) > 0:
+            padded = np.pad(self._pending, (0, WINDOW - len(self._pending)))
+            det.accept_waveform(padded)
         det.flush()
         self._pending = np.zeros(0, dtype=np.float32)
         return self._drain()

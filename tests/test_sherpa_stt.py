@@ -89,8 +89,8 @@ def test_transcribe_silence_returns_empty_without_model(monkeypatch, tmp_path):
     fake_offline_rec.from_nemo_canary.assert_not_called()
 
 
-def test_blip_span_dies_at_turn_gate(monkeypatch, tmp_path):
-    """A sub-threshold span decodes to nothing: the turn gate, not the model."""
+def test_blip_without_spans_never_reaches_model(monkeypatch, tmp_path):
+    """A transient that yields no speech spans never invokes the recognizer."""
     from verbix.voice.sherpa_stt import SherpaSTT
 
     model_dir = _model_dir(tmp_path)
@@ -98,7 +98,7 @@ def test_blip_span_dies_at_turn_gate(monkeypatch, tmp_path):
 
     rng = np.random.default_rng(0)
     blip = (rng.normal(0, 4000, 1600)).astype(np.int16).tobytes()  # 100 ms
-    stt = SherpaSTT(model_dir=model_dir, segmenter=FakeSegmenter(scripts=[[blip]]))
+    stt = SherpaSTT(model_dir=model_dir, segmenter=FakeSegmenter(scripts=[[]]))
 
     import asyncio
     assert asyncio.run(stt.transcribe(blip)) == ""

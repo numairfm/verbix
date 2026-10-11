@@ -29,30 +29,6 @@ def _resolve_threads() -> int:
     return min(4, max(1, n))
 
 
-_VOICED_FRAME_S = 0.032
-_MIN_VOICED_S = 0.16
-_VOICED_RMS = 500.0
-
-
-def _has_min_voiced_duration(audio_float: np.ndarray, sample_rate: int = 16000) -> bool:
-    """True when at least _MIN_VOICED_S of audio sits above the voicing floor.
-
-    Frame-level energy, not whole-clip RMS: a 100 ms click inside a second of
-    quiet passes an average-energy gate and decodes as "." — per-frame voicing
-    rejects it. Reads signal only, never words.
-    """
-    frame_len = int(sample_rate * _VOICED_FRAME_S)
-    if audio_float.size < frame_len:
-        return False
-    n_full = len(audio_float) // frame_len
-    voiced = 0
-    for i in range(n_full):
-        frame = audio_float[i * frame_len : (i + 1) * frame_len]
-        if np.sqrt(float(np.mean(frame**2)) * 32768.0**2) >= _VOICED_RMS:
-            voiced += 1
-    return voiced * _VOICED_FRAME_S >= _MIN_VOICED_S
-
-
 class _Segment:
     """One committed audio span; its bytes are decoded exactly once."""
 
@@ -110,15 +86,6 @@ class STTSession:
         self._finalized = True
         for span in self._segmenter.flush():
             self._push_segment(span)
-        whole = b"".join(seg.pcm for seg in self._segments)
-        if whole:
-            audio_float = np.frombuffer(whole, dtype=np.int16).astype(np.float32) / 32768.0
-            if not _has_min_voiced_duration(audio_float, self.sample_rate):
-                for seg in self._segments:
-                    if seg.task is not None and not seg.task.done():
-                        seg.task.cancel()
-                self._segments.clear()
-                return ""
         for seg in self._segments:
             if seg.text is None and seg.task is not None:
                 try:

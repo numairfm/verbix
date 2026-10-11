@@ -88,8 +88,7 @@ async def test_flush_spans_decode_at_finalize():
 
 @pytest.mark.asyncio
 async def test_blip_turn_finalizes_empty():
-    """A turn whose spans total under ~160 ms voiced returns ''."""
-
+    """A transient that yields no spans returns ''."""
     calls = []
 
     async def fake_decode(pcm, prompt=""):
@@ -98,10 +97,11 @@ async def test_blip_turn_finalizes_empty():
 
     rng = np.random.default_rng(2)
     blip = (rng.normal(0, 4000, 1600)).astype(np.int16).tobytes()  # 100 ms
-    seg = FakeSegmenter(scripts=[[blip]])
+    seg = FakeSegmenter(scripts=[[]])
     sess = STTSession(fake_decode, seg)
     sess.feed(blip)
     assert await sess.finalize() == ""
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -187,19 +187,17 @@ def test_factory_without_segmenter_raises_loudly():
 
 
 @pytest.mark.asyncio
-async def test_gate_rejection_clears_committed_text():
-    """When the turn gate rejects audio, committed_text must be empty and stay empty."""
+async def test_empty_spans_yields_empty_committed_text():
+    """When the segmenter yields no spans, committed_text must be empty and stay empty."""
     rng = np.random.default_rng(2)
     blip = (rng.normal(0, 4000, 1600)).astype(np.int16).tobytes()  # 100 ms
 
     async def fake_decode(pcm, prompt=""):
         return "blip"
 
-    seg = FakeSegmenter(scripts=[[blip]])
+    seg = FakeSegmenter(scripts=[[]])
     sess = STTSession(fake_decode, seg)
-    # Feed and let eager decode complete
     sess.feed(blip)
-    await asyncio.sleep(0.01)
 
     # First finalize returns ""
     assert await sess.finalize() == ""

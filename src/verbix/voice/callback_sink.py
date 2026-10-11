@@ -54,10 +54,8 @@ class CallbackAudioSink:
         try:
             import sounddevice as sd
         except (ImportError, OSError) as e:
-            raise ImportError(
-                "CallbackAudioSink needs the optional 'audio' extra: "
-                "pip install verbix[audio]"
-            ) from e
+            raise RuntimeError(f"sounddevice audio library unavailable: {e}") from e
+
         self.sample_rate = sample_rate
         self.channels = channels
         self.audio_format = audio_format.lower()

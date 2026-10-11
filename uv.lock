@@ -2025,12 +2025,8 @@ dependencies = [
     { name = "pyyaml" },
     { name = "sherpa-onnx" },
     { name = "sherpa-onnx-core" },
-    { name = "tenacity" },
-]
-
-[package.optional-dependencies]
-audio = [
     { name = "sounddevice" },
+    { name = "tenacity" },
 ]
 
 [package.dev-dependencies]
@@ -2053,10 +2049,9 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sherpa-onnx", specifier = ">=1.12.0" },
     { name = "sherpa-onnx-core", specifier = ">=1.12.0" },
-    { name = "sounddevice", marker = "extra == 'audio'", specifier = ">=0.5.6" },
+    { name = "sounddevice", specifier = ">=0.5.6" },
     { name = "tenacity", specifier = ">=9.0.0" },
 ]
-provides-extras = ["audio"]
 
 [package.metadata.requires-dev]
 dev = [

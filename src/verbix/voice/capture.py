@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-import shutil
 from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def _condition_s16le(
 
 
 class PTTCapture:
-    """Push-to-Talk audio recording controller using native system capture (pw-record or arecord)."""
+    """Push-to-Talk audio recording controller using sounddevice."""
 
     def __init__(
         self,
@@ -61,17 +61,12 @@ class PTTCapture:
         self.sample_rate = sample_rate
         self.channels = channels
         self.on_chunk = on_chunk
-        self._current_proc: asyncio.subprocess.Process | None = None
+        self._stream: Any = None
+        self._is_recording: bool = False
+        self._queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._reader_task: asyncio.Task[bytes] | None = None
         self._hp_state: tuple[float, float | None] = (0.0, None)  # one-pole drift memory
-        self._backend = self._detect_backend()
-
-    def _detect_backend(self) -> str | None:
-        if shutil.which("pw-record"):
-            return "pw-record"
-        if shutil.which("arecord"):
-            return "arecord"
-        return None
 
     @property
     def frame_bytes(self) -> int:
@@ -80,56 +75,46 @@ class PTTCapture:
 
     @property
     def is_recording(self) -> bool:
-        return self._current_proc is not None and self._current_proc.returncode is None
+        return self._is_recording
 
     async def start_recording(self) -> None:
         """Starts recording audio from default input source into memory."""
         if self.is_recording:
             return
-        # One drift memory per session: cold at the start of a recording, so no
-        # drift leaks in from the utterance before it.
         self._hp_state = (0.0, None)
+        self._loop = asyncio.get_running_loop()
+        self._queue = asyncio.Queue()
+        self._is_recording = True
 
-        if not self._backend:
-            logger.warning("No audio recording backend found (pw-record or arecord).")
+        import sounddevice as sd
+
+        def _audio_callback(indata: bytes, frames: int, time_info: Any, status: Any) -> None:
+            if status:
+                logger.debug("sounddevice capture status: %s", status)
+            if self._loop and self._loop.is_running() and self._is_recording:
+                self._loop.call_soon_threadsafe(self._queue.put_nowait, bytes(indata))
+
+        blocksize = self.sample_rate // 50  # 20ms frames
+        try:
+            stream = sd.RawInputStream(
+                samplerate=self.sample_rate,
+                blocksize=blocksize,
+                channels=self.channels,
+                dtype="int16",
+                callback=_audio_callback,
+            )
+            stream.start()
+            self._stream = stream
+        except (OSError, RuntimeError) as e:
+            logger.warning("Failed to open sounddevice RawInputStream: %s", e)
+            self._is_recording = False
             return
-
-        cmd: list[str] = []
-        if self._backend == "pw-record":
-            cmd = [
-                "pw-record",
-                "--rate",
-                str(self.sample_rate),
-                "--channels",
-                str(self.channels),
-                "-",
-            ]
-        elif self._backend == "arecord":
-            cmd = [
-                "arecord",
-                "-q",
-                "-r",
-                str(self.sample_rate),
-                "-c",
-                str(self.channels),
-                "-f",
-                "S16_LE",
-                "-",
-            ]
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        self._current_proc = proc
 
         async def _read_stream() -> bytes:
             buf = bytearray()
-            assert proc.stdout is not None
             while True:
-                chunk = await proc.stdout.read(self.frame_bytes)
-                if not chunk:
+                chunk = await self._queue.get()
+                if chunk is None:
                     break
                 chunk = self._condition_chunk(chunk)
                 buf.extend(chunk)
@@ -143,25 +128,29 @@ class PTTCapture:
         self._reader_task = asyncio.create_task(_read_stream())
 
     def _condition_chunk(self, chunk: bytes) -> bytes:
-        """The one seam every captured chunk crosses: DC-bias and baseline-drift
-        conditioning with the session's single filter state, so `on_chunk` sees
-        the same bytes `stop_recording` returns — the bytes the VAD gate scores."""
+        """DC-bias and baseline-drift conditioning with session filter state."""
         chunk, self._hp_state = _condition_s16le(chunk, self.sample_rate, self._hp_state)
         return chunk
 
     async def stop_recording(self) -> bytes:
         """Stops recording and returns accumulated raw PCM bytes."""
-        if not self._current_proc:
+        if not self._is_recording:
             return b""
 
-        proc = self._current_proc
-        self._current_proc = None
+        self._is_recording = False
+        stream = self._stream
+        self._stream = None
 
-        if proc.returncode is None:
+        if stream:
             try:
-                proc.terminate()
-            except ProcessLookupError:
-                pass
+                stream.stop()
+                stream.close()
+            except (OSError, RuntimeError) as e:
+                logger.debug("Error closing sounddevice stream: %s", e)
+
+
+        # Signal queue termination
+        self._queue.put_nowait(None)
 
         audio_bytes = b""
         if self._reader_task:
@@ -171,9 +160,5 @@ class PTTCapture:
                 pass
             self._reader_task = None
 
-        try:
-            await proc.wait()
-        except asyncio.CancelledError:
-            pass
-
         return audio_bytes
+

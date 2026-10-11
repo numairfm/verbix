@@ -28,6 +28,9 @@ def _condition_s16le(
         return data, state
     import numpy as np
 
+    data = data[: len(data) - (len(data) % 2)]
+    if not data:
+        return data, state
     x = np.frombuffer(data, dtype=np.int16).astype(np.float64)
     x -= x.mean()
     # ponytail: one-pole high-pass, fixed 60 Hz corner, per-chunk python loop

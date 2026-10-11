@@ -198,3 +198,15 @@ async def test_concurrent_transcribe_raw_preserves_stderr(monkeypatch, tmp_path)
     final_stat = os.fstat(2)
     assert (initial_stat.st_ino, initial_stat.st_dev) == (final_stat.st_ino, final_stat.st_dev)
 
+
+@pytest.mark.asyncio
+async def test_transcribe_handles_odd_bytes(tmp_path):
+    """transcribe() must not raise ValueError when given odd-length bytes."""
+    from verbix.voice.sherpa_stt import SherpaSTT
+    stt = SherpaSTT(model_dir=tmp_path)
+    odd_data = b"\x01" * 641  # 641 bytes (odd length, > 320 threshold)
+    # Should safely truncate to 640 and process (without ValueError)
+    res = await stt.transcribe(odd_data)
+    assert isinstance(res, str)
+
+

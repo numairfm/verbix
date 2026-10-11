@@ -325,6 +325,7 @@ class SherpaSTT:
         if not audio_data or len(audio_data) < 320:
             return ""
 
+        audio_data = audio_data[: len(audio_data) - (len(audio_data) % 2)]
         audio_int = np.frombuffer(audio_data, dtype=np.int16)
         if audio_int.size == 0 or not np.any(audio_int):
             return ""

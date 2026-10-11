@@ -40,6 +40,13 @@ def test_conditioning_keeps_silence_silent():
     assert out.count(0) == len(out)
 
 
+def test_condition_handles_odd_bytes():
+    """An odd-length byte chunk must not raise ValueError in frombuffer."""
+    odd_data = b"\x00\x01\x02\x03\x04"
+    out, _ = _condition_s16le(odd_data, 16000, (0.0, None))
+    assert len(out) == 4  # Truncated to even bytes and processed
+
+
 @pytest.mark.asyncio
 async def test_on_chunk_cleared_on_session_end():
     capture = PTTCapture()

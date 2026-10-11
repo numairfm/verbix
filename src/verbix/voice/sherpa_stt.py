@@ -34,7 +34,7 @@ def _resolve_threads() -> int:
 
 
 _VOICED_FRAME_S = 0.032
-_MIN_VOICED_S = 0.25
+_MIN_VOICED_S = 0.16
 _VOICED_RMS = 500.0
 
 
@@ -136,6 +136,18 @@ class STTSession:
         if self._watchdog_task is not None:
             self._watchdog_task.cancel()
             self._watchdog_task = None
+        # Turn-level voiced gate: the session already drops silence per chunk,
+        # so judge the whole turn once here instead of per segment. A blip turn
+        # (all fragments short) returns "" even if eager decodes already ran.
+        whole = b"".join(seg.pcm for seg in self._segments) + bytes(self._buf)
+        if whole:
+            audio_float = np.frombuffer(whole, dtype=np.int16).astype(np.float32) / 32768.0
+            if not _has_min_voiced_duration(audio_float, self.sample_rate):
+                for seg in self._segments:
+                    if seg.task is not None and not seg.task.done():
+                        seg.task.cancel()
+                self._buf.clear()
+                return ""
         for seg in self._segments:
             if seg.text is None and seg.task is not None:
                 try:
@@ -288,9 +300,10 @@ class SegmentCommittedSTT:
             stt_obj = stt if stt is not None else SherpaSTT()
 
             async def _default_decode(pcm: bytes, prompt: str = "") -> str:
-                return await stt_obj.transcribe(
-                    pcm, sample_rate=sample_rate, initial_prompt=prompt or None
+                audio_float = (
+                    np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
                 )
+                return await stt_obj.transcribe_raw(audio_float)
 
             decode_fn = _default_decode
         self._decode_fn = decode_fn
@@ -425,10 +438,11 @@ class SherpaSTT:
         if rms < 200.0:
             return ""
 
-        # Voiced-duration gate: require at least 250 ms of above-threshold
-        # 32 ms frames before decoding. Short noise blips pass the RMS gate
-        # on average energy alone and come back as "." or single chars; real
-        # utterances — including short answers — sustain voicing longer.
+        # Voiced-duration gate (~120 ms of above-threshold 32 ms frames).
+        # Short noise blips pass the RMS gate on average energy alone and come
+        # back as "." or single chars; real utterances sustain voicing longer.
+        # NOTE: the live session judges the whole turn at finalize() instead;
+        # this gate covers one-shot callers whose buffer is the full turn.
         if not _has_min_voiced_duration(audio_float):
             return ""
 
@@ -454,6 +468,39 @@ class SherpaSTT:
                 os.close(devnull)
                 os.close(saved)
             return res
+
+        try:
+            return await asyncio.to_thread(_sync_transcribe)
+        except (RuntimeError, OSError, ValueError) as e:
+            logger.warning("SherpaSTT transcription error: %s", e)
+            return ""
+
+    async def transcribe_raw(self, audio_float: np.ndarray) -> str:
+        """Model-only decode of 16 kHz float32 mono, no gates.
+
+        For the live session: its chunks already passed the per-chunk VAD and
+        the turn is judged once at finalize(), so re-gating per segment would
+        fragment real speech into sub-threshold pieces. One-shot callers use
+        transcribe(), which gates the full buffer as the full turn.
+        """
+        if not self.is_loaded:
+            await self.load()
+
+        def _sync_transcribe() -> str:
+            import os
+
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            saved = os.dup(2)
+            try:
+                os.dup2(devnull, 2)
+                stream = self._recognizer.create_stream()
+                stream.accept_waveform(16000, audio_float)
+                self._recognizer.decode_stream(stream)
+                return stream.result.text.strip()
+            finally:
+                os.dup2(saved, 2)
+                os.close(devnull)
+                os.close(saved)
 
         try:
             return await asyncio.to_thread(_sync_transcribe)

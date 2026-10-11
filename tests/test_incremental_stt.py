@@ -59,3 +59,48 @@ async def test_20ms_capture_chunks_still_pause_commit():
     sess.feed(b"\x00\x00" * 320)
     assert await sess.finalize() == "hello"
     assert len(calls) == 1 and calls[0] == chunk * 20
+
+
+@pytest.mark.asyncio
+async def test_fragmented_speech_passes_turn_gate():
+    """Speech split across pause-committed fragments still finalizes: the gate
+    judges the whole turn, not each fragment."""
+    import numpy as np
+
+    calls = []
+    async def fake_decode(pcm, prompt=""):
+        calls.append(pcm)
+        return "frag"
+    now = [0.0]
+    stt = SegmentCommittedSTT(decode_fn=fake_decode, vad_fn=lambda pcm: any(pcm), clock=lambda: now[0])
+    sess = stt.open_session()
+    rng = np.random.default_rng(1)
+    # Two 300 ms loud fragments separated by a committing pause
+    for _ in range(2):
+        frag = (rng.normal(0, 4000, 4800)).astype(np.int16).tobytes()
+        for i in range(0, len(frag), 640):
+            sess.feed(frag[i:i + 640])
+        now[0] += 0.3
+        sess.feed(b"\x00\x00" * 320)
+    text = await sess.finalize()
+    assert "frag" in text
+
+
+@pytest.mark.asyncio
+async def test_blip_turn_finalizes_empty():
+    """A turn of only short blips returns '' at finalize: sub-threshold total."""
+    import numpy as np
+
+    calls = []
+    async def fake_decode(pcm, prompt=""):
+        calls.append(pcm)
+        return "blip"
+    now = [0.0]
+    stt = SegmentCommittedSTT(decode_fn=fake_decode, vad_fn=lambda pcm: any(pcm), clock=lambda: now[0])
+    sess = stt.open_session()
+    rng = np.random.default_rng(2)
+    blip = (rng.normal(0, 4000, 1600)).astype(np.int16).tobytes()  # 100 ms
+    sess.feed(blip)
+    now[0] += 0.3
+    sess.feed(b"\x00\x00" * 320)
+    assert await sess.finalize() == ""

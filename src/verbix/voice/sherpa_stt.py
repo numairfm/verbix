@@ -120,13 +120,16 @@ class STTSession:
                 for seg in self._segments:
                     if seg.task is not None and not seg.task.done():
                         seg.task.cancel()
+                self._segments.clear()
                 return ""
         for seg in self._segments:
             if seg.text is None and seg.task is not None:
                 try:
                     await seg.task
                 except asyncio.CancelledError:
-                    pass
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling():
+                        raise
             if seg.text is None:
                 seg.text = await self._decode_once(seg.pcm)
                 self._fire_callbacks(seg)

@@ -184,3 +184,46 @@ def test_factory_without_segmenter_raises_loudly():
     stt = SegmentCommittedSTT(decode_fn=lambda pcm, prompt="": "")
     with pytest.raises(RuntimeError, match="segmenter"):
         stt.open_session()
+
+
+@pytest.mark.asyncio
+async def test_gate_rejection_clears_committed_text():
+    """When the turn gate rejects audio, committed_text must be empty and stay empty."""
+    rng = np.random.default_rng(2)
+    blip = (rng.normal(0, 4000, 1600)).astype(np.int16).tobytes()  # 100 ms
+
+    async def fake_decode(pcm, prompt=""):
+        return "blip"
+
+    seg = FakeSegmenter(scripts=[[blip]])
+    sess = STTSession(fake_decode, seg)
+    # Feed and let eager decode complete
+    sess.feed(blip)
+    await asyncio.sleep(0.01)
+
+    # First finalize returns ""
+    assert await sess.finalize() == ""
+    # committed_text property must be empty
+    assert sess.committed_text == ""
+    # Subsequent finalize must also return ""
+    assert await sess.finalize() == ""
+
+
+@pytest.mark.asyncio
+async def test_finalize_cancellation_propagates():
+    """If finalize task itself is cancelled, CancelledError must propagate."""
+    async def slow_decode(pcm, prompt=""):
+        await asyncio.sleep(10)
+        return "slow"
+
+    seg = FakeSegmenter(scripts=[[b"a" * 6400]])
+    sess = STTSession(slow_decode, seg)
+    sess.feed(b"\x01\x02" * 320)
+
+    task = asyncio.create_task(sess.finalize())
+    await asyncio.sleep(0.01)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+

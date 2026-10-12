@@ -106,13 +106,14 @@ async def drain_pending_announcements(runtime: Any) -> None:
         batch = list(runtime._pending_announcements)
         runtime._pending_announcements.clear()
 
-        items = [f"- Task '{tid}': {res.strip()}" for tid, res in batch if res.strip()]
+        items = [res.strip() for _, res in batch if res.strip()]
         if not items:
             return
         prompt = (
             f"{runtime._request_grounding()}\n"
-            "[Background task update. In one brief, natural conversational prose sentence, "
-            "inform the user of these completed results:]\n" + "\n".join(items)
+            "[Present these completed findings directly to the user. "
+            "State the outcome clearly, then invite their next instruction:]\n"
+            + "\n\n".join(items)
         )
         final_text = await runtime.submit(prompt, runtime.wake_output, agent=runtime.announcer)
         if final_text and runtime.on_wake:
@@ -123,13 +124,14 @@ async def drain_pending_announcements(runtime: Any) -> None:
 
 async def speak_batch(runtime: Any, batch: list[tuple[str, str]]) -> bool:
     """Synthesizes background worker results via dedicated announcer and delivers to output."""
-    items = [f"- {task_id}: {result.strip()}" for task_id, result in batch if result.strip()]
+    items = [result.strip() for _, result in batch if result.strip()]
     if not items:
         return False
     wake_prompt = (
         f"{runtime._request_grounding()}\n"
-        "[Background task completion update. Announce the completed results directly to the user in spoken conversational prose:]\n"
-        + "\n".join(items)
+        "[Present these completed findings directly to the user in spoken conversational prose. "
+        "State the outcome clearly, then invite their next instruction:]\n"
+        + "\n\n".join(items)
     )
     final_text = ""
     fan_out = WakeOutputFanOut(runtime.wake_output, runtime._broadcast_wake_event)

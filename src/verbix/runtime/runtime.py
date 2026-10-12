@@ -62,6 +62,9 @@ class TurnHandle:
     task: asyncio.Task[Any] | None = None
     kind: str = "foreground"
     delivered_text_provider: Callable[[], str] | None = None
+    turn_id: int = 0
+    repaired: bool = False
+    completed: bool = False
 
     def delivered_text(self) -> str:
         if self.delivered_text_provider is None:
@@ -151,48 +154,94 @@ class Runtime:
             base = base.rstrip() + f"\n\n# CUSTOM USER INSTRUCTIONS\n{self._custom_prompt}"
         return base
 
-    def _request_grounding(self) -> str:
+    def _request_grounding(self, interruption: Any = None) -> str:
         """Volatile per-request grounding, prepended to the user message only."""
         now_str = datetime.now().astimezone().strftime("%A, %B %d, %Y, %I:%M %p")
-        return f"[Current local date and time: {now_str}.]"
+        envelope = [f"[Current local date and time: {now_str}.]"]
+        if interruption is not None:
+            confirmed_heard = (
+                getattr(interruption, "confirmed_heard", "")
+                or getattr(interruption, "heard_text", "")
+            )
+            interrupted_sentence = getattr(interruption, "interrupted_sentence", "")
+            unplayed_text = (
+                getattr(interruption, "unplayed_text", "")
+                or getattr(interruption, "unspoken_draft", "")
+            )
 
-    async def step(self, user_text: str | None = None) -> AsyncIterator[AgentEvent]:
+            envelope.append("[Floor context: Your previous turn was interrupted while speaking.]")
+            envelope.append(f'- Text confirmed as fully played: "{confirmed_heard or "(None)"}"')
+            envelope.append(
+                f'- Sentence interrupted mid-playback (partially audible before cut-off): "{interrupted_sentence or "(None)"}"'
+            )
+            envelope.append(
+                f'- Subsequent text that had not yet started playing (discarded unless the user explicitly requests continuation): "{unplayed_text or "(None)"}"'
+            )
+        return "\n".join(envelope)
+
+    async def step(
+        self, user_text: str | None = None, *, interruption: Any = None
+    ) -> AsyncIterator[AgentEvent]:
         """Executes a foreground conversation turn with Verbix."""
         async with self.floor.acquire(FloorState.FOREGROUND):
-            self._turn_handle = TurnHandle(task=asyncio.current_task(), kind="foreground",
-                delivered_text_provider=lambda: self.foreground._delivered_text)
+            self._turn_counter = getattr(self, "_turn_counter", 0) + 1
+            handle = TurnHandle(
+                task=asyncio.current_task(),
+                kind="foreground",
+                turn_id=self._turn_counter,
+                delivered_text_provider=lambda: self.foreground._delivered_text,
+            )
+            self._turn_handle = handle
+            self._last_turn_handle = handle
             try:
-                async for event in self._step_inner(user_text):
+                async for event in self._step_inner(user_text, interruption=interruption):
                     yield event
             finally:
-                self._turn_handle.task = None
+                if not self.floor.interrupt_requested:
+                    handle.completed = True
+                handle.task = None
 
     async def _step_inner(
-        self, user_text: str | None = None, *, agent: Any = None
+        self,
+        user_text: str | None = None,
+        *,
+        agent: Any = None,
+        interruption: Any = None,
     ) -> AsyncIterator[AgentEvent]:
         # System prompt stays static (provider cache prefix); volatile
         # grounding rides on the user message at request time only.
         session = agent or self.foreground
         session.model = adapt_provider(self.provider)
         if user_text is not None:
-            user_text = f"{self._request_grounding()}\n{user_text}"
+            user_text = f"{self._request_grounding(interruption)}\n{user_text}"
         async for event in session.step_stream(user_text):
             yield event
 
     async def submit(
-        self, user_text: str, output: Any = None, *, agent: Any = None
+        self,
+        user_text: str,
+        output: Any = None,
+        *,
+        agent: Any = None,
+        interruption: Any = None,
     ) -> str:
         """Runs a complete foreground turn, streaming events to output and returning final text."""
         session = agent or self.foreground
         final_text = ""
         async with self.floor.acquire(FloorState.FOREGROUND):
-            self._turn_handle = TurnHandle(
+            self._turn_counter = getattr(self, "_turn_counter", 0) + 1
+            handle = TurnHandle(
                 task=asyncio.current_task(),
                 kind="foreground",
+                turn_id=self._turn_counter,
                 delivered_text_provider=lambda: self._submit_delivered_text(output, session),
             )
+            self._turn_handle = handle
+            self._last_turn_handle = handle
             try:
-                async for event in self._step_inner(user_text, agent=session):
+                async for event in self._step_inner(
+                    user_text, agent=session, interruption=interruption
+                ):
                     if output and hasattr(output, "emit"):
                         res = output.emit(event)
                         if asyncio.iscoroutine(res):
@@ -204,7 +253,13 @@ class Runtime:
                         await asyncio.sleep(0.02)
                     await asyncio.sleep(0.15)
             finally:
-                self._turn_handle.task = None
+                was_interrupted = (
+                    self.floor.interrupt_requested
+                    or (output is not None and getattr(output, "last_interruption", None) is not None)
+                )
+                if not was_interrupted:
+                    handle.completed = True
+                handle.task = None
         return final_text
 
     def _submit_delivered_text(self, output: Any, session: Any) -> str:
@@ -224,20 +279,34 @@ class Runtime:
         the snapshot (unwind is synchronous; the timeout is a backstop only).
         """
         self.floor.request_interrupt()
-        task = self._turn_handle.task
-        had_active = task is not None and not task.done()
-        self._turn_handle.cancel()
-        if not had_active:
+        target = (
+            self._turn_handle
+            if self._turn_handle.task is not None
+            else getattr(self, "_last_turn_handle", None)
+        )
+        if target is None:
             return
+
+        task = target.task
+        had_active = task is not None and not task.done()
+        target.cancel()
         if task is not None:
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
             except (asyncio.CancelledError, TimeoutError):
                 pass
-        delivered = heard if heard is not None else self._turn_handle.delivered_text()
+
+        if target.completed or target.repaired:
+            return
+
+        if not had_active and heard is None:
+            return
+
+        delivered = heard if heard is not None else target.delivered_text()
         self.foreground.messages[:] = validate_and_repair_history(
             self.foreground.messages, delivered_text=delivered
         )
+        target.repaired = True
 
     async def spawn(self, task: str) -> str:
         """Spawns an independent background worker with full workspace tools."""

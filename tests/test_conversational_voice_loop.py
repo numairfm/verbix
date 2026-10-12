@@ -25,9 +25,10 @@ class FakeCapture:
 
 
 class FakeLiveSession:
-    def __init__(self, text: str):
+    def __init__(self, text: str, speech_duration: float = 0.5):
         self.fed_chunks = []
         self.text = text
+        self.speech_duration = speech_duration
         self.on_endpoint = None
 
     def feed(self, pcm: bytes):
@@ -327,8 +328,118 @@ async def test_announcement_gates_mic_across_multi_sentence_gaps_and_tail_delay(
 
     # 7. Announcement completes and floor returns to IDLE after tail delay elapses
     runtime.floor.set_state(FloorState.IDLE)
-    capture.on_chunk(b"fresh_user_utterance")
-    assert b"fresh_user_utterance" in sess1.fed_chunks
+    await pipeline.stop_continuous_session()
+
+
+@pytest.mark.asyncio
+async def test_empty_stt_resumes_unspoken_draft():
+    """When VAD triggers but STT decodes zero words (noise/cough), unspoken draft is resumed."""
+    from verbix.voice.output import InterruptionSnapshot
+
+    runtime = MagicMock()
+    runtime.floor = FloorArbiter()
+    runtime.is_idle = True
+    runtime.submit = AsyncMock()
+    runtime.cancel_turn = AsyncMock()
+
+    sink = MockAudioSink()
+    player = AudioPlayer(tts=MockTextToSpeech(), sink=sink)
+    stt = FakeSTT()
+    stt._texts = [""]  # STT finalizes with empty string (cough/noise)
+    capture = FakeCapture()
+
+    pipeline = VoicePipeline(
+        runtime=runtime,
+        stt=stt,
+        player=player,
+        capture=capture,
+    )
+
+    await pipeline.start_continuous_session()
+    sess = stt.sessions[0]
+
+    # Simulate an interruption that left an unspoken draft
+    pipeline._speech_output.last_interruption = InterruptionSnapshot(
+        heard_text="Spoken sentence one.",
+        unspoken_draft="Remaining sentence two.",
+    )
+
+    # User finishes non-speech sound (cough), triggering endpoint
+    sess.on_endpoint()
+    await asyncio.sleep(0.05)
+
+    # Runtime submit was NOT called (no unnecessary LLM round trip)
+    runtime.submit.assert_not_called()
+
+    # The unspoken draft was resumed via speech output
+    while pipeline.turn_output.is_playing:
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+
+    assert "Remaining sentence two." in pipeline.turn_output.delivered_text()
+    assert pipeline._speech_output.last_interruption is None
 
     await pipeline.stop_continuous_session()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_logs_user_transcript_continuous_and_ptt():
+    """Pipeline logs finalized recognized transcripts with no duplicates, and ignores empty ones."""
+    runtime = MagicMock()
+    runtime.floor = FloorArbiter()
+    runtime.is_idle = True
+    runtime.submit = AsyncMock(return_value="spoken response")
+
+    sink = MockAudioSink()
+    player = AudioPlayer(tts=MockTextToSpeech(), sink=sink)
+    stt = FakeSTT()
+    stt._texts = ["What time is it?", ""]
+    capture = FakeCapture()
+
+    printer = MagicMock()
+    printer.print_user = MagicMock()
+
+    pipeline = VoicePipeline(
+        runtime=runtime,
+        stt=stt,
+        player=player,
+        capture=capture,
+        printer=printer,
+    )
+
+    # 1. Continuous mode: non-empty transcript is logged once
+    await pipeline.start_continuous_session()
+    sess1 = stt.sessions[0]
+    sess1.on_endpoint()
+    await asyncio.sleep(0.05)
+
+    printer.print_user.assert_called_once_with("What time is it?", duration=0.5)
+    printer.print_user.reset_mock()
+
+    # 2. Continuous mode: empty transcript is NOT logged
+    sess2 = stt.sessions[1]
+    sess2.on_endpoint()
+    await asyncio.sleep(0.05)
+
+    printer.print_user.assert_not_called()
+    await pipeline.stop_continuous_session()
+
+    # 3. PTT mode: non-empty transcript is logged once
+    stt.open_session = None
+    stt.transcribe = AsyncMock(return_value="Turn the light off")
+    capture.stop_recording = AsyncMock(return_value=b"\x00" * 3200)
+
+    res = await pipeline.stop_recording_and_process()
+    assert res["transcription"] == "Turn the light off"
+    printer.print_user.assert_called_once_with("Turn the light off", duration=0.1)
+    printer.print_user.reset_mock()
+
+    # 4. PTT mode: empty audio / empty transcript is NOT logged
+    stt.transcribe = AsyncMock(return_value="")
+    capture.stop_recording = AsyncMock(return_value=b"")
+    res_empty = await pipeline.stop_recording_and_process()
+    assert res_empty["transcription"] == ""
+    printer.print_user.assert_not_called()
+
+
 

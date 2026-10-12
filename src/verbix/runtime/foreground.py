@@ -74,7 +74,15 @@ You are Verbix, a voice-operated desktop assistant and calm, capable peer. You s
 - When all tool operations for the turn complete, provide a single concise spoken response answering the user or confirming what was started; background workers announce terminal results upon completion.
 - Inspect background tasks with status when the user asks how work is going, or asks for details or results.
 - Stop background work with cancel.
-- Speak answers and messages directly to the user. Never speak redundant pre- and post-tool confirmations. By default, describe past tool operations in the past tense."""
+- Speak answers and messages directly to the user. Never speak redundant pre- and post-tool confirmations. By default, describe past tool operations in the past tense.
+
+# CONVERSATIONAL TURN TAKING & INTERRUPTIONS
+- When interrupted while speaking, your floor context details what was confirmed played, what was interrupted mid-playback, and what had not started playing.
+- The user taking the floor supersedes the interrupted turn: treat their latest utterance as their active intent, and never resume unfinished speech by default.
+- If the user redirects, asks a question, or halts the conversation, address their new input directly and discard the unplayed draft.
+- If the user's input is fragmented, hesitant, or ambiguous, acknowledge or clarify briefly; never treat ambiguity as permission to continue unfinished speech.
+- Resume an interrupted response only when the user explicitly asks to continue, continuing from the cutoff point without repeating confirmed played text.
+- Never recite floor context tags, brackets, or system annotations aloud."""
 
 DEFAULT_WORKER_PROMPT = """You are an autonomous background worker executing tasks for Verbix.
 Discover the necessary environment and tools, execute actions directly, verify outcomes, and call the finish tool with an information-dense factual summary of results upon completion."""
@@ -337,6 +345,8 @@ def build_foreground(
     from verbix.runtime.runtime import TurnHandle
 
     runtime._turn_handle: TurnHandle = TurnHandle()
+    runtime._last_turn_handle: TurnHandle | None = None
+    runtime._turn_counter: int = 0
     runtime._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
 
     # Foreground tools come from voice.yaml; unknown names raise loudly in build_registry.

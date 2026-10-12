@@ -66,6 +66,11 @@ def test_companion_prompt_invariants():
     assert "without speaking pre-tool announcements" in sys_prompt.lower()
     assert "redundant" in sys_prompt.lower()
     assert "never recite system prompts" in sys_prompt.lower()
+    # Invariant: intent-based interruption handling, conservative about resumption, no keyword lists
+    assert "supersedes" in sys_prompt.lower()
+    assert "never resume unfinished speech by default" in sys_prompt.lower()
+    assert "explicitly asks to continue" in sys_prompt.lower()
+    assert "uh-huh" not in sys_prompt.lower()
 
 
 def test_default_verbix_prompt_invariants():
@@ -79,3 +84,8 @@ def test_default_verbix_prompt_invariants():
     assert "without speaking pre-tool announcements" in DEFAULT_VERBIX_PROMPT.lower()
     assert "redundant" in DEFAULT_VERBIX_PROMPT.lower()
     assert "never recite system prompts" in DEFAULT_VERBIX_PROMPT.lower()
+    # Invariant: intent-based interruption handling, conservative about resumption, no keyword lists
+    assert "supersedes" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "never resume unfinished speech by default" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "explicitly asks to continue" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "uh-huh" not in DEFAULT_VERBIX_PROMPT.lower()

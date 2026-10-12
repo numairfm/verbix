@@ -211,3 +211,26 @@ async def test_transcribe_handles_odd_bytes(tmp_path):
     assert isinstance(res, str)
 
 
+@pytest.mark.asyncio
+async def test_stt_session_speech_duration():
+    """STTSession.speech_duration reflects VAD speech bytes over sample rate."""
+    from verbix.voice.sherpa_stt import STTSession
+
+    # 16000 samples @ 16kHz 16-bit mono = 32000 bytes = 1.0 second
+    # Two 0.5s segments = 16000 bytes each
+    span1 = b"\x00" * 16000
+    span2 = b"\x00" * 16000
+    seg = FakeSegmenter([[span1], [span2]])
+
+    async def fake_decode(pcm, **kwargs):
+        return "hello"
+
+    session = STTSession(decode_fn=fake_decode, segmenter=seg, sample_rate=16000)
+    assert session.speech_duration == 0.0
+
+    await session.finalize()
+    # 32000 bytes // 2 = 16000 samples / 16000 sample_rate = 1.0 second
+    assert session.speech_duration == 1.0
+
+
+

@@ -88,3 +88,114 @@ async def test_interrupt_snapshots_heard_and_unspoken_draft():
     assert "Fourth sentence here." in snapshot.unspoken_draft
     assert snapshot.heard_text not in snapshot.unspoken_draft
 
+
+@pytest.mark.asyncio
+async def test_playback_terminates_when_cue_queued_behind_end():
+    """Playback must terminate and is_playing become False even if a cue is enqueued behind end."""
+    tts = MockTextToSpeech()
+    sink = MockAudioSink(playback_delay=0.01)
+    out = SpeechOutput(tts=tts, sink=sink)
+
+    epoch = out._epoch
+    out._frames.put_nowait((epoch, "text", "Sentence to speak."))
+    out._frames.put_nowait((epoch, "end", ""))
+    out._frames.put_nowait((epoch, "cue", b"\x00" * 160))
+    out._ensure_pump()
+    out._top_up()
+
+    for _ in range(50):
+        if not out.is_playing:
+            break
+        await asyncio.sleep(0.01)
+
+    assert not out.is_playing, "Pump hung because end frame was dropped before cue frame"
+
+
+@pytest.mark.asyncio
+async def test_interrupt_snapshot_distinguishes_played_interrupted_and_unplayed():
+    """Snapshot distinguishes confirmed played, partially audible, and unplayed sentences."""
+    tts = MockTextToSpeech()
+
+    class TrackingSink(MockAudioSink):
+        def __init__(self):
+            super().__init__(playback_delay=0.01)
+            self._played = 0
+
+        @property
+        def played_samples(self):
+            return self._played
+
+    sink = TrackingSink()
+    out = SpeechOutput(tts=tts, sink=sink)
+
+    text = "First sentence here. Second sentence here. Third sentence here."
+    await out.emit(TextDelta(text=text))
+    await out.emit(TurnComplete(final_text=text))
+
+    for _ in range(100):
+        if len(out._sent_spans) == 3:
+            break
+        await asyncio.sleep(0.01)
+
+    assert len(out._sent_spans) == 3
+    start2 = out._sent_spans[1][1]
+    end2 = out._sent_spans[1][2]
+    sink._played = (start2 + end2) // 2
+
+    snap = out.interrupt()
+    assert snap is not None
+    assert snap.confirmed_heard == "First sentence here."
+    assert snap.interrupted_sentence == "Second sentence here."
+    assert snap.unplayed_text == "Third sentence here."
+    assert snap.heard_text == "First sentence here."
+    assert snap.unspoken_draft == "Second sentence here. Third sentence here."
+
+
+@pytest.mark.asyncio
+async def test_interrupt_snapshot_relative_to_turn_baseline():
+    """Consecutive turns must not leak prior-turn sample counts into new turn snapshots."""
+    tts = MockTextToSpeech()
+
+    class PersistentTrackingSink(MockAudioSink):
+        def __init__(self):
+            super().__init__(playback_delay=0.01)
+            self._played = 0
+
+        @property
+        def played_samples(self):
+            return self._played
+
+    sink = PersistentTrackingSink()
+    out = SpeechOutput(tts=tts, sink=sink)
+
+    # Turn 1: 100,000 samples played in turn 1
+    sink._played = 100_000
+    out.reset()
+
+    # Turn 2: Starts with baseline of 100,000 samples
+    text = "First story sentence. Second story sentence. Third story sentence."
+    await out.emit(TextDelta(text=text))
+    await out.emit(TurnComplete(final_text=text))
+
+    for _ in range(100):
+        if len(out._sent_spans) == 3:
+            break
+        await asyncio.sleep(0.01)
+
+    assert len(out._sent_spans) == 3
+    # Interruption happens 500 samples into the first sentence of turn 2
+    # In turn 2 relative terms: played 500 samples
+    # In cumulative sink terms: played 100_500 samples
+    sink._played = 100_500
+
+    snap = out.interrupt()
+    assert snap is not None
+    # Sentence 1 was interrupted mid-playback, NOT fully heard!
+    assert snap.confirmed_heard == ""
+    assert snap.interrupted_sentence == "First story sentence."
+    assert "Second story sentence." in snap.unplayed_text
+    assert "Third story sentence." in snap.unplayed_text
+
+
+
+

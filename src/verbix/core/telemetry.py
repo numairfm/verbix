@@ -15,5 +15,5 @@ def record_latency(mark: str, **extra: Any) -> None:
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps({"mark": mark, "t": time.time(), **extra}) + "\n")
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass

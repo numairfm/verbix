@@ -296,10 +296,27 @@ class CliPrinter:
     def delivered_text(self) -> str:
         return "".join(self._delivered)
 
+    def print_user(self, text: str, duration: float | None = None) -> None:
+        """Logs finalized recognized user speech transcript with timestamp and optional duration."""
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return
+        if self._prefix_open or self._wrote_text:
+            sys.stdout.write("\n")
+            self._prefix_open = False
+            self._wrote_text = False
+        now_str = datetime.now().astimezone().strftime("%H:%M:%S")
+        if duration is not None:
+            sys.stdout.write(f"\r\033[K[{now_str}] you ({duration:.1f}s): {cleaned}\n")
+        else:
+            sys.stdout.write(f"\r\033[K[{now_str}] you: {cleaned}\n")
+        sys.stdout.flush()
+
     def reset_delivered(self) -> None:
         self.in_thought = False
         self._delivered.clear()
         self._prefix_open = False
+        self._wrote_text = False
 def _build_voice_pipeline(
     runtime: Runtime,
     args: argparse.Namespace,
@@ -458,9 +475,7 @@ async def async_main(args: argparse.Namespace) -> int:
                             sys.stdout.flush()
                             stop_res = await pipeline.toggle()
                             transcribed = stop_res.get("transcription", "")
-                            if transcribed:
-                                sys.stdout.write(f"[User spoke]: {transcribed}\n")
-                            else:
+                            if not transcribed:
                                 detail = stop_res.get("detail", "")
                                 msg = "[No speech detected or audio too short]"
                                 if detail:
@@ -473,8 +488,8 @@ async def async_main(args: argparse.Namespace) -> int:
                 else:
                     live = getattr(pipeline, "_active_voice_task", None)
                     if live is not None and not live.done():
-                        heard = pipeline.delivered_text()
-                        pipeline.turn_output.interrupt()
+                        snapshot = pipeline.turn_output.interrupt()
+                        heard = snapshot.confirmed_heard if snapshot is not None else ""
                         await pipeline.runtime.cancel_turn(heard=heard)
                         sys.stdout.write("[Interrupted]\n")
                         sys.stdout.flush()

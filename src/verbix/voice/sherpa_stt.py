@@ -69,6 +69,12 @@ class STTSession:
         """Decoded text of committed segments, in order."""
         return " ".join(s.text for s in self._segments if s.text).strip()
 
+    @property
+    def speech_duration(self) -> float:
+        """Total duration in seconds of VAD-classified speech spans in this session."""
+        bytes_count = sum(len(s.pcm) for s in self._segments)
+        return (bytes_count // 2) / float(self.sample_rate) if self.sample_rate else 0.0
+
     def feed(self, pcm: bytes) -> None:
         """Buffers one PCM chunk (16-bit signed mono) through the segmenter."""
         if self._finalized or not pcm:

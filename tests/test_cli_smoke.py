@@ -70,3 +70,17 @@ def test_drain_stdin_never_raises_on_non_selectable(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
     drain_stdin()  # must not raise; StringIO has no fileno for select
     capsys.readouterr()
+
+
+def test_cli_printer_renders_user_transcript(capsys):
+    import re
+
+    printer = CliPrinter()
+    printer.print_user("repeat the story")
+    out = capsys.readouterr().out
+    assert re.search(r"\[\d{2}:\d{2}:\d{2}\] you: repeat the story\n", out)
+
+    # Empty transcripts are ignored
+    printer.print_user("")
+    printer.print_user("   \n\t")
+    assert capsys.readouterr().out == ""

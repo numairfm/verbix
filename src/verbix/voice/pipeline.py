@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -78,8 +79,8 @@ class VoicePipeline:
 
         # 2. Playback / turn barge-in
         if self._speech_output.is_playing or not self.runtime.is_idle:
-            heard = self._speech_output.delivered_text()
-            self._speech_output.interrupt()
+            snapshot = self._speech_output.interrupt()
+            heard = snapshot.confirmed_heard if snapshot is not None else ""
             await self.runtime.cancel_turn(heard=heard)
             self.runtime.user_active = True
             await self.start_recording()
@@ -90,15 +91,14 @@ class VoicePipeline:
         await self.start_recording()
         return {"action": "recording"}
 
-
     async def start_continuous_session(self) -> dict[str, Any]:
         """Opens the hands-free conversational voice session."""
         if self._is_continuous_active:
             return {"action": "continuous_active"}
 
         if self._speech_output.is_playing or (self.runtime and not self.runtime.is_idle):
-            heard = self._speech_output.delivered_text()
-            self._speech_output.interrupt()
+            snapshot = self._speech_output.interrupt()
+            heard = snapshot.confirmed_heard if snapshot is not None else ""
             if self.runtime:
                 await self.runtime.cancel_turn(heard=heard)
         else:
@@ -127,8 +127,8 @@ class VoicePipeline:
             self.runtime.user_active = False
 
         if self._speech_output.is_playing or (self.runtime and not self.runtime.is_idle):
-            heard = self._speech_output.delivered_text()
-            self._speech_output.interrupt()
+            snapshot = self._speech_output.interrupt()
+            heard = snapshot.confirmed_heard if snapshot is not None else ""
             if self.runtime:
                 await self.runtime.cancel_turn(heard=heard)
 
@@ -164,8 +164,10 @@ class VoicePipeline:
         """Interrupts ongoing speech playback or active turn execution immediately upon user speech detection."""
         if not self._is_speaking and not self._speech_output.is_playing:
             return
-        heard = self._speech_output.delivered_text()
-        self._speech_output.interrupt()
+        snapshot = self._speech_output.interrupt()
+        heard = snapshot.confirmed_heard if snapshot is not None else ""
+        if hasattr(self.runtime, "floor") and hasattr(self.runtime.floor, "request_interrupt"):
+            self.runtime.floor.request_interrupt()
         if hasattr(self, "aec") and callable(getattr(self.aec, "reset", None)):
             self.aec.reset()
         if (
@@ -275,15 +277,28 @@ class VoicePipeline:
                 asyncio.create_task(self._speech_output.play_cue())
 
                 transcribed_text = ""
+                speech_dur: float | None = None
                 if self._live_stt is not None:
                     transcribed_text = await self._live_stt.finalize()
+                    speech_dur = getattr(self._live_stt, "speech_duration", None)
                     self._live_stt = None
 
                 transcribed_text = transcribed_text.strip()
                 if not transcribed_text:
+                    snap = getattr(self._speech_output, "last_interruption", None)
+                    draft = getattr(snap, "unspoken_draft", "") if snap else ""
+                    if draft:
+                        self._speech_output.last_interruption = None
+                        if hasattr(self.runtime, "floor"):
+                            from verbix.runtime.floor import FloorState
+
+                            self.runtime.floor.set_state(FloorState.SPEAKING)
+                        await self._speech_output.speak_text(draft)
                     if self._is_continuous_active:
                         await self._setup_turn_listening()
                     continue
+
+                self._log_user_transcript(transcribed_text, duration=speech_dur)
 
                 if self._is_continuous_active:
                     await self._setup_turn_listening()
@@ -318,6 +333,26 @@ class VoicePipeline:
         except asyncio.CancelledError:
             pass
 
+    def _log_user_transcript(self, text: str, duration: float | None = None) -> None:
+        """Logs finalized recognized speech transcript via printer and debug logger."""
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return
+        if duration is not None:
+            logger.info("Recognized user speech (%.1fs): %s", duration, cleaned)
+        else:
+            logger.info("Recognized user speech: %s", cleaned)
+        if self.printer and hasattr(self.printer, "print_user"):
+            try:
+                if duration is not None:
+                    self.printer.print_user(cleaned, duration=duration)
+                else:
+                    self.printer.print_user(cleaned)
+            except TypeError:
+                self.printer.print_user(cleaned)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Error logging user transcript to printer: %s", e)
+
     def _on_speech_endpoint(self) -> None:
         """Signals speech endpoint safely across thread boundaries to the captured event loop."""
         if self._loop is not None and not self._loop.is_closed():
@@ -335,7 +370,8 @@ class VoicePipeline:
             return
 
         # Hard-mute/interrupt speaker playback immediately so assistant cannot speak over recording
-        self._speech_output.interrupt()
+        if self._speech_output.is_playing:
+            self._speech_output.interrupt()
         if self.runtime is not None and hasattr(self.runtime, "floor"):
             from verbix.runtime.floor import FloorState
 
@@ -362,11 +398,14 @@ class VoicePipeline:
         asyncio.create_task(self._speech_output.play_cue())
 
         transcribed_text = ""
+        speech_dur: float | None = None
         if self._live_stt is not None:
             transcribed_text = await self._live_stt.finalize()
+            speech_dur = getattr(self._live_stt, "speech_duration", None)
             self._live_stt = None
         elif audio_bytes and len(audio_bytes) >= 1600:
             transcribed_text = await self.stt.transcribe(audio_bytes)
+            speech_dur = len(audio_bytes) / 32000.0
 
         transcribed_text = transcribed_text.strip()
         if not transcribed_text:
@@ -376,6 +415,8 @@ class VoicePipeline:
                 self.runtime.floor.set_state(FloorState.IDLE)
             secs = len(audio_bytes) / 32000 if audio_bytes else 0.0
             return {"action": "idle", "transcription": "", "detail": f"{secs:.1f}s captured"}
+
+        self._log_user_transcript(transcribed_text, duration=speech_dur)
 
         # Launch turn execution in background so toggle command returns immediately
         self._active_voice_task = asyncio.create_task(
@@ -389,10 +430,22 @@ class VoicePipeline:
 
         if self.printer and hasattr(self.printer, "reset_delivered"):
             self.printer.reset_delivered()
+        interruption = getattr(self._speech_output, "last_interruption", None)
+        self._speech_output.last_interruption = None
         self._speech_output.reset()
         if self.runtime is not None and hasattr(self.runtime, "floor"):
             self.runtime.floor.set_state(FloorState.SPEAKING)
         try:
+            try:
+                sig = inspect.signature(self.runtime.submit)
+                if "interruption" in sig.parameters or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+                ):
+                    return await self.runtime.submit(
+                        user_text, self._speech_output, interruption=interruption
+                    )
+            except (ValueError, TypeError):
+                pass
             return await self.runtime.submit(user_text, self._speech_output)
         finally:
             if hasattr(self, "aec") and callable(getattr(self.aec, "reset", None)):

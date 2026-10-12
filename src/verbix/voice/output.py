@@ -34,9 +34,38 @@ _GAP_SECONDS = 0.15
 class InterruptionSnapshot:
     """Exact boundary snapshot of an interrupted utterance."""
 
-    heard_text: str
-    unspoken_draft: str
+    confirmed_heard: str = ""
+    interrupted_sentence: str = ""
+    unplayed_text: str = ""
     timestamp: float = field(default_factory=time.time)
+
+    def __init__(
+        self,
+        confirmed_heard: str = "",
+        interrupted_sentence: str = "",
+        unplayed_text: str = "",
+        timestamp: float | None = None,
+        heard_text: str | None = None,
+        unspoken_draft: str | None = None,
+    ) -> None:
+        if heard_text is not None and not confirmed_heard:
+            confirmed_heard = heard_text
+        if unspoken_draft is not None and not unplayed_text and not interrupted_sentence:
+            unplayed_text = unspoken_draft
+        self.confirmed_heard = confirmed_heard
+        self.interrupted_sentence = interrupted_sentence
+        self.unplayed_text = unplayed_text
+        self.timestamp = time.time() if timestamp is None else timestamp
+
+    @property
+    def heard_text(self) -> str:
+        return self.confirmed_heard
+
+    @property
+    def unspoken_draft(self) -> str:
+        parts = [p for p in (self.interrupted_sentence, self.unplayed_text) if p]
+        return " ".join(parts).strip()
+
 
 
 def _sentences(text: str) -> list[str]:
@@ -69,6 +98,8 @@ class SpeechOutput:
         self.last_interruption: InterruptionSnapshot | None = None
         self._sent_spans: list[tuple[str, int, int]] = []
         self._enqueued_samples: int = 0
+        raw_played = getattr(sink, "played_samples", None)
+        self._start_played_samples: int = raw_played if isinstance(raw_played, int) else 0
 
 
     @property
@@ -126,42 +157,48 @@ class SpeechOutput:
             record_latency("interrupt_called")
 
         # Snapshot unvoiced frames before purging
-        unspoken_sentences: list[str] = []
+        unplayed_tail: list[str] = []
         for _, k, p, _ in self._warm:
             if k == "text" and p:
-                unspoken_sentences.append(p)
+                unplayed_tail.append(p)
         while not self._frames.empty():
             try:
-                tag, k, p = self._frames.get_nowait()
+                _, k, p = self._frames.get_nowait()
                 if k == "text" and p:
-                    unspoken_sentences.append(p)
+                    unplayed_tail.append(p)
             except asyncio.QueueEmpty:
                 break
         if self._buf.strip():
-            for s in _sentences(self._buf):
-                unspoken_sentences.append(s)
+            unplayed_tail.extend(_sentences(self._buf))
 
-        played_samples = getattr(self.sink, "played_samples", None)
-        heard_sentences: list[str] = []
-        unspoken_prefix: list[str] = []
+        played_raw = getattr(self.sink, "played_samples", None)
+        played_samples: int | None = None
+        if isinstance(played_raw, int):
+            played_samples = max(0, played_raw - self._start_played_samples)
+        confirmed_heard_sents: list[str] = []
+        interrupted_sent = ""
+        unplayed_span_sents: list[str] = []
 
         if isinstance(played_samples, int) and self._sent_spans:
             for sent, start, end in self._sent_spans:
                 if end <= played_samples:
-                    heard_sentences.append(sent)
+                    confirmed_heard_sents.append(sent)
+                elif start <= played_samples < end:
+                    interrupted_sent = sent
                 else:
-                    unspoken_prefix.append(sent)
+                    unplayed_span_sents.append(sent)
         else:
-            heard_sentences = list(self._delivered)
+            confirmed_heard_sents = list(self._delivered)
 
-        heard_text = " ".join(heard_sentences).strip()
-        unspoken_draft = " ".join(unspoken_prefix + unspoken_sentences).strip()
+        confirmed_heard = " ".join(confirmed_heard_sents).strip()
+        unplayed_text = " ".join(unplayed_span_sents + unplayed_tail).strip()
 
         snapshot: InterruptionSnapshot | None = None
-        if heard_text or unspoken_draft:
+        if confirmed_heard or interrupted_sent or unplayed_text:
             snapshot = InterruptionSnapshot(
-                heard_text=heard_text,
-                unspoken_draft=unspoken_draft,
+                confirmed_heard=confirmed_heard,
+                interrupted_sentence=interrupted_sent,
+                unplayed_text=unplayed_text,
                 timestamp=time.time(),
             )
             self.last_interruption = snapshot
@@ -183,6 +220,8 @@ class SpeechOutput:
         self._delivered.clear()
         self._sent_spans.clear()
         self._enqueued_samples = 0
+        raw_played = getattr(self.sink, "played_samples", None)
+        self._start_played_samples = raw_played if isinstance(raw_played, int) else 0
         return snapshot
 
     def delivered_text(self) -> str:
@@ -311,8 +350,7 @@ class SpeechOutput:
             if tag != epoch:
                 return
             if kind == "end":
-                if self._frames.empty():
-                    self._warm.append([tag, kind, payload, None])
+                self._warm.append([tag, kind, payload, None])
                 continue
             if kind == "cue":
                 self._warm.append([tag, kind, payload, None])
@@ -331,7 +369,8 @@ class SpeechOutput:
                 if tag != self._epoch or tag != epoch:
                     return
                 if kind == "end":
-                    if self._frames.empty():
+                    self._top_up()
+                    if self._frames.empty() and not self._warm:
                         return
                     continue
                 if kind == "cue":
@@ -339,6 +378,9 @@ class SpeechOutput:
                         record_latency("sink_first_write")
                         first_write = False
                     yield payload
+                    self._top_up()
+                    if self._frames.empty() and not self._warm:
+                        return
                     continue
                 self._warm.append([tag, kind, payload, self._spawn_synth(payload, epoch)])
                 continue
@@ -351,8 +393,12 @@ class SpeechOutput:
                     record_latency("sink_first_write")
                     first_write = False
                 yield payload
+                self._top_up()
+                if self._frames.empty() and not self._warm:
+                    return
                 continue
             if kind == "end":
+                self._top_up()
                 if self._frames.empty() and not self._warm:
                     return
                 continue
@@ -370,12 +416,18 @@ class SpeechOutput:
                 record_latency("tts_first_pcm")
                 first_pcm = False
             if parts:
-                if spoken_any:
-                    yield self._gap_bytes()
-                spoken_any = True
-                self._delivered.append(payload)
                 fmt = getattr(self.sink, "audio_format", "f32")
                 sample_width = 4 if fmt in ("f32", "float", "f32le") else 2
+                if spoken_any:
+                    gap = self._gap_bytes()
+                    self._enqueued_samples += len(gap) // sample_width
+                    yield gap
+                spoken_any = True
+                if not self._sent_spans:
+                    raw_played = getattr(self.sink, "played_samples", None)
+                    if isinstance(raw_played, int):
+                        self._start_played_samples = raw_played
+                self._delivered.append(payload)
                 chunk_samples = sum(len(p) // sample_width for p in parts)
                 start_sample = self._enqueued_samples
                 end_sample = start_sample + chunk_samples

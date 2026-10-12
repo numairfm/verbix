@@ -40,6 +40,22 @@ def test_conditioning_keeps_silence_silent():
     assert out.count(0) == len(out)
 
 
+def test_conditioning_smooth_across_chunk_boundaries():
+    t = np.arange(16000) / 16000
+    wave75 = (3000 * np.sin(2 * np.pi * 75 * t)).astype(np.int16).tobytes()
+    state = (0.0, None)
+    chunks = []
+    for i in range(0, len(wave75), 640):
+        c, state = _condition_s16le(wave75[i : i + 640], 16000, state)
+        chunks.append(c)
+    conditioned = np.frombuffer(b"".join(chunks), dtype=np.int16)
+    jumps = [
+        abs(int(conditioned[i]) - int(conditioned[i - 1]))
+        for i in range(320, 16000, 320)
+    ]
+    assert max(jumps) < 100, f"Boundary jump {max(jumps)} too large!"
+
+
 def test_condition_handles_odd_bytes():
     """An odd-length byte chunk must not raise ValueError in frombuffer."""
     odd_data = b"\x00\x01\x02\x03\x04"

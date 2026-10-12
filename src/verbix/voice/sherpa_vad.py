@@ -12,8 +12,9 @@ PROVISION_CMD = "uv run scripts/fetch_voice_models.py"
 
 WINDOW = 512  # 32 ms @16kHz: Silero's native window, also its minimum input
 THRESHOLD = 0.5
-MIN_SILENCE_S = 1.0
+MIN_SILENCE_S = 0.6
 MIN_SPEECH_S = 0.15
+MAX_SPEECH_S = 20.0  # upstream Silero default: overlong speech force-pops a bounded span
 
 
 class Detector(Protocol):
@@ -50,6 +51,7 @@ class SileroSegmenter:
         threshold: float = THRESHOLD,
         min_silence_s: float = MIN_SILENCE_S,
         min_speech_s: float = MIN_SPEECH_S,
+        max_speech_s: float = MAX_SPEECH_S,
         sample_rate: int = 16000,
         detector: Detector | None = None,
     ) -> None:
@@ -57,6 +59,7 @@ class SileroSegmenter:
         self.threshold = threshold
         self.min_silence_s = min_silence_s
         self.min_speech_s = min_speech_s
+        self.max_speech_s = max_speech_s
         self.sample_rate = sample_rate
         self._detector = detector
         self._pending = np.zeros(0, dtype=np.float32)
@@ -92,6 +95,7 @@ class SileroSegmenter:
         cfg.silero_vad.threshold = self.threshold
         cfg.silero_vad.min_silence_duration = self.min_silence_s
         cfg.silero_vad.min_speech_duration = self.min_speech_s
+        cfg.silero_vad.max_speech_duration = self.max_speech_s
         cfg.sample_rate = self.sample_rate
         self._detector = sherpa_onnx.VoiceActivityDetector(cfg, buffer_size_in_seconds=30)
         logger.info("SileroSegmenter loaded from %s", path)

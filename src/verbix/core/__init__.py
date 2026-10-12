@@ -1,4 +1,3 @@
-from verbix.core.agent import AgentSession, CycleDetector
 from verbix.core.events import (
     AgentEvent,
     TextDelta,
@@ -8,7 +7,6 @@ from verbix.core.events import (
     ToolCallStarted,
     TurnComplete,
 )
-from verbix.core.history import ConversationHistory
 from verbix.core.models import (
     CanonicalMessage,
     CanonicalToolCall,
@@ -17,11 +15,8 @@ from verbix.core.models import (
 
 __all__ = [
     "AgentEvent",
-    "AgentSession",
     "CanonicalMessage",
     "CanonicalToolCall",
-    "ConversationHistory",
-    "CycleDetector",
     "Role",
     "TextDelta",
     "ThoughtDelta",

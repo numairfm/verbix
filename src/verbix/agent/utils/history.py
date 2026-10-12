@@ -30,15 +30,14 @@ def validate_and_repair_history(
             msgs.append({"role": "assistant", "content": delivered_text})
         return msgs
 
-    last = msgs[-1]
-    if last.get("role") == "assistant" and _tool_call_ids(last):
-        for cid in _tool_call_ids(last):
-            msgs.append(
-                {"role": "tool", "tool_call_id": cid, "content": CANCELLED_TOOL_CONTENT}
-            )
-        return _merge_assistant_text(msgs)
-
+    # 1. Synthesize responses for any dangling tool calls in the turn
+    turn_start = 0
     for i in range(len(msgs) - 1, -1, -1):
+        if msgs[i].get("role") == "user":
+            turn_start = i
+            break
+
+    for i in range(turn_start, len(msgs)):
         msg = msgs[i]
         if msg.get("role") == "assistant" and _tool_call_ids(msg):
             expected = _tool_call_ids(msg)
@@ -56,17 +55,30 @@ def validate_and_repair_history(
                             "content": CANCELLED_TOOL_CONTENT,
                         }
                     )
-            return _merge_assistant_text(msgs)
-        if msg.get("role") == "user":
-            break
 
-    if last.get("role") == "assistant" and not last.get("tool_calls"):
-        if delivered_text:
-            last["content"] = delivered_text
+    # 2. Reconcile spoken text with delivered_text
+    turn_assistants = [
+        m for m in msgs[turn_start:] if m.get("role") == "assistant"
+    ]
+
+    if turn_assistants:
+        last_asst = turn_assistants[-1]
+        if not last_asst.get("tool_calls"):
+            if delivered_text:
+                last_asst["content"] = delivered_text
+            else:
+                for idx in range(len(msgs) - 1, -1, -1):
+                    if msgs[idx] is last_asst:
+                        del msgs[idx]
+                        break
         else:
-            msgs.pop()
+            if delivered_text:
+                last_asst["content"] = delivered_text
+            else:
+                last_asst["content"] = None
     elif delivered_text:
         msgs.append({"role": "assistant", "content": delivered_text})
+
     return _merge_assistant_text(msgs)
 
 

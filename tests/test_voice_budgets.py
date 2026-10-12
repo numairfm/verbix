@@ -1,9 +1,12 @@
 import asyncio
 import time
+
 import pytest
+
+from verbix.core.events import TextDelta
 from verbix.voice.base import MockAudioSink, MockTextToSpeech
 from verbix.voice.output import SpeechOutput
-from verbix.core.events import TextDelta
+
 
 @pytest.mark.asyncio
 async def test_emit_returns_without_awaiting_playback():

@@ -30,6 +30,7 @@ def test_resolve_output_limits_falls_back():
 
 def test_registry_spills_long_output_and_rereads(tmp_path):
     import asyncio
+
     from verbix.tools import build_registry
     reg = build_registry(["bash"], runtime=None, workspace=tmp_path)
     res = asyncio.run(reg.aexecute("bash", {"command": "seq 1 3000"}))
@@ -45,6 +46,7 @@ def test_agent_config_carries_tool_output():
 
 def test_yaml_limits_drive_registry(tmp_path):
     import asyncio
+
     from verbix.tools import build_registry
     from verbix.tools.shared import resolve_output_limits
     cfg = {"tools": ["bash"], "tool_output": {"max_lines": 10, "max_bytes": 200}}
@@ -74,10 +76,12 @@ def test_prune_spills_removes_only_old_files(tmp_path):
 
 
 def test_large_photo_returns_small_attachment(tmp_path):
+    import asyncio
+
     from PIL import Image
+
     from verbix.tools.base import ToolContext
     from verbix.tools.read import FileReadTool
-    import asyncio
     img = Image.new("RGB", (3000, 2000), "blue")
     img.save(tmp_path / "big.jpg")
     res = asyncio.run(FileReadTool().execute({"path": "big.jpg"}, ToolContext(workspace=tmp_path)))
@@ -86,10 +90,12 @@ def test_large_photo_returns_small_attachment(tmp_path):
 
 
 def test_gif_read_returns_first_frame_only(tmp_path):
+    import asyncio
+
     from PIL import Image
+
     from verbix.tools.base import ToolContext
     from verbix.tools.read import FileReadTool
-    import asyncio
     frames = [Image.new("RGB", (100, 100), c) for c in ("red", "green")]
     frames[0].save(tmp_path / "a.gif", save_all=True, append_images=frames[1:])
     res = asyncio.run(FileReadTool().execute({"path": "a.gif"}, ToolContext(workspace=tmp_path)))
@@ -97,10 +103,12 @@ def test_gif_read_returns_first_frame_only(tmp_path):
 
 
 def test_rgba_flattens_onto_white(tmp_path):
+    import asyncio
+
     from PIL import Image
+
     from verbix.tools.base import ToolContext
     from verbix.tools.read import FileReadTool
-    import asyncio
     Image.new("RGBA", (100, 100), (0, 0, 0, 0)).save(tmp_path / "t.png")
     res = asyncio.run(FileReadTool().execute({"path": "t.png"}, ToolContext(workspace=tmp_path)))
     assert res.attachments[0].data[:2] == b"\xff\xd8"
@@ -117,7 +125,12 @@ def test_tool_message_carries_image_parts():
 
 def test_over_limit_text_plus_image_keeps_image(tmp_path):
     import asyncio
-    from verbix.agent.agents.default import AgentConfig, DefaultAgent, tool_message_content
+
+    from verbix.agent.agents.default import (
+        AgentConfig,
+        DefaultAgent,
+        tool_message_content,
+    )
     from verbix.tools import build_registry
     from verbix.tools.base import FileAttachment, ToolResult
     big = ToolResult("line\n" * 3000,
@@ -132,10 +145,12 @@ def test_over_limit_text_plus_image_keeps_image(tmp_path):
 
 
 def test_photo_attachments_survive_execute_tool(tmp_path):
+    import asyncio
+
     from PIL import Image
+
     from verbix.agent.agents.default import AgentConfig, DefaultAgent
     from verbix.tools import build_registry
-    import asyncio
     Image.new("RGB", (3000, 2000), "blue").save(tmp_path / "big.jpg")
     agent = DefaultAgent(model=None, env=None,
         tools=build_registry(["read"], runtime=None, workspace=tmp_path),
@@ -150,6 +165,17 @@ def test_status_after_photo_does_not_crash():
         "content": [{"type": "text", "text": "[image attached: a.jpg]"},
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,eA=="}}]}
     class FakePhotoSession:
-        messages = [photo_msg]
+        def __init__(self):
+            self.messages = [photo_msg]
     task = WorkerTask(id="t", description="d", session=FakePhotoSession())
     assert "image" in task.get_status(full=True).lower()
+
+
+def test_cap_text_byte_boundary():
+    from verbix.tools.shared import _cap_text
+
+    text = "hello world\n" * 50
+    res = _cap_text(text, max_lines=10, max_bytes=30)
+    assert len(res.encode("utf-8")) <= 30
+    assert len(res.splitlines()) <= 10
+

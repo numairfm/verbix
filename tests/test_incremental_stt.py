@@ -190,3 +190,49 @@ async def test_finalize_cancellation_propagates():
     with pytest.raises(asyncio.CancelledError):
         await task
 
+
+@pytest.mark.asyncio
+async def test_sub_window_abrupt_end_drained_by_flush():
+    """Verify that an utterance ending abruptly on a sub-512 sample boundary
+    (e.g. on PTT button release) is zero-padded and drained by flush() without loss."""
+    from unittest.mock import MagicMock
+
+    from verbix.voice.sherpa_vad import WINDOW, SileroSegmenter
+
+    mock_det = MagicMock()
+    ready_seg = MagicMock()
+    ready_seg.samples = np.ones(WINDOW, dtype=np.float32) * 0.5
+
+    # Empty during feed, but after flush yields the ready segment
+    mock_det.empty.side_effect = [True, False, True]
+    mock_det.front = ready_seg
+
+    segmenter = SileroSegmenter(detector=mock_det)
+
+    decoded_spans = []
+
+    async def fake_decode(pcm, prompt=""):
+        decoded_spans.append(pcm)
+        return "hello"
+
+    sess = STTSession(fake_decode, segmenter)
+
+    # Feed 200 samples (less than WINDOW=512)
+    chunk = (np.ones(200, dtype=np.int16) * 1000).tobytes()
+    sess.feed(chunk)
+    assert len(segmenter._pending) == 200
+
+    # PTT released -> finalize() flushes the sub-window remainder
+    text = await sess.finalize()
+
+    # The remainder was padded and flushed; pending buffer is reset
+    assert len(segmenter._pending) == 0
+    assert mock_det.accept_waveform.call_count == 1
+    called_samples = mock_det.accept_waveform.call_args[0][0]
+    assert len(called_samples) == WINDOW
+    mock_det.flush.assert_called_once()
+
+    # The speech segment was drained and decoded
+    assert len(decoded_spans) == 1
+    assert text == "hello"
+

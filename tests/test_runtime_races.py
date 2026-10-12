@@ -1,13 +1,15 @@
 import asyncio
 import os
 import subprocess
+
 import pytest
-from verbix.runtime.floor import FloorArbiter
-from verbix.runtime.ledger import TaskLedger
-from verbix.agent.agents.default import DefaultAgent, AgentConfig
-from verbix.agent.tools.registry import ToolRegistry
+
+from verbix.agent.agents.default import AgentConfig, DefaultAgent
 from verbix.agent.environments.local import LocalEnvironment
+from verbix.agent.tools.registry import ToolRegistry
 from verbix.core.events import ToolCallDelta
+from verbix.runtime.ledger import TaskLedger
+
 
 @pytest.mark.asyncio
 async def test_regression_completion_buffer_drops_concurrent_finish():
@@ -63,5 +65,7 @@ async def test_regression_worker_cancel_kills_process_group():
         await t
 
     await asyncio.sleep(0.1)
-    alive = subprocess.run(["pgrep", "-f", marker], capture_output=True, text=True).stdout.strip()
+    alive = subprocess.run(  # noqa: ASYNC221
+        ["pgrep", "-f", marker], capture_output=True, text=True, check=False
+    ).stdout.strip()
     assert not alive, f"Process {alive} survived task cancellation!"

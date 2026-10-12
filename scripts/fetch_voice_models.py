@@ -59,21 +59,13 @@ MANIFEST: dict[str, dict] = {
         },
     },
     "asr": {
-        "id": "canary-int8",
-        "license": "CC-BY-4.0",
-        "repo": "csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8",
+        "id": "nemotron-gguf",
+        "license": "OpenMDW-1.1",
+        "repo": "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
         "files": {
-            "encoder.int8.onnx": (
-                "7a75b4e2a5857a6dcc0819503bbe3fad66943db4a3ccf21d3f27c633667d303f",
-                132678643,
-            ),
-            "decoder.int8.onnx": (
-                "e41a2ab9c0c2fe81a1e8ade5a45fb02a74bc4db7d1f91b89a54a25e2cf79cba2",
-                74437848,
-            ),
-            "tokens.txt": (
-                "2dae6fc7815f9640645e0c765522b278ee0cef49b482d91f6913e334628d3e77",
-                53555,
+            "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf": (
+                "41c99fa5fb6f3d35f68e79adc3e755eca2232a8d921178bd647b71194792b8fd",
+                495831520,
             ),
         },
     },

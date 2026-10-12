@@ -187,7 +187,7 @@ class SpeechOutput:
                     interrupted_sent = sent
                 else:
                     unplayed_span_sents.append(sent)
-        else:
+        elif playing:
             confirmed_heard_sents = list(self._delivered)
 
         confirmed_heard = " ".join(confirmed_heard_sents).strip()
@@ -232,7 +232,29 @@ class SpeechOutput:
         return ""
 
     def reset(self) -> None:
-        self.interrupt()
+        """Clean reset between turns: halts playback and clears buffers without setting last_interruption."""
+        self._epoch += 1
+        self.sink.stop()
+        if self._pump and not self._pump.done():
+            self._pump.cancel()
+        self._pump = None
+        for task in list(self._synth_tasks):
+            if not task.done():
+                task.cancel()
+        self._synth_tasks.clear()
+        self._drop_warm()
+        while not self._frames.empty():
+            try:
+                self._frames.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        self._buf = ""
+        self._seen = ""
+        self._delivered.clear()
+        self._sent_spans.clear()
+        self._enqueued_samples = 0
+        raw_played = getattr(self.sink, "played_samples", None)
+        self._start_played_samples = raw_played if isinstance(raw_played, int) else 0
 
     def reset_delivered(self) -> None:  # compat for WakeOutputFanOut/printer protocol
         self.reset()
@@ -267,6 +289,7 @@ class SpeechOutput:
         if self.is_playing:
             self._frames.put_nowait((self._epoch, "cue", cue))
         else:
+            self._notify_ref(cue)
             await self.sink.play(cue)
 
     def _ensure_pump(self) -> None:
@@ -294,6 +317,9 @@ class SpeechOutput:
         finally:
             if self._pump is current:
                 self._pump = None
+                if self._epoch == epoch:
+                    self._sent_spans.clear()
+                    self._enqueued_samples = 0
 
     def _spawn_synth(
         self, payload: str, epoch: int
@@ -323,6 +349,14 @@ class SpeechOutput:
         rate = int(getattr(self.sink, "sample_rate", 24000) or 24000)
         fmt = getattr(self.sink, "audio_format", "f32")
         return bytes(int(rate * _GAP_SECONDS) * (2 if fmt != "f32" else 4))
+
+    def _notify_ref(self, audio: bytes) -> None:
+        """Feeds played bytes (incl. gaps/cues) to the on_audio reference hook."""
+        if self.on_audio:
+            try:
+                self.on_audio(audio)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("on_audio error: %s", e)
 
     def _drop_warm(self) -> None:
         for _, _, _, t in self._warm:
@@ -377,6 +411,7 @@ class SpeechOutput:
                     if first_write:
                         record_latency("sink_first_write")
                         first_write = False
+                    self._notify_ref(payload)
                     yield payload
                     self._top_up()
                     if self._frames.empty() and not self._warm:
@@ -392,6 +427,7 @@ class SpeechOutput:
                 if first_write:
                     record_latency("sink_first_write")
                     first_write = False
+                self._notify_ref(payload)
                 yield payload
                 self._top_up()
                 if self._frames.empty() and not self._warm:
@@ -421,12 +457,14 @@ class SpeechOutput:
                 if spoken_any:
                     gap = self._gap_bytes()
                     self._enqueued_samples += len(gap) // sample_width
+                    self._notify_ref(gap)
                     yield gap
                 spoken_any = True
                 if not self._sent_spans:
                     raw_played = getattr(self.sink, "played_samples", None)
                     if isinstance(raw_played, int):
                         self._start_played_samples = raw_played
+                    self._delivered.clear()
                 self._delivered.append(payload)
                 chunk_samples = sum(len(p) // sample_width for p in parts)
                 start_sample = self._enqueued_samples
@@ -437,9 +475,5 @@ class SpeechOutput:
                     if first_write:
                         record_latency("sink_first_write")
                         first_write = False
-                    if self.on_audio:
-                        try:
-                            self.on_audio(audio)
-                        except Exception as e:  # noqa: BLE001
-                            logger.debug("on_audio error: %s", e)
+                    self._notify_ref(audio)
                     yield audio

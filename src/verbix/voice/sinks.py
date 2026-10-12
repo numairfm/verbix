@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import time
 from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,9 @@ class SubprocessAudioSink:
         self.audio_format = audio_format.lower()
         self._current_proc: asyncio.subprocess.Process | None = None
         self._backend = self._detect_backend()
+        self._samples_written: int = 0
+        self._stream_start_time: float | None = None
+        self._cumulative_played_samples: int = 0
 
     def _detect_backend(self) -> str | None:
         if shutil.which("pw-play"):
@@ -84,8 +88,24 @@ class SubprocessAudioSink:
             ]
         return []
 
+    @property
+    def played_samples(self) -> int:
+        """Returns estimated count of samples played through the sink."""
+        if self._stream_start_time is not None:
+            elapsed = max(0.0, time.monotonic() - self._stream_start_time)
+            played = min(self._samples_written, int(elapsed * self.sample_rate))
+            return self._cumulative_played_samples + played
+        return self._cumulative_played_samples
+
     def stop(self) -> None:
         """Immediately kills any active audio playback subprocess."""
+        if self._stream_start_time is not None:
+            elapsed = max(0.0, time.monotonic() - self._stream_start_time)
+            self._cumulative_played_samples += min(
+                self._samples_written, int(elapsed * self.sample_rate)
+            )
+            self._stream_start_time = None
+            self._samples_written = 0
         if self._current_proc and self._current_proc.returncode is None:
             try:
                 self._current_proc.kill()
@@ -102,6 +122,11 @@ class SubprocessAudioSink:
             return True
 
         self.stop()
+        sample_width = 4 if self.audio_format in ("f32", "float", "f32le") else 2
+        bytes_per_sample = max(1, sample_width * self.channels)
+        self._stream_start_time = time.monotonic()
+        self._samples_written = 0
+
         proc: asyncio.subprocess.Process | None = None
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -116,6 +141,7 @@ class SubprocessAudioSink:
             async for chunk in chunks:
                 if proc.returncode is not None:
                     break
+                self._samples_written += len(chunk) // bytes_per_sample
                 proc.stdin.write(chunk)
                 await proc.stdin.drain()
 
@@ -135,6 +161,13 @@ class SubprocessAudioSink:
             self.stop()
             return False
         finally:
+            if self._stream_start_time is not None:
+                elapsed = max(0.0, time.monotonic() - self._stream_start_time)
+                self._cumulative_played_samples += min(
+                    self._samples_written, int(elapsed * self.sample_rate)
+                )
+                self._stream_start_time = None
+                self._samples_written = 0
             if proc is not None and self._current_proc is proc:
                 self._current_proc = None
 

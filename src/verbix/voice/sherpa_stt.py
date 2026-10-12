@@ -129,6 +129,14 @@ class STTSession:
             if seg.task is not None and not seg.task.done():
                 seg.task.cancel()
 
+    def reset(self) -> None:
+        """Resets session audio and segmenter state so no previous audio leaks."""
+        self.cancel()
+        self._segments.clear()
+        self._finalized = False
+        if hasattr(self._segmenter, "reset"):
+            self._segmenter.reset()
+
     def _push_segment(self, pcm: bytes) -> None:
         if not pcm:
             return

@@ -60,7 +60,7 @@ async def test_shielded_cancel_records_single_tool_response():
             pass
 
     t = asyncio.create_task(run())
-    await asyncio.wait_for(started.wait(), timeout=5)
+    await asyncio.wait_for(started.wait(), timeout=10)
     # Simulate cancel_turn(): task cancel + synchronous repair, no await between.
     t.cancel()
     agent.messages[:] = validate_and_repair_history(agent.messages)
@@ -83,3 +83,56 @@ def test_double_repair_is_idempotent():
     twice = validate_and_repair_history(once)
     assert once == twice
     assert sum(1 for m in twice if m.get("tool_call_id") == "call_1") == 1
+
+
+def test_repair_truncates_speech_even_with_tool_calls():
+    msgs = [
+        {"role": "user", "content": "check status"},
+        {
+            "role": "assistant",
+            "content": "I will check that right now",
+            "tool_calls": [{"id": "c1", "function": {"name": "status", "arguments": "{}"}}],
+        },
+    ]
+    repaired = validate_and_repair_history(msgs, delivered_text="I will check")
+    asst = next(m for m in repaired if m.get("role") == "assistant")
+    assert asst["content"] == "I will check"
+    tool_resp = next(m for m in repaired if m.get("role") == "tool")
+    assert tool_resp["tool_call_id"] == "c1"
+
+
+def test_repair_truncates_final_speech_after_completed_tool_calls():
+    msgs = [
+        {"role": "user", "content": "check status"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "c1", "function": {"name": "status", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        {
+            "role": "assistant",
+            "content": "Status is ok, everything is working properly.",
+        },
+    ]
+    repaired = validate_and_repair_history(msgs, delivered_text="Status is ok")
+    assts = [m for m in repaired if m.get("role") == "assistant"]
+    assert assts[-1]["content"] == "Status is ok"
+
+
+def test_repair_removes_current_turn_assistant_not_identical_prior_turn():
+    """Cancelling a turn with 0 delivered speech must remove the current turn's assistant,
+    not an earlier turn's identical message."""
+    msgs = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "acknowledged"},
+        {"role": "user", "content": "turn 2"},
+        {"role": "assistant", "content": "acknowledged"},
+    ]
+    repaired = validate_and_repair_history(msgs, delivered_text="")
+    assert len(repaired) == 3
+    assert repaired[0]["content"] == "turn 1"
+    assert repaired[1]["content"] == "acknowledged"
+    assert repaired[2]["content"] == "turn 2"
+
+

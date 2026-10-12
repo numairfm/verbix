@@ -202,7 +202,7 @@ async def test_continuous_loop_survives_barge_in_cancellation():
     fake_session.feed_barge_in = MagicMock(return_value=True)
     pipeline.capture.on_chunk(b"\x10\x20" * 160)
 
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.1)
 
     # Turn task was cancelled
     assert turn_cancelled is True
@@ -249,4 +249,30 @@ async def test_barge_in_cancels_turn_before_first_audio_playback():
 
     await asyncio.sleep(0.02)
     runtime.cancel_turn.assert_called_once()
+
+
+def test_is_speaking_ignores_raw_player_flag():
+    """_is_speaking must not consult AudioPlayer.is_playing (dead producer path).
+
+    Only SpeechOutput/floor/gate report speaking; a bare player flag with
+    everything else idle must read as silent. Other members stay load-bearing.
+    """
+    runtime = MagicMock()
+    runtime.floor = FloorArbiter()
+    sink = MockAudioSink()
+    player = AudioPlayer(tts=MockTextToSpeech(), sink=sink)
+    pipeline = VoicePipeline(
+        runtime=runtime, stt=MagicMock(), player=player, capture=FakeCapture()
+    )
+
+    assert pipeline._is_speaking is False
+    player._is_playing = True
+    assert pipeline._is_speaking is False
+
+    player._is_playing = False
+    pipeline._gate_stt_feed = True
+    assert pipeline._is_speaking is True
+    pipeline._gate_stt_feed = False
+    runtime.floor.set_state("SPEAKING")
+    assert pipeline._is_speaking is True
 

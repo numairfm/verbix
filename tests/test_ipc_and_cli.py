@@ -1,10 +1,12 @@
 import asyncio
+import json
 from unittest.mock import MagicMock
 
 import pytest
 
 from verbix.cli import build_parser
 from verbix.core.events import TextDelta, ToolCallFinished
+from verbix.ipc.server import VerbixServer
 from verbix.provider.models import Finish as ProviderFinish
 from verbix.provider.models import TextDelta as ProviderTextDelta
 from verbix.runtime.runtime import Runtime, WakeOutputFanOut
@@ -98,7 +100,7 @@ async def test_spawn_broadcasts_ledger_transitions(tmp_path):
         for _ in range(10):
             try:
                 evt = await asyncio.wait_for(q.get(), timeout=2.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
             if evt["type"] == "task_completed" and evt["payload"]["task_id"] == task_id:
                 found = True
@@ -171,3 +173,129 @@ def test_cli_dead_flags_removed():
     args = parser.parse_args([])
     assert not hasattr(args, "isolate_worktrees")
     assert not hasattr(args, "allow_network")
+
+
+@pytest.mark.asyncio
+async def test_server_stops_in_flight_prompt_task(tmp_path):
+    runtime = MagicMock()
+    runtime.wake_output = None
+    runtime.subscribe.return_value = asyncio.Queue()
+
+    submit_started = asyncio.Event()
+    submit_cancelled = asyncio.Event()
+
+    async def slow_submit(prompt, output):
+        submit_started.set()
+        try:
+            await asyncio.sleep(10.0)
+        except asyncio.CancelledError:
+            submit_cancelled.set()
+            raise
+
+    runtime.submit = slow_submit
+
+    sock_path = tmp_path / "test.sock"
+    server = VerbixServer(runtime=runtime, socket_path=sock_path)
+    await server.start()
+
+    _reader, writer = await asyncio.open_unix_connection(str(sock_path))
+    writer.write(b'{"action": "prompt", "prompt": "hello", "id": "1"}\n')
+    await writer.drain()
+
+    await asyncio.wait_for(submit_started.wait(), timeout=2.0)
+    assert not submit_cancelled.is_set()
+
+    await server.stop()
+    assert submit_cancelled.is_set()
+
+    writer.close()
+    await writer.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_server_sends_terminal_reply_on_prompt_cancel(tmp_path):
+    runtime = MagicMock()
+    runtime.wake_output = None
+    runtime.subscribe.return_value = asyncio.Queue()
+
+    submit_started = asyncio.Event()
+    submit_cancelled = asyncio.Event()
+
+    async def slow_submit(prompt, output):
+        submit_started.set()
+        try:
+            await asyncio.sleep(10.0)
+        except asyncio.CancelledError:
+            submit_cancelled.set()
+            raise
+
+    runtime.submit = slow_submit
+
+    sock_path = tmp_path / "cancel.sock"
+    server = VerbixServer(runtime=runtime, socket_path=sock_path)
+    await server.start()
+
+    reader, writer = await asyncio.open_unix_connection(str(sock_path))
+    writer.write(b'{"action": "prompt", "prompt": "hello", "id": "7"}\n')
+    await writer.drain()
+
+    await asyncio.wait_for(submit_started.wait(), timeout=2.0)
+    await server.stop()
+    assert submit_cancelled.is_set()
+
+    replies = []
+    try:
+        while True:
+            line = await asyncio.wait_for(reader.readline(), timeout=2.0)
+            if not line:
+                break
+            replies.append(json.loads(line.decode("utf-8")))
+    except TimeoutError:
+        pass
+
+    writer.close()
+    await writer.wait_closed()
+    assert any(
+        r.get("id") == "7" and r.get("status") == "error" for r in replies
+    ), replies
+
+
+@pytest.mark.asyncio
+async def test_server_concurrent_writes_are_serialized(tmp_path):
+    runtime = MagicMock()
+    runtime.wake_output = None
+    runtime.subscribe.return_value = asyncio.Queue()
+
+    sock_path = tmp_path / "test_concurrent.sock"
+    server = VerbixServer(runtime=runtime, socket_path=sock_path)
+    await server.start()
+
+    reader, writer = await asyncio.open_unix_connection(str(sock_path))
+    while not server._clients:
+        await asyncio.sleep(0.01)
+
+    # Send many events concurrently from multiple tasks
+    async def emit_batch(prefix: str, count: int):
+        for i in range(count):
+            await server.runtime.wake_output.emit(TextDelta(text=f"{prefix}-{i}"))
+
+    tasks = [
+        asyncio.create_task(emit_batch(f"worker-{t}", 50))
+        for t in range(5)
+    ]
+    await asyncio.gather(*tasks)
+
+    # Read all 250 lines and verify each is valid JSON
+    lines_read = 0
+    for _ in range(250):
+        line = await asyncio.wait_for(reader.readline(), timeout=2.0)
+        assert line, "Premature EOF"
+        data = json.loads(line.decode("utf-8"))
+        assert data["type"] == "text_delta"
+        lines_read += 1
+
+    assert lines_read == 250
+
+    writer.close()
+    await writer.wait_closed()
+    await server.stop()

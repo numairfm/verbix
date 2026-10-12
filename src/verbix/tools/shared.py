@@ -14,32 +14,16 @@ DEFAULT_MAX_BYTES = 51200
 def _cap_text(text: str, max_lines: int, max_bytes: int) -> str:
     lines = text.splitlines()
     if len(lines) > max_lines:
-        head_n = max_lines // 2
-        tail_n = max_lines - head_n
-        lines = lines[:head_n] + lines[-tail_n:] if tail_n else lines[:head_n]
-    capped = "\n".join(lines)
-    total = sum(len(c.encode()) for c in capped)
-    if total <= max_bytes:
-        return capped
-    head_budget = max_bytes // 2
-    tail_budget = max_bytes - head_budget
-    head_chars: list[str] = []
-    used = 0
-    for c in capped:
-        n = len(c.encode())
-        if used + n > head_budget:
-            break
-        head_chars.append(c)
-        used += n
-    tail_chars: list[str] = []
-    used = 0
-    for c in reversed(capped):
-        n = len(c.encode())
-        if used + n > tail_budget:
-            break
-        tail_chars.append(c)
-        used += n
-    return "".join(head_chars) + "".join(reversed(tail_chars))
+        h = max_lines // 2
+        lines = lines[:h] + lines[-(max_lines - h) :]
+    text = "\n".join(lines)
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text
+    h_bytes = max_bytes // 2
+    head = raw[:h_bytes].decode("utf-8", errors="ignore")
+    tail = raw[-(max_bytes - h_bytes) :].decode("utf-8", errors="ignore")
+    return head + tail
 
 
 def bind_output(
@@ -51,7 +35,7 @@ def bind_output(
     rel_to: Path | None = None,
 ) -> str:
     lines = text.splitlines()
-    n_bytes = sum(len(c.encode()) for c in text)
+    n_bytes = len(text.encode("utf-8"))
     if len(lines) <= max_lines and n_bytes <= max_bytes:
         return text
     capped = _cap_text(text, max_lines, max_bytes)

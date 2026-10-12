@@ -12,9 +12,9 @@ from verbix.core.events import TextDelta, ToolCallDelta, ToolCallStarted, TurnCo
 
 if TYPE_CHECKING:
     from verbix.agent.agents.default import DefaultAgent
-    from verbix.core.agent import AgentSession
 
 TaskStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
+
 
 
 def _content_text(content: Any) -> str:
@@ -49,13 +49,13 @@ def format_worker_event(task_id: str, event: Any) -> str | None:
 
 
 class WorkerTask:
-    """Manages an autonomous background worker running an AgentSession or DefaultAgent in an asyncio.Task."""
+    """Manages an autonomous background worker running a DefaultAgent in an asyncio.Task."""
 
     def __init__(
         self,
         id: str,
         description: str,
-        session: AgentSession | DefaultAgent | Any,
+        session: DefaultAgent | Any,
         on_event: Callable[[str, Any], None] | None = None,
     ) -> None:
         self.id = id

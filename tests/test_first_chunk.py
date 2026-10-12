@@ -12,7 +12,7 @@ class ChunkThenToolModel:
     async def query_stream(self, messages, tools=None, **kw):
         self.calls += 1
         if self.calls == 1:
-            yield TextDelta(text="Well, let me check that for you right now please")
+            yield TextDelta(text="Well, let me check that for you right now please. One moment. ")
             yield ToolCallDelta(index=0, call_id="c1", name="status", arguments_delta="{}")
         else:
             yield TextDelta(text="done")
@@ -21,8 +21,11 @@ class ChunkThenToolModel:
 
 @pytest.mark.asyncio
 async def test_first_chunk_released_before_tool_call():
-    agent = DefaultAgent(model=ChunkThenToolModel(), tools=ToolRegistry(),
-                         config=AgentConfig(system_template="sys"))
+    agent = DefaultAgent(
+        model=ChunkThenToolModel(),
+        tools=ToolRegistry(),
+        config=AgentConfig(system_template="sys"),
+    )
     seen = [e async for e in agent.step_stream("hi")]
     texts = [e.text for e in seen if isinstance(e, TextDelta)]
     assert any("Well," in t for t in texts)  # released at chunk boundary, not turn end

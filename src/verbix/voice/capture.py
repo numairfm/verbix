@@ -32,16 +32,15 @@ def _condition_s16le(
     if not data:
         return data, state
     x = np.frombuffer(data, dtype=np.int16).astype(np.float64)
-    x -= x.mean()
-    # ponytail: one-pole high-pass, fixed 60 Hz corner, per-chunk python loop
-    # (measured 0.25% of one core at the 16 kHz contract rate); a 2nd-order
-    # corner or scipy.signal.lfilter only if a bar cares about low-frequency
-    # fidelity
+    # One-pole high-pass filter with 60 Hz corner. Cancels constant DC offset
+    # and baseline drift continuously across chunks without chunk-boundary step
+    # discontinuities.
     a = math.exp(-2.0 * math.pi * _DRIFT_CORNER_HZ / rate)
     y = np.empty_like(x)
     prev_y, prev_x = state
     if prev_x is None:  # cold start: prime to the first sample, no ramp-up
-        prev_y = prev_x = float(x[0])
+        prev_y = 0.0
+        prev_x = float(x[0])
     for i, v in enumerate(x.tolist()):
         prev_y = a * (prev_y + v - prev_x)
         prev_x = v
@@ -86,13 +85,33 @@ class PTTCapture:
         self._queue = asyncio.Queue()
         self._is_recording = True
 
-        import sounddevice as sd
+        try:
+            import sounddevice as sd
+        except (ImportError, OSError) as e:
+            logger.warning(
+                "Microphone input unavailable: audio library failed to load (%s); voice capture idle",
+                e,
+            )
+            self._is_recording = False
+            return
+
+        try:
+            devices = sd.query_devices()
+            if not any((d.get("max_input_channels", 0) or 0) > 0 for d in (devices or [])):
+                logger.warning(
+                    "No audio input device found; voice capture idle until a microphone is available"
+                )
+        except Exception as e:  # noqa: BLE001 - device query is advisory only
+            logger.debug("Could not query audio input devices: %s", e)
 
         def _audio_callback(indata: bytes, frames: int, time_info: Any, status: Any) -> None:
             if status:
                 logger.debug("sounddevice capture status: %s", status)
-            if self._loop and self._loop.is_running() and self._is_recording:
-                self._loop.call_soon_threadsafe(self._queue.put_nowait, bytes(indata))
+            try:
+                if self._loop and self._loop.is_running() and self._is_recording:
+                    self._loop.call_soon_threadsafe(self._queue.put_nowait, bytes(indata))
+            except Exception as e:  # noqa: BLE001 - PortAudio thread must never print tracebacks on teardown
+                logger.debug("Dropping capture chunk after teardown: %s", e)
 
         blocksize = self.sample_rate // 50  # 20ms frames
         try:
@@ -105,8 +124,8 @@ class PTTCapture:
             )
             stream.start()
             self._stream = stream
-        except (OSError, RuntimeError) as e:
-            logger.warning("Failed to open sounddevice RawInputStream: %s", e)
+        except Exception as e:  # noqa: BLE001 - any device failure idles gracefully
+            logger.warning("Microphone input stream failed to open (%s); voice capture idle", e)
             self._is_recording = False
             return
 

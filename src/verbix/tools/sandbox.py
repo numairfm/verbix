@@ -6,6 +6,7 @@ import shutil
 import signal
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,56 @@ class SandboxResult:
     exit_code: int
     stdout: str
     stderr: str
+
+
+async def execute_unsandboxed(
+    command: str, workspace: Path, timeout_seconds: float = 60.0
+) -> SandboxResult:
+    """Executes a command directly in the workspace directory without sandbox isolation."""
+    workspace_path = workspace.resolve()
+    kwargs: dict[str, Any] = {
+        "cwd": str(workspace_path),
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+    }
+    if os.name == "posix":
+        kwargs["start_new_session"] = True
+    elif os.name == "nt":
+        import subprocess
+
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    shell_cmd = shutil.which("bash") or shutil.which("sh")
+    if shell_cmd:
+        proc = await asyncio.create_subprocess_exec(
+            shell_cmd, "-c", command, **kwargs
+        )
+    else:
+        proc = await asyncio.create_subprocess_shell(command, **kwargs)
+
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout_seconds
+        )
+        return SandboxResult(
+            exit_code=proc.returncode if proc.returncode is not None else 1,
+            stdout=stdout_bytes.decode("utf-8", errors="replace"),
+            stderr=stderr_bytes.decode("utf-8", errors="replace"),
+        )
+    except (TimeoutError, asyncio.CancelledError):
+        if os.name == "posix":
+            try:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        await proc.wait()
+        raise
 
 
 async def execute_sandboxed(command: str, config: SandboxConfig) -> SandboxResult:

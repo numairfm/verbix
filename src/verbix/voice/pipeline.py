@@ -45,7 +45,7 @@ class VoicePipeline:
             player.tts,
             player.sink,
             printer=self.printer,
-            on_audio=self.aec.feed_reference,
+            on_audio=self._feed_speaker_reference,
         )
         if self.runtime is not None:
             self.runtime.wake_output = self._speech_output
@@ -57,6 +57,18 @@ class VoicePipeline:
         self._speech_endpoint_event: asyncio.Event = asyncio.Event()
         self._gate_stt_feed: bool = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._mic_lookback: bytes = b""
+
+    def _feed_speaker_reference(self, audio: bytes) -> None:
+        """Feeds outgoing speaker audio into AEC reference with explicit format parameters."""
+        if hasattr(self, "aec") and callable(getattr(self.aec, "feed_reference", None)):
+            sink = getattr(self.player, "sink", None)
+            rate = int(getattr(sink, "sample_rate", 24000) or 24000)
+            fmt = str(getattr(sink, "audio_format", "f32") or "f32")
+            try:
+                self.aec.feed_reference(audio, source_sample_rate=rate, audio_format=fmt)
+            except TypeError:
+                self.aec.feed_reference(audio)
 
     @property
     def is_continuous_active(self) -> bool:
@@ -160,16 +172,48 @@ class VoicePipeline:
 
         return {"action": "continuous_stopped"}
 
+    def _stash_interruption(self, snapshot: Any) -> None:
+        """Shelves unplayed text as a runtime side note (never in history)."""
+        if self.runtime is None:
+            return
+        unplayed = (getattr(snapshot, "unplayed_text", "") or "").strip() if snapshot else ""
+        self.runtime.pending_continuation = unplayed or None
+
     def _interrupt_active_speech(self) -> None:
         """Interrupts ongoing speech playback or active turn execution immediately upon user speech detection."""
         if not self._is_speaking and not self._speech_output.is_playing:
             return
         snapshot = self._speech_output.interrupt()
         heard = snapshot.confirmed_heard if snapshot is not None else ""
-        if hasattr(self.runtime, "floor") and hasattr(self.runtime.floor, "request_interrupt"):
-            self.runtime.floor.request_interrupt()
-        if hasattr(self, "aec") and callable(getattr(self.aec, "reset", None)):
-            self.aec.reset()
+        self._stash_interruption(snapshot)
+        if hasattr(self.runtime, "floor"):
+            from verbix.runtime.floor import FloorState
+
+            if hasattr(self.runtime.floor, "request_interrupt"):
+                self.runtime.floor.request_interrupt()
+            self.runtime.floor.set_state(FloorState.LISTENING)
+
+        old = self._live_stt
+        if old is not None and hasattr(old, "cancel"):
+            old.cancel()
+        open_fn = getattr(self.stt, "open_session", None)
+        if callable(open_fn):
+            sample_rate = getattr(self.capture, "sample_rate", 16000)
+            try:
+                fresh = open_fn(
+                    sample_rate=sample_rate,
+                    on_endpoint=self._on_speech_endpoint,
+                )
+            except TypeError:
+                fresh = open_fn(sample_rate=sample_rate)
+            lookback = getattr(self, "_mic_lookback", b"") or b""
+            if lookback and hasattr(fresh, "feed") and callable(fresh.feed):
+                try:
+                    fresh.feed(lookback)
+                except (OSError, RuntimeError) as e:
+                    logger.debug("Error seeding fresh STT session: %s", e)
+            self._live_stt = fresh
+
         if (
             self.runtime is not None
             and self._loop is not None
@@ -187,15 +231,10 @@ class VoicePipeline:
             is True
         )
         output_playing = getattr(self._speech_output, "is_playing", False) is True
-        player_playing = (
-            hasattr(self, "player")
-            and getattr(self.player, "is_playing", False) is True
-        )
         return (
             self._gate_stt_feed
             or floor_speaking
             or output_playing
-            or player_playing
         )
 
     async def _setup_turn_listening(self) -> None:
@@ -218,6 +257,9 @@ class VoicePipeline:
             )
 
         def _feed_chunk(chunk: bytes) -> None:
+            if not chunk:
+                return
+
             if not self._is_continuous_active:
                 if self._is_speaking:
                     return
@@ -235,6 +277,7 @@ class VoicePipeline:
                     if hasattr(self, "aec") and getattr(self.aec, "is_available", False)
                     else chunk
                 )
+                self._mic_lookback = (self._mic_lookback + bytes(clean_chunk))[-9600:]
                 if self._live_stt is not None and not self._gate_stt_feed:
                     feed_barge_in = getattr(self._live_stt, "feed_barge_in", None)
                     if callable(feed_barge_in):
@@ -247,9 +290,7 @@ class VoicePipeline:
                             self._interrupt_active_speech()
                 return
 
-            if hasattr(self, "aec") and getattr(self.aec, "_ref_buffer", None):
-                self.aec.reset()
-
+            self._mic_lookback = (self._mic_lookback + bytes(chunk))[-9600:]
             if not self._gate_stt_feed and self._live_stt is not None:
                 try:
                     self._live_stt.feed(chunk)
@@ -263,6 +304,8 @@ class VoicePipeline:
 
     async def _run_continuous_loop(self) -> None:
         """Runs the hands-free conversational turn loop until stopped."""
+        from verbix.runtime.floor import FloorState
+
         try:
             while self._is_continuous_active:
                 # Wait for user speech endpoint
@@ -285,20 +328,22 @@ class VoicePipeline:
 
                 transcribed_text = transcribed_text.strip()
                 if not transcribed_text:
-                    snap = getattr(self._speech_output, "last_interruption", None)
-                    draft = getattr(snap, "unspoken_draft", "") if snap else ""
-                    if draft:
-                        self._speech_output.last_interruption = None
-                        if hasattr(self.runtime, "floor"):
-                            from verbix.runtime.floor import FloorState
-
-                            self.runtime.floor.set_state(FloorState.SPEAKING)
-                        await self._speech_output.speak_text(draft)
                     if self._is_continuous_active:
+                        self._gate_stt_feed = False
                         await self._setup_turn_listening()
                     continue
 
                 self._log_user_transcript(transcribed_text, duration=speech_dur)
+
+                # Bare continuation command handling
+                norm = transcribed_text.lower().rstrip(".!? ")
+                if norm in ("continue", "go on") and getattr(self.runtime, "pending_continuation", None):
+                    stashed = self.runtime.pending_continuation
+                    self.runtime.pending_continuation = None
+                    transcribed_text = (
+                        f"[Stashed unplayed context: {stashed}]\n"
+                        f"User request: {transcribed_text}"
+                    )
 
                 if self._is_continuous_active:
                     await self._setup_turn_listening()
@@ -314,8 +359,6 @@ class VoicePipeline:
                 except Exception as e:  # noqa: BLE001
                     logger.warning("Turn failed during continuous loop: %s", e)
                     if hasattr(self.runtime, "floor"):
-                        from verbix.runtime.floor import FloorState
-
                         self.runtime.floor.set_state(FloorState.SPEAKING)
                     try:
                         await self.player.speak("Sorry, I ran into an error processing that.")
@@ -326,9 +369,9 @@ class VoicePipeline:
                     while self.player.is_playing:
                         await asyncio.sleep(0.02)
                     await asyncio.sleep(0.15)
-
-                if self._is_continuous_active and self._live_stt is None:
-                    await self._setup_turn_listening()
+                finally:
+                    if self._is_continuous_active and self._live_stt is None:
+                        await self._setup_turn_listening()
 
         except asyncio.CancelledError:
             pass
@@ -400,11 +443,20 @@ class VoicePipeline:
         transcribed_text = ""
         speech_dur: float | None = None
         if self._live_stt is not None:
-            transcribed_text = await self._live_stt.finalize()
+            finalize_res = self._live_stt.finalize()
+            if asyncio.iscoroutine(finalize_res):
+                transcribed_text = await finalize_res
+            else:
+                transcribed_text = finalize_res
             speech_dur = getattr(self._live_stt, "speech_duration", None)
             self._live_stt = None
         elif audio_bytes and len(audio_bytes) >= 1600:
-            transcribed_text = await self.stt.transcribe(audio_bytes)
+            transcribe_fn = getattr(self.stt, "transcribe", None)
+            if callable(transcribe_fn):
+                if asyncio.iscoroutinefunction(transcribe_fn):
+                    transcribed_text = await transcribe_fn(audio_bytes)
+                else:
+                    transcribed_text = await asyncio.to_thread(transcribe_fn, audio_bytes)
             speech_dur = len(audio_bytes) / 32000.0
 
         transcribed_text = transcribed_text.strip()
@@ -455,7 +507,10 @@ class VoicePipeline:
                 and hasattr(self.runtime, "floor")
                 and self.runtime.floor.state == FloorState.SPEAKING
             ):
-                self.runtime.floor.set_state(FloorState.IDLE)
+                if self._is_continuous_active:
+                    self.runtime.floor.set_state(FloorState.LISTENING)
+                else:
+                    self.runtime.floor.set_state(FloorState.IDLE)
 
     def delivered_text(self) -> str:
         return self._speech_output.delivered_text()

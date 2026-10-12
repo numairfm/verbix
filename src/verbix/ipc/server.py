@@ -59,11 +59,7 @@ class BroadcastWakeOutput:
         ipc_event = IPCEvent(type=ev_type, payload=payload)
         msg_bytes = ipc_event.to_jsonl()
         for writer in list(self.server._clients):
-            try:
-                writer.write(msg_bytes)
-                await writer.drain()
-            except (OSError, RuntimeError):
-                self.server._clients.discard(writer)
+            await self.server._send(writer, msg_bytes)
 
     def delivered_text(self) -> str:
         return "".join(self._delivered)
@@ -91,11 +87,32 @@ class VerbixServer:
 
         self._server: asyncio.Server | None = None
         self._clients: set[asyncio.StreamWriter] = set()
+        self._writer_locks: dict[asyncio.StreamWriter, asyncio.Lock] = {}
+        self._client_tasks: set[asyncio.Task[Any]] = set()
+        self._prompt_tasks: set[asyncio.Task[Any]] = set()
         self._event_forwarder_task: asyncio.Task[None] | None = None
 
         # Configure wake turn output if not already assigned
         if self.runtime.wake_output is None:
             self.runtime.wake_output = BroadcastWakeOutput(self)
+
+    async def _send(self, writer: asyncio.StreamWriter, msg_bytes: bytes) -> bool:
+        """Sends data to a client writer with per-writer synchronization."""
+        lock = self._writer_locks.get(writer)
+        if lock is None:
+            return False
+        try:
+            async with lock:
+                writer.write(msg_bytes)
+                await writer.drain()
+                return True
+        except (OSError, RuntimeError):
+            self._remove_client(writer)
+            return False
+
+    def _remove_client(self, writer: asyncio.StreamWriter) -> None:
+        self._clients.discard(writer)
+        self._writer_locks.pop(writer, None)
 
     async def start(self) -> None:
         """Starts listening on Unix domain socket or TCP host/port."""
@@ -127,6 +144,25 @@ class VerbixServer:
         """Stops the server and cleans up resources."""
         if self._event_forwarder_task and not self._event_forwarder_task.done():
             self._event_forwarder_task.cancel()
+            try:
+                await self._event_forwarder_task
+            except asyncio.CancelledError:
+                pass
+            self._event_forwarder_task = None
+
+        if self._prompt_tasks:
+            for task in list(self._prompt_tasks):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*list(self._prompt_tasks), return_exceptions=True)
+            self._prompt_tasks.clear()
+
+        if self._client_tasks:
+            for task in list(self._client_tasks):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*list(self._client_tasks), return_exceptions=True)
+            self._client_tasks.clear()
 
         for writer in list(self._clients):
             try:
@@ -135,6 +171,7 @@ class VerbixServer:
             except (OSError, RuntimeError):
                 pass
         self._clients.clear()
+        self._writer_locks.clear()
 
         if self._server:
             self._server.close()
@@ -156,11 +193,7 @@ class VerbixServer:
                 ipc_event = IPCEvent(type="runtime_event", payload=event_data)
                 msg_bytes = ipc_event.to_jsonl()
                 for writer in list(self._clients):
-                    try:
-                        writer.write(msg_bytes)
-                        await writer.drain()
-                    except (OSError, RuntimeError):
-                        self._clients.discard(writer)
+                    await self._send(writer, msg_bytes)
         except asyncio.CancelledError:
             pass
         finally:
@@ -171,6 +204,11 @@ class VerbixServer:
     ) -> None:
         """Handles a single client connection over the socket."""
         self._clients.add(writer)
+        self._writer_locks[writer] = asyncio.Lock()
+        task = asyncio.current_task()
+        if task:
+            self._client_tasks.add(task)
+            task.add_done_callback(self._client_tasks.discard)
         try:
             while True:
                 line = await reader.readline()
@@ -188,16 +226,15 @@ class VerbixServer:
                     err_resp = IPCResponse(
                         status="error", error=f"Invalid request JSON: {e}"
                     )
-                    writer.write(err_resp.to_jsonl())
-                    await writer.drain()
+                    await self._send(writer, err_resp.to_jsonl())
                     continue
 
                 await self._dispatch_request(request, writer)
 
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError, asyncio.CancelledError):
             pass
         finally:
-            self._clients.discard(writer)
+            self._remove_client(writer)
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -212,20 +249,19 @@ class VerbixServer:
 
         if action == "ping":
             resp = IPCResponse(id=request.id, status="ok", data={"pong": True})
-            writer.write(resp.to_jsonl())
-            await writer.drain()
+            await self._send(writer, resp.to_jsonl())
 
         elif action == "prompt":
             if not request.prompt:
                 resp = IPCResponse(
                     id=request.id, status="error", error="Missing 'prompt' field"
                 )
-                writer.write(resp.to_jsonl())
-                await writer.drain()
+                await self._send(writer, resp.to_jsonl())
                 return
 
             class IPCTurnOutput:
-                def __init__(self, req_id: str, w: asyncio.StreamWriter) -> None:
+                def __init__(self, server: VerbixServer, req_id: str, w: asyncio.StreamWriter) -> None:
+                    self.server = server
                     self.req_id = req_id
                     self.w = w
                     self._delivered: list[str] = []
@@ -234,15 +270,10 @@ class VerbixServer:
                     if isinstance(event, TextDelta):
                         self._delivered.append(event.text)
                     ev_type, payload = event_to_payload(event)
-                    try:
-                        self.w.write(
-                            IPCEvent(
-                                type=ev_type, request_id=self.req_id, payload=payload
-                            ).to_jsonl()
-                        )
-                        await self.w.drain()
-                    except (OSError, RuntimeError):
-                        pass
+                    msg_bytes = IPCEvent(
+                        type=ev_type, request_id=self.req_id, payload=payload
+                    ).to_jsonl()
+                    await self.server._send(self.w, msg_bytes)
 
                 def delivered_text(self) -> str:
                     return "".join(self._delivered)
@@ -251,26 +282,30 @@ class VerbixServer:
                     self._delivered.clear()
 
             async def _run_prompt() -> None:
-                ipc_out = IPCTurnOutput(request.id, writer)
+                ipc_out = IPCTurnOutput(self, request.id, writer)
                 try:
                     await self.runtime.submit(request.prompt or "", ipc_out)
-                    writer.write(IPCResponse(id=request.id, status="ok").to_jsonl())
-                    await writer.drain()
+                    await self._send(writer, IPCResponse(id=request.id, status="ok").to_jsonl())
+                except asyncio.CancelledError:
+                    await self._send(
+                        writer,
+                        IPCResponse(
+                            id=request.id, status="error", error="prompt cancelled"
+                        ).to_jsonl(),
+                    )
+                    raise
                 except Exception as e:  # noqa: BLE001
                     err_resp = IPCResponse(id=request.id, status="error", error=str(e))
-                    try:
-                        writer.write(err_resp.to_jsonl())
-                        await writer.drain()
-                    except (OSError, RuntimeError):
-                        pass
+                    await self._send(writer, err_resp.to_jsonl())
 
-            asyncio.create_task(_run_prompt())
+            task = asyncio.create_task(_run_prompt())
+            self._prompt_tasks.add(task)
+            task.add_done_callback(self._prompt_tasks.discard)
 
         elif action == "status":
             summary = self.runtime.get_task_status_summary(request.task_id)
             resp = IPCResponse(id=request.id, status="ok", data={"summary": summary})
-            writer.write(resp.to_jsonl())
-            await writer.drain()
+            await self._send(writer, resp.to_jsonl())
 
         elif action == "cancel":
             if not request.task_id:
@@ -284,20 +319,17 @@ class VerbixServer:
                     status="ok" if ok else "error",
                     data={"cancelled": ok},
                 )
-            writer.write(resp.to_jsonl())
-            await writer.drain()
+            await self._send(writer, resp.to_jsonl())
 
         elif action == "toggle":
             data: dict[str, Any] = {}
             if self.pipeline:
                 data = await self.pipeline.toggle()
             resp = IPCResponse(id=request.id, status="ok", data=data)
-            writer.write(resp.to_jsonl())
-            await writer.drain()
+            await self._send(writer, resp.to_jsonl())
 
         else:
             resp = IPCResponse(
                 id=request.id, status="error", error=f"Unknown action: '{action}'"
             )
-            writer.write(resp.to_jsonl())
-            await writer.drain()
+            await self._send(writer, resp.to_jsonl())

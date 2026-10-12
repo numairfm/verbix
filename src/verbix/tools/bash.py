@@ -4,14 +4,18 @@ from pathlib import Path
 from typing import Any
 
 from verbix.tools.base import ToolContext, ToolResult
-from verbix.tools.sandbox import SandboxConfig, execute_sandboxed
+from verbix.tools.sandbox import (
+    SandboxConfig,
+    execute_sandboxed,
+    execute_unsandboxed,
+)
 
 
 class BashTool:
     name: str = "bash"
     side_effecting: bool = False
     description: str = (
-        "Executes a bash command inside an isolated default-deny sandbox."
+        "Executes a bash command in the workspace directory (sandboxed if enabled)."
     )
 
     @property
@@ -31,9 +35,11 @@ class BashTool:
 
     def __init__(
         self,
+        sandboxed: bool = False,
         allow_network: bool = False,
         extra_binds: tuple[tuple[Path, Path, bool], ...] | None = None,
     ) -> None:
+        self.sandboxed = sandboxed
         self.allow_network = allow_network
         self.extra_binds = extra_binds or ()
 
@@ -47,15 +53,19 @@ class BashTool:
         except (ValueError, TypeError):
             timeout = 60.0
 
-        config = SandboxConfig(
-            workspace=context.workspace,
-            allow_network=self.allow_network,
-            timeout_seconds=timeout,
-            extra_binds=self.extra_binds,
-        )
-
         try:
-            res = await execute_sandboxed(command, config)
+            if self.sandboxed:
+                config = SandboxConfig(
+                    workspace=context.workspace,
+                    allow_network=self.allow_network,
+                    timeout_seconds=timeout,
+                    extra_binds=self.extra_binds,
+                )
+                res = await execute_sandboxed(command, config)
+            else:
+                res = await execute_unsandboxed(
+                    command, workspace=context.workspace, timeout_seconds=timeout
+                )
             output = res.stdout
             if res.stderr:
                 if output:

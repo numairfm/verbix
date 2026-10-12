@@ -133,6 +133,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Audio playback backend (default: auto — callback if sounddevice is installed, else subprocess).",
     )
     parser.add_argument(
+        "--stt-model",
+        type=str,
+        default=None,
+        help="Path to GGUF speech-to-text model file (default: auto-discover).",
+    )
+    parser.add_argument(
         "--toggle",
         action="store_true",
         help="Send voice toggle event to running Verbix daemon over IPC socket.",
@@ -326,10 +332,11 @@ def _build_voice_pipeline(
     from verbix.voice.capture import PTTCapture
     from verbix.voice.pipeline import VoicePipeline
     from verbix.voice.player import AudioPlayer
-    from verbix.voice.sherpa_stt import SherpaSTT
     from verbix.voice.sherpa_tts import SherpaTTS
+    from verbix.voice.transcribe_stt import TranscribeSTT
 
-    stt = SherpaSTT()
+    stt_model = getattr(args, "stt_model", None)
+    stt = TranscribeSTT(model_path=stt_model)
     tts = SherpaTTS()
     sink = select_sink(
         getattr(args, "audio_sink", "auto"),

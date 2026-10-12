@@ -218,3 +218,27 @@ async def test_read_states_its_own_completeness(tmp_path: Path):
 
     dir_res = await read_tool.execute({"path": "d"}, ctx)
     assert "showing entries 1-1 of 1" in dir_res.observation
+
+
+@pytest.mark.asyncio
+async def test_unsandboxed_bash_execution(tmp_path: Path):
+    ctx = ToolContext(workspace=tmp_path)
+    tool = BashTool(sandboxed=False)
+    res = await tool.execute({"command": "pwd"}, ctx)
+    assert res.is_error is False
+    assert Path(res.observation.strip()).resolve() == tmp_path.resolve()
+
+
+@pytest.mark.asyncio
+async def test_edit_empty_old_str(tmp_path: Path):
+    f = tmp_path / "hello.txt"
+    f.write_text("content")
+    ctx = ToolContext(workspace=tmp_path)
+    read_tool = FileReadTool()
+    await read_tool.execute({"path": "hello.txt"}, ctx)
+
+    edit_tool = FileEditTool()
+    res = await edit_tool.execute({"path": "hello.txt", "old_str": "", "new_str": "new"}, ctx)
+    assert res.is_error is True
+    assert "old_str cannot be empty" in res.observation
+

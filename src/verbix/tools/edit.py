@@ -33,6 +33,8 @@ class FileEditTool:
         path_str = args.get("path", "")
         old_str = args.get("old_str", "")
         new_str = args.get("new_str", "")
+        if not old_str:
+            return ToolResult("error: old_str cannot be empty", is_error=True)
         try:
             target = resolve_contained_path(path_str, context.workspace)
             if not target.exists():

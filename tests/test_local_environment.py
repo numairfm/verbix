@@ -1,8 +1,11 @@
 import asyncio
 import os
 import subprocess
+
 import pytest
+
 from verbix.agent.environments.local import LocalEnvironment
+
 
 @pytest.mark.asyncio
 async def test_local_env_kills_process_group_on_cancel():
@@ -16,12 +19,16 @@ async def test_local_env_kills_process_group_on_cancel():
         await t
 
     await asyncio.sleep(0.1)
-    alive = subprocess.run(["pgrep", "-f", marker], capture_output=True, text=True, check=False).stdout.strip()
+    alive = subprocess.run(  # noqa: ASYNC221
+        ["pgrep", "-f", marker], capture_output=True, text=True, check=False
+    ).stdout.strip()
     assert not alive
+
 
 @pytest.mark.asyncio
 async def test_aexecute_daemon_holding_stdout_survives_fast():
     import time
+
     env = LocalEnvironment(cwd="/tmp", timeout=10)
     marker = f"verbix_daemon_test_{os.getpid()}"
 
@@ -35,6 +42,8 @@ async def test_aexecute_daemon_holding_stdout_survives_fast():
     assert "done" in res["output"]
     assert dt < 5  # must not block to full timeout on the pipe-holding grandchild
 
-    alive = subprocess.run(["pgrep", "-f", marker], capture_output=True, text=True, check=False).stdout.strip()
+    alive = subprocess.run(  # noqa: ASYNC221
+        ["pgrep", "-f", marker], capture_output=True, text=True, check=False
+    ).stdout.strip()
     assert alive  # intentional daemon survives normal completion
-    subprocess.run(["pkill", "-f", marker], capture_output=True, check=False)
+    subprocess.run(["pkill", "-f", marker], capture_output=True, check=False)  # noqa: ASYNC221

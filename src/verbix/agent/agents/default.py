@@ -103,6 +103,11 @@ def tool_message_content(
     return parts
 
 
+# Consecutive identical tool calls (name + arguments) that end a turn.
+# Cost/wall-clock limits miss zero-cost loops; this stops them directly.
+_REPEAT_LIMIT = 3
+
+
 class DefaultAgent:
     """Unified agent supporting both synchronous execution and async streaming."""
 
@@ -253,6 +258,8 @@ class DefaultAgent:
                 user_content = user_input
             self.add_messages(self._format_message(role="user", content=user_content))
 
+        # Consecutive-repeat signatures across loop iterations.
+        repeat_history: list[tuple[str, str]] = []
         try:
             while True:
                 # Check limits (turn-scoped when configured, global otherwise)
@@ -475,6 +482,24 @@ class DefaultAgent:
                         }
                         self.add_messages(tool_msg)
 
+                        sig = (name, (tc["args_str"] or "").strip())
+                        repeat_history.append(sig)
+                        if len(repeat_history) >= _REPEAT_LIMIT and len(
+                            set(repeat_history[-_REPEAT_LIMIT:])
+                        ) == 1:
+                            self.add_messages(
+                                {
+                                    "role": "exit",
+                                    "content": "RepeatedToolCall",
+                                    "extra": {
+                                        "exit_status": "RepeatedToolCall",
+                                        "submission": "",
+                                    },
+                                }
+                            )
+                            yield TurnComplete(final_text="RepeatedToolCall")
+                            return
+
                         if res.is_terminal:
                             yield TurnComplete(final_text=res.observation)
                             return
@@ -497,7 +522,7 @@ class DefaultAgent:
                 return
         except asyncio.CancelledError:
             self.messages[:] = validate_and_repair_history(
-                self.messages, delivered_text=self._delivered_text
+                self.messages, delivered_text=None
             )
             raise
         except Submitted:

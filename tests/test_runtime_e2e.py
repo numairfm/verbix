@@ -313,11 +313,13 @@ async def test_status_includes_completed_task_result(tmp_path):
 
 @pytest.mark.asyncio
 async def test_runtime_uses_miniswe_agent(tmp_path):
+    from unittest.mock import MagicMock
+
     from verbix.agent.agents.default import DefaultAgent
-    from verbix.provider.client import ProviderClient
     from verbix.runtime.runtime import Runtime
+
     # Ensure runtime foreground is powered by DefaultAgent
-    runtime = Runtime(workspace=tmp_path, provider=ProviderClient())
+    runtime = Runtime(workspace=tmp_path, provider=MagicMock())
     assert isinstance(runtime.foreground, DefaultAgent)
     assert hasattr(runtime.foreground, "config")
     assert hasattr(runtime.foreground, "step_stream")

@@ -17,6 +17,10 @@ from verbix.voice.sinks import SubprocessAudioSink
 
 
 def __getattr__(name: str) -> Any:
+    if name == "TranscribeSTT":
+        from verbix.voice.transcribe_stt import TranscribeSTT
+
+        return TranscribeSTT
     if name == "SherpaTTS":
         from verbix.voice.sherpa_tts import SherpaTTS
 
@@ -42,6 +46,7 @@ __all__ = [
     "SpeechToText",
     "SubprocessAudioSink",
     "TextToSpeech",
+    "TranscribeSTT",
     "VoicePipeline",
     "select_sink",
 ]

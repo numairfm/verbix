@@ -4,7 +4,6 @@ import asyncio
 import base64
 import inspect
 import json
-import logging
 import platform
 import time
 from typing import Any
@@ -15,8 +14,6 @@ from pydantic import BaseModel, Field, model_validator
 from verbix.agent.exceptions import FormatError
 from verbix.agent.tools.registry import ToolRegistry
 from verbix.tools.base import FileAttachment, ToolResult, parse_lenient_json
-
-logger = logging.getLogger("worker_agent")
 
 
 def tool_message_content(
@@ -166,7 +163,13 @@ class WorkerAgent:
                 if inspect.iscoroutine(response):
                     response = await response
         except FormatError as e:
+            if e.messages and isinstance(e.messages[0], dict):
+                self.cost += e.messages[0].get("extra", {}).get("cost", 0.0)
             self.n_consecutive_format_errors += 1
+            if 0 < self.config.cost_limit <= self.cost:
+                return ToolResult("LimitsExceeded: cost limit reached", is_error=True, is_terminal=True)
+            if 0 < self.config.max_consecutive_format_errors <= self.n_consecutive_format_errors:
+                return ToolResult("RepeatedFormatError: maximum format errors reached", is_error=True, is_terminal=True)
             err_content = "Error: No tool call found. Every step MUST execute a tool."
             if e.messages:
                 self.messages.extend(e.messages)
@@ -187,6 +190,8 @@ class WorkerAgent:
         # 4. Strict tool-calling guard
         if not tool_calls:
             self.n_consecutive_format_errors += 1
+            if 0 < self.config.max_consecutive_format_errors <= self.n_consecutive_format_errors:
+                return ToolResult("RepeatedFormatError: maximum format errors reached", is_error=True, is_terminal=True)
             err_msg = "Error: No tool call found. Every step MUST execute a tool."
             self.messages.append({"role": "user", "content": err_msg})
             return ToolResult(err_msg, is_error=True, is_terminal=False)
@@ -196,10 +201,14 @@ class WorkerAgent:
         # 5. Dispatch tool calls
         last_result = ToolResult("", is_error=False)
         for i, tc in enumerate(tool_calls):
-            call_id = tc.get("id") or f"call_{i}"
+            call_id = (tc.get("id") if isinstance(tc, dict) else None) or f"call_{i}"
             fn = tc.get("function", {}) if isinstance(tc, dict) else {}
-            name = fn.get("name") or tc.get("name") or ""
-            raw_args = fn.get("arguments") if "arguments" in fn else tc.get("arguments", {})
+            name = fn.get("name") or (tc.get("name") if isinstance(tc, dict) else "") or ""
+            raw_args = (
+                fn.get("arguments")
+                if "arguments" in fn
+                else (tc.get("arguments", {}) if isinstance(tc, dict) else {})
+            )
 
             if isinstance(raw_args, str):
                 try:
@@ -230,7 +239,7 @@ class WorkerAgent:
 
     async def run(self, task: str = "", **kwargs: Any) -> dict[str, Any]:
         """Runs autonomous loop until completion, limits exceeded, or failure."""
-        self.extra_template_vars.update({"task": task, **kwargs})
+        self.extra_template_vars = {"task": task, **kwargs}
         self.messages = []
         self.cost = 0.0
         self.n_calls = 0

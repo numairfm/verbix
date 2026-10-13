@@ -149,3 +149,62 @@ async def test_worker_limits_exceeded():
 
     assert result["status"] == "failed"
     assert "LimitsExceeded" in result["summary"]
+
+
+@pytest.mark.asyncio
+async def test_worker_accumulates_cost_on_format_error():
+    mock_model = MagicMock()
+    mock_model.query.side_effect = [
+        FormatError({
+            "role": "user",
+            "content": "Tool call error: No tool calls found.",
+            "extra": {"cost": 0.05},
+        }),
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "function": {"name": "finish", "arguments": '{"summary": "done"}'}}],
+            "extra": {"cost": 0.02},
+        },
+    ]
+
+    tools = ToolRegistry()
+    tools.register(
+        "finish",
+        {"type": "function", "function": {"name": "finish"}},
+        lambda a: ToolResult("done", is_terminal=True),
+    )
+
+    agent = WorkerAgent(model=mock_model, tools=tools)
+    result = await agent.run("do work")
+
+    assert result["status"] == "completed"
+    assert result["summary"] == "done"
+    assert agent.cost == pytest.approx(0.07)
+    assert result["cost"] == pytest.approx(0.07)
+
+
+@pytest.mark.asyncio
+async def test_worker_cost_limit_halts_on_expensive_format_errors():
+    mock_model = MagicMock()
+    mock_model.query.side_effect = [
+        FormatError({
+            "role": "user",
+            "content": "Tool call error: No tool calls found.",
+            "extra": {"cost": 2.0},
+        }),
+        FormatError({
+            "role": "user",
+            "content": "Tool call error: No tool calls found.",
+            "extra": {"cost": 2.0},
+        }),
+    ]
+
+    config = WorkerConfig(cost_limit=3.0)
+    agent = WorkerAgent(model=mock_model, config=config)
+    result = await agent.run("costly failing task")
+
+    assert result["status"] == "failed"
+    assert "LimitsExceeded" in result["summary"]
+    assert agent.cost == pytest.approx(4.0)
+

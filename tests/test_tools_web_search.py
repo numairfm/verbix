@@ -1,6 +1,7 @@
 import io
 import json
 import urllib.error
+from email.message import Message
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -272,7 +273,7 @@ async def test_web_search_http_error_handled(
         url="https://lite.duckduckgo.com/lite/",
         code=500,
         msg="Internal Server Error",
-        hdrs={},
+        hdrs=Message(),
         fp=io.BytesIO(b"Server Error"),
     )
 

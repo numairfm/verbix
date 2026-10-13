@@ -171,16 +171,16 @@ def _search_tavily(query: str, max_results: int, api_key: str) -> list[SearchRes
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, context=_SSL_CONTEXT, timeout=15) as resp:
         body = json.loads(resp.read().decode("utf-8"))
 
     raw_results = body.get("results", []) if isinstance(body, dict) else []
     results: list[SearchResult] = []
     for item in raw_results[:max_results]:
         if isinstance(item, dict):
-            title = str(item.get("title", ""))
-            link = str(item.get("url", ""))
-            snippet = str(item.get("content", "") or item.get("snippet", ""))
+            title = str(item.get("title", "")).strip()
+            link = str(item.get("url", "")).strip()
+            snippet = str(item.get("content", "") or item.get("snippet", "")).strip()
             results.append(SearchResult(title=title, url=link, snippet=snippet))
     return results
 
@@ -196,7 +196,7 @@ def _search_brave(query: str, max_results: int, api_key: str) -> list[SearchResu
         },
         method="GET",
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, context=_SSL_CONTEXT, timeout=15) as resp:
         body = json.loads(resp.read().decode("utf-8"))
 
     web_data = body.get("web", {}) if isinstance(body, dict) else {}
@@ -208,9 +208,9 @@ def _search_brave(query: str, max_results: int, api_key: str) -> list[SearchResu
     results: list[SearchResult] = []
     for item in raw_results[:max_results]:
         if isinstance(item, dict):
-            title = str(item.get("title", ""))
-            link = str(item.get("url", ""))
-            snippet = str(item.get("description", "") or item.get("snippet", ""))
+            title = str(item.get("title", "")).strip()
+            link = str(item.get("url", "")).strip()
+            snippet = str(item.get("description", "") or item.get("snippet", "")).strip()
             results.append(SearchResult(title=title, url=link, snippet=snippet))
     return results
 
@@ -231,20 +231,20 @@ def _search_exa(query: str, max_results: int, api_key: str) -> list[SearchResult
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, context=_SSL_CONTEXT, timeout=15) as resp:
         body = json.loads(resp.read().decode("utf-8"))
 
     raw_results = body.get("results", []) if isinstance(body, dict) else []
     results: list[SearchResult] = []
     for item in raw_results[:max_results]:
         if isinstance(item, dict):
-            title = str(item.get("title", ""))
-            link = str(item.get("url", ""))
+            title = str(item.get("title", "")).strip()
+            link = str(item.get("url", "")).strip()
             snippet = str(
                 item.get("text", "")
                 or item.get("snippet", "")
                 or item.get("content", "")
-            )
+            ).strip()
             results.append(SearchResult(title=title, url=link, snippet=snippet))
     return results
 
@@ -277,23 +277,30 @@ class WebSearchTool:
 
     @staticmethod
     def _resolve_provider() -> tuple[str, str | None]:
+        def _get_key(name: str) -> str | None:
+            val = os.environ.get(name, "").strip()
+            return val if val else None
+
         explicit = os.environ.get("VERBIX_SEARCH_PROVIDER", "").strip().lower()
         if explicit:
             key = None
             if explicit == "exa":
-                key = os.environ.get("EXA_API_KEY")
+                key = _get_key("EXA_API_KEY")
             elif explicit == "tavily":
-                key = os.environ.get("TAVILY_API_KEY")
+                key = _get_key("TAVILY_API_KEY")
             elif explicit == "brave":
-                key = os.environ.get("BRAVE_API_KEY")
+                key = _get_key("BRAVE_API_KEY")
             return explicit, key
 
-        if os.environ.get("EXA_API_KEY"):
-            return "exa", os.environ.get("EXA_API_KEY")
-        if os.environ.get("TAVILY_API_KEY"):
-            return "tavily", os.environ.get("TAVILY_API_KEY")
-        if os.environ.get("BRAVE_API_KEY"):
-            return "brave", os.environ.get("BRAVE_API_KEY")
+        exa_key = _get_key("EXA_API_KEY")
+        if exa_key:
+            return "exa", exa_key
+        tavily_key = _get_key("TAVILY_API_KEY")
+        if tavily_key:
+            return "tavily", tavily_key
+        brave_key = _get_key("BRAVE_API_KEY")
+        if brave_key:
+            return "brave", brave_key
         return "duckduckgo", None
 
     def _dispatch_search(

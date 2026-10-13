@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from verbix.agent.exceptions import FormatError
 from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.utils.compaction import compact_messages
 from verbix.tools.base import FileAttachment, ToolResult, parse_lenient_json
 
 
@@ -43,6 +44,7 @@ class WorkerConfig(BaseModel):
     wall_time_limit_seconds: int = 0
     max_consecutive_format_errors: int = 3
     tool_output: dict[str, Any] | None = None
+    max_context_tokens: int | None = 16000
 
     @model_validator(mode="before")
     @classmethod
@@ -150,6 +152,9 @@ class WorkerAgent:
         self.n_calls += 1
 
         # 2. Query model non-streaming
+        if self.config.max_context_tokens:
+            self.messages[:] = compact_messages(self.messages, max_tokens=self.config.max_context_tokens)
+
         tool_defs = self.get_tool_definitions()
         query_kwargs: dict[str, Any] = {}
         if tool_defs is not None:
@@ -231,6 +236,20 @@ class WorkerAgent:
 
             result = await self._execute_tool(name, args)
             last_result = result
+
+            if self.on_event is not None:
+                try:
+                    from verbix.core.events import ToolCallFinished
+
+                    self.on_event(
+                        ToolCallFinished(
+                            call_id=call_id,
+                            observation=result.observation,
+                            is_error=result.is_error,
+                        )
+                    )
+                except Exception:  # noqa: BLE001, S110
+                    pass
 
             self.messages.append(
                 {

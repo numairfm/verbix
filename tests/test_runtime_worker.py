@@ -353,3 +353,34 @@ async def test_worker_finish_handoff_to_announcer_queue(tmp_path, monkeypatch):
     assert (task_id, "Created game asset.") in runtime._pending_announcements
     assert mock_drain.called
 
+
+@pytest.mark.asyncio
+async def test_worker_task_emits_event_on_task_failure():
+    from unittest.mock import MagicMock
+
+    from verbix.core.events import TextDelta
+    from verbix.runtime.worker import WorkerTask
+
+    mock_agent = MagicMock()
+
+    async def fake_run(task):
+        raise RuntimeError("API error: out of credits")
+
+    mock_agent.run = fake_run
+    mock_agent.messages = []
+
+    events = []
+    task = WorkerTask(
+        id="task-fail",
+        description="failing task",
+        session=mock_agent,
+        on_event=lambda tid, ev: events.append((tid, ev)),
+    )
+    task.start()
+    await task.wait()
+
+    assert task.status == "failed"
+    text_events = [ev for _, ev in events if isinstance(ev, TextDelta)]
+    assert any("! task failed:" in e.text for e in text_events)
+
+

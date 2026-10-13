@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, model_validator
 from verbix.agent.exceptions import FormatError
 from verbix.agent.tools.registry import ToolRegistry
 from verbix.agent.utils.compaction import compact_messages
+from verbix.core.events import TextDelta, ToolCallFinished, ToolCallStarted
 from verbix.tools.base import FileAttachment, ToolResult, parse_lenient_json
 
 
@@ -42,7 +43,7 @@ class WorkerConfig(BaseModel):
     step_limit: int = 0
     cost_limit: float = 3.0
     wall_time_limit_seconds: int = 0
-    max_consecutive_format_errors: int = 3
+    max_consecutive_format_errors: int = 5
     tool_output: dict[str, Any] | None = None
     max_context_tokens: int | None = 16000
 
@@ -172,17 +173,29 @@ class WorkerAgent:
             if e.messages and isinstance(e.messages[0], dict):
                 self.cost += e.messages[0].get("extra", {}).get("cost", 0.0)
             self.n_consecutive_format_errors += 1
-            if 0 < self.config.cost_limit <= self.cost:
-                return ToolResult("LimitsExceeded: cost limit reached", is_error=True, is_terminal=True)
-            if 0 < self.config.max_consecutive_format_errors <= self.n_consecutive_format_errors:
-                return ToolResult("RepeatedFormatError: maximum format errors reached", is_error=True, is_terminal=True)
             err_content = "Error: No tool call found. Every step MUST execute a tool."
             if e.messages:
                 self.messages.extend(e.messages)
                 err_content = e.messages[-1].get("content", err_content)
             else:
                 self.messages.append({"role": "user", "content": err_content})
+            if self.on_event is not None:
+                try:
+                    self.on_event(TextDelta(text=f"! format error: {err_content}"))
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            if 0 < self.config.cost_limit <= self.cost:
+                return ToolResult("LimitsExceeded: cost limit reached", is_error=True, is_terminal=True)
+            if 0 < self.config.max_consecutive_format_errors <= self.n_consecutive_format_errors:
+                return ToolResult("RepeatedFormatError: maximum format errors reached", is_error=True, is_terminal=True)
             return ToolResult(err_content, is_error=True, is_terminal=False)
+        except Exception as e:
+            if self.on_event is not None:
+                try:
+                    self.on_event(TextDelta(text=f"! query error: {e}"))
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            raise
 
         # 3. Process cost & response
         cost = response.get("extra", {}).get("cost", 0.0) if isinstance(response, dict) else 0.0
@@ -196,10 +209,15 @@ class WorkerAgent:
         # 4. Strict tool-calling guard
         if not tool_calls:
             self.n_consecutive_format_errors += 1
-            if 0 < self.config.max_consecutive_format_errors <= self.n_consecutive_format_errors:
-                return ToolResult("RepeatedFormatError: maximum format errors reached", is_error=True, is_terminal=True)
             err_msg = "Error: No tool call found. Every step MUST execute a tool."
             self.messages.append({"role": "user", "content": err_msg})
+            if self.on_event is not None:
+                try:
+                    self.on_event(TextDelta(text=f"! format error: {err_msg}"))
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            if 0 < self.config.max_consecutive_format_errors <= self.n_consecutive_format_errors:
+                return ToolResult("RepeatedFormatError: maximum format errors reached", is_error=True, is_terminal=True)
             return ToolResult(err_msg, is_error=True, is_terminal=False)
 
         self.n_consecutive_format_errors = 0
@@ -228,8 +246,6 @@ class WorkerAgent:
 
             if self.on_event is not None:
                 try:
-                    from verbix.core.events import ToolCallStarted
-
                     self.on_event(ToolCallStarted(call_id=call_id, tool_name=name, arguments=args))
                 except Exception:  # noqa: BLE001, S110
                     pass
@@ -239,8 +255,6 @@ class WorkerAgent:
 
             if self.on_event is not None:
                 try:
-                    from verbix.core.events import ToolCallFinished
-
                     self.on_event(
                         ToolCallFinished(
                             call_id=call_id,
@@ -299,6 +313,11 @@ class WorkerAgent:
         summary = obs.removeprefix(prefix)
 
         status = "failed" if (terminal_result and terminal_result.is_error) else "completed"
+        if status == "failed" and self.on_event is not None:
+            try:
+                self.on_event(TextDelta(text=f"! task failed: {summary}"))
+            except Exception:  # noqa: BLE001, S110
+                pass
         return {
             "status": status,
             "summary": summary,

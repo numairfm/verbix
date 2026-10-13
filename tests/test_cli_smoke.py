@@ -84,3 +84,35 @@ def test_cli_printer_renders_user_transcript(capsys):
     printer.print_user("")
     printer.print_user("   \n\t")
     assert capsys.readouterr().out == ""
+
+
+def test_build_runtime_worker_max_tokens_flag(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-123")
+    parser = build_parser()
+    args = parser.parse_args(["--workspace", str(tmp_path), "--worker-max-tokens", "8192"])
+    runtime = build_runtime(args)
+    assert runtime.worker_model is not None
+    assert runtime.worker_model.config.model_kwargs.get("max_tokens") == 8192
+    # Foreground model retains default
+    assert runtime.provider.config.model_kwargs.get("max_tokens") == 2048
+
+
+def test_build_runtime_worker_max_tokens_default_uncapped(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-123")
+    monkeypatch.delenv("VERBIX_WORKER_MAX_TOKENS", raising=False)
+    parser = build_parser()
+    args = parser.parse_args(["--workspace", str(tmp_path)])
+    runtime = build_runtime(args)
+    assert runtime.worker_model is not None
+    assert "max_tokens" not in runtime.worker_model.config.model_kwargs
+
+
+def test_build_runtime_worker_max_tokens_env_var(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-123")
+    monkeypatch.setenv("VERBIX_WORKER_MAX_TOKENS", "4096")
+    parser = build_parser()
+    args = parser.parse_args(["--workspace", str(tmp_path)])
+    runtime = build_runtime(args)
+    assert runtime.worker_model is not None
+    assert runtime.worker_model.config.model_kwargs.get("max_tokens") == 4096
+

@@ -74,7 +74,15 @@ model:
 
     Here is general guidance on how to submit correct toolcalls:
 
-    Use the 'bash' tool to execute commands:
+    Use 'write' to create or replace files:
+    - Tool: write
+    - Arguments: {"path": "relative/or/absolute/path", "content": "full file contents"}
+
+    Use 'read' to view files or directory contents:
+    - Tool: read
+    - Arguments: {"path": "relative/or/absolute/path"}
+
+    Use 'bash' only for commands with no dedicated tool:
     - Tool: bash
     - Arguments: {"command": "your_command_here"}
 

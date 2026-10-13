@@ -211,6 +211,7 @@ class WorkerTask:
             self._status = "failed"
             self._error = str(e)
             self._result = f"Task failed: {e}"
+            self._emit(TextDelta(text=f"! task failed: {e}"))
         finally:
             self._finished_at = time.time()
             for cb in self._completion_callbacks:

@@ -100,6 +100,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum completion tokens per turn (default: 2048)",
     )
     parser.add_argument(
+        "--worker-max-tokens",
+        type=int,
+        default=int(os.environ["VERBIX_WORKER_MAX_TOKENS"])
+        if os.environ.get("VERBIX_WORKER_MAX_TOKENS")
+        else None,
+        help="Maximum completion tokens per turn for background workers (default: None / uncapped).",
+    )
+    parser.add_argument(
         "--receptionist-model",
         type=str,
         default=None,
@@ -208,13 +216,18 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
     )
     foreground_model = LitellmModel(config_class=lambda **kw: fg_config)
 
-    worker_model = None
-    if getattr(args, "worker_model", None):
-        worker_config = LitellmModelConfig(
-            model_name=args.worker_model,
-            model_kwargs=model_kwargs,
-        )
-        worker_model = LitellmModel(config_class=lambda **kw: worker_config)
+    worker_model_name = getattr(args, "worker_model", None) or args.model
+    worker_model_kwargs = dict(model_kwargs)
+    if getattr(args, "worker_max_tokens", None):
+        worker_model_kwargs["max_tokens"] = args.worker_max_tokens
+    else:
+        worker_model_kwargs.pop("max_tokens", None)
+
+    worker_config = LitellmModelConfig(
+        model_name=worker_model_name,
+        model_kwargs=worker_model_kwargs,
+    )
+    worker_model = LitellmModel(config_class=lambda **kw: worker_config)
 
     flag_prompt = getattr(args, "system_prompt", None)
     system_prompt = flag_prompt.strip() if flag_prompt and flag_prompt.strip() else None

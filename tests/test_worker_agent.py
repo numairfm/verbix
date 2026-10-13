@@ -326,3 +326,43 @@ async def test_worker_emits_tool_call_finished_on_error():
     assert finished.is_error is True
 
 
+@pytest.mark.asyncio
+async def test_worker_emits_event_on_format_error():
+    from verbix.core.events import TextDelta
+
+    mock_model = MagicMock()
+    mock_model.query.side_effect = FormatError({
+        "role": "user",
+        "content": "No tool call found in the response.",
+    })
+    events = []
+    agent = WorkerAgent(model=mock_model, tools=ToolRegistry())
+    agent.on_event = events.append
+
+    res = await agent.step()
+    assert res.is_error is True
+
+    text_events = [e for e in events if isinstance(e, TextDelta)]
+    assert len(text_events) >= 1
+    assert "! format error:" in text_events[0].text
+
+
+@pytest.mark.asyncio
+async def test_worker_emits_event_on_query_exception():
+    from verbix.core.events import TextDelta
+
+    mock_model = MagicMock()
+    mock_model.query.side_effect = RuntimeError("Openrouter credit balance too low")
+    events = []
+    agent = WorkerAgent(model=mock_model, tools=ToolRegistry())
+    agent.on_event = events.append
+
+    with pytest.raises(RuntimeError, match="Openrouter credit balance too low"):
+        await agent.step()
+
+    text_events = [e for e in events if isinstance(e, TextDelta)]
+    assert len(text_events) >= 1
+    assert "! query error:" in text_events[0].text
+
+
+

@@ -10,7 +10,6 @@ from unittest.mock import Mock, NonCallableMock
 
 import yaml
 
-from verbix.agent.agents.default import DefaultAgent
 from verbix.agent.environments.local import LocalEnvironment
 from verbix.agent.models.litellm_model import LitellmModel
 from verbix.agent.voice import VoiceAgent, VoiceConfig
@@ -93,7 +92,7 @@ Discover the necessary environment and tools, execute actions directly, verify o
 class DefaultAgentHistoryProxy:
     """Provides backwards-compatible .messages and .append_assistant() on top of DefaultAgent.messages."""
 
-    def __init__(self, agent: DefaultAgent) -> None:
+    def __init__(self, agent: Any) -> None:
         self._agent = agent
 
     @property

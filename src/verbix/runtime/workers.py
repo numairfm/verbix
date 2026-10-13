@@ -33,6 +33,54 @@ def build_worker_registry(workspace: Path | None = None) -> ToolRegistry:
     )
 
 
+def finish_runtime_task(runtime: Any, task_id: str, result: str) -> None:
+    """Records task completion into the ledger, context memory, and schedules announcement."""
+    if hasattr(runtime, "ledger"):
+        runtime.ledger.mark_completed(task_id, result)
+    if hasattr(runtime, "_broadcast_event"):
+        runtime._broadcast_event("task_completed", {"task_id": task_id, "result": result})
+    if hasattr(runtime, "foreground") and hasattr(runtime.foreground, "messages"):
+        runtime.foreground.messages.append({
+            "role": "user",
+            "content": f"[Task '{task_id}' completed]: {result}",
+        })
+    if hasattr(runtime, "_pending_announcements"):
+        runtime._pending_announcements.append((task_id, result))
+    if getattr(runtime, "floor", None) and getattr(runtime.floor, "is_idle", False):
+        try:
+            loop = asyncio.get_running_loop()
+            drain = getattr(runtime, "_drain_pending_announcements", None) or (
+                lambda: drain_pending_announcements(runtime)
+            )
+            loop.create_task(drain())
+        except RuntimeError:
+            pass
+
+
+def fail_runtime_task(runtime: Any, task_id: str, result: str) -> None:
+    """Records task failure into the ledger, context memory, and schedules announcement."""
+    if hasattr(runtime, "ledger"):
+        runtime.ledger.mark_failed(task_id, result)
+    if hasattr(runtime, "_broadcast_event"):
+        runtime._broadcast_event("task_failed", {"task_id": task_id, "result": result})
+    if hasattr(runtime, "foreground") and hasattr(runtime.foreground, "messages"):
+        runtime.foreground.messages.append({
+            "role": "user",
+            "content": f"[Task '{task_id}' failed]: {result}",
+        })
+    if hasattr(runtime, "_pending_announcements"):
+        runtime._pending_announcements.append((task_id, result))
+    if getattr(runtime, "floor", None) and getattr(runtime.floor, "is_idle", False):
+        try:
+            loop = asyncio.get_running_loop()
+            drain = getattr(runtime, "_drain_pending_announcements", None) or (
+                lambda: drain_pending_announcements(runtime)
+            )
+            loop.create_task(drain())
+        except RuntimeError:
+            pass
+
+
 async def spawn_worker(runtime: Any, objective: str) -> str:
     """Spawns an independent background worker with full workspace tools."""
     prune_spills(Path(runtime.workspace) / ".verbix" / "logs")
@@ -98,55 +146,19 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
 
     def _on_finish(t: WorkerTask) -> None:
         if t.status == "cancelled":
-            runtime.ledger.mark_cancelled(t.id)
-            runtime._broadcast_event("task_cancelled", {"task_id": t.id})
+            if hasattr(runtime, "ledger"):
+                runtime.ledger.mark_cancelled(t.id)
+            if hasattr(runtime, "_broadcast_event"):
+                runtime._broadcast_event("task_cancelled", {"task_id": t.id})
             return
         if t.status == "failed":
             result = t.result or "Task failed without a verified result."
-            runtime.ledger.mark_failed(t.id, result)
-            runtime._broadcast_event("task_failed", {"task_id": t.id, "result": result})
-            if hasattr(runtime, "foreground") and hasattr(runtime.foreground, "messages"):
-                runtime.foreground.messages.append({
-                    "role": "user",
-                    "content": f"[Task '{t.id}' failed]: {result}",
-                })
-            runtime._pending_announcements.append((t.id, result))
-            if getattr(runtime, "floor", None) and getattr(runtime.floor, "is_idle", False):
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(
-                        runtime._drain_pending_announcements()
-                        if hasattr(runtime, "_drain_pending_announcements")
-                        else drain_pending_announcements(runtime)
-                    )
-                except RuntimeError:
-                    pass
+            fail_runtime_task(runtime, t.id, result)
             return
         if hasattr(runtime, "_on_task_finished"):
             runtime._on_task_finished(t.id, t.result or "Task completed.")
         else:
-            result = t.result or "Task completed."
-            if hasattr(runtime, "ledger"):
-                runtime.ledger.mark_completed(t.id, result)
-            if hasattr(runtime, "_broadcast_event"):
-                runtime._broadcast_event("task_completed", {"task_id": t.id, "result": result})
-            if hasattr(runtime, "foreground") and hasattr(runtime.foreground, "messages"):
-                runtime.foreground.messages.append({
-                    "role": "user",
-                    "content": f"[Task '{t.id}' completed]: {result}",
-                })
-            if hasattr(runtime, "_pending_announcements"):
-                runtime._pending_announcements.append((t.id, result))
-            if getattr(runtime, "floor", None) and getattr(runtime.floor, "is_idle", False):
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(
-                        runtime._drain_pending_announcements()
-                        if hasattr(runtime, "_drain_pending_announcements")
-                        else drain_pending_announcements(runtime)
-                    )
-                except RuntimeError:
-                    pass
+            finish_runtime_task(runtime, t.id, t.result or "Task completed.")
 
     worker_task.on_completed(_on_finish)
     runtime.tasks[task_id] = worker_task

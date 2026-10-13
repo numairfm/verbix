@@ -314,10 +314,11 @@ async def test_worker_finish_completes_and_reports_summary():
 
 
 @pytest.mark.asyncio
-async def test_worker_finish_handoff_to_announcer_queue(tmp_path):
+async def test_worker_finish_handoff_to_announcer_queue(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
+    from verbix.agent.worker import WorkerAgent
     from verbix.runtime.foreground import DEFAULT_WORKER_PROMPT
     from verbix.runtime.ledger import TaskLedger
     from verbix.runtime.workers import spawn_worker
@@ -342,20 +343,13 @@ async def test_worker_finish_handoff_to_announcer_queue(tmp_path):
     async def fake_run(self, objective):
         return {"status": "completed", "summary": "Created game asset."}
 
-    from verbix.agent.worker import WorkerAgent
+    monkeypatch.setattr(WorkerAgent, "run", fake_run)
+    task_id = await spawn_worker(runtime, "create asset")
+    task = runtime.tasks[task_id]
+    await task.wait()
 
-    original_run = getattr(WorkerAgent, "run", None)
-    WorkerAgent.run = fake_run
-    try:
-        task_id = await spawn_worker(runtime, "create asset")
-        task = runtime.tasks[task_id]
-        await task.wait()
-
-        assert task.status == "completed"
-        assert task.result == "Created game asset."
-        assert (task_id, "Created game asset.") in runtime._pending_announcements
-        assert mock_drain.called
-    finally:
-        if original_run is not None:
-            WorkerAgent.run = original_run
+    assert task.status == "completed"
+    assert task.result == "Created game asset."
+    assert (task_id, "Created game asset.") in runtime._pending_announcements
+    assert mock_drain.called
 

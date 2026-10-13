@@ -47,7 +47,7 @@ from verbix.runtime.foreground import (
     build_foreground_agent,
 )
 from verbix.runtime.worker import WorkerTask
-from verbix.runtime.workers import spawn_worker
+from verbix.runtime.workers import finish_runtime_task, spawn_worker
 
 __all__ = [
     "DEFAULT_VERBIX_PROMPT",
@@ -336,23 +336,7 @@ class Runtime:
     def _on_task_finished(self, task_id: str, result: str) -> None:
         """Records task completion into the ledger, context memory, and schedules announcement."""
         logger.debug("Worker %s finished: %s", task_id, _redact_secrets(result[:2000]))
-        self.ledger.mark_completed(task_id, result)
-        self._broadcast_event(
-            "task_completed",
-            {"task_id": task_id, "result": result},
-        )
-        if hasattr(self, "foreground") and hasattr(self.foreground, "messages"):
-            self.foreground.messages.append({
-                "role": "user",
-                "content": f"[Task '{task_id}' completed]: {result}",
-            })
-        self._pending_announcements.append((task_id, result))
-        if self.floor.is_idle:
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._drain_pending_announcements())
-            except RuntimeError:
-                pass
+        finish_runtime_task(self, task_id, result)
 
     async def _drain_pending_announcements(self) -> None:
         """Speaks accumulated background completions via the single foreground companion."""

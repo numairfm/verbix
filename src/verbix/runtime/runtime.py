@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import platform
+import re
 import sys
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine
@@ -12,6 +13,14 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("verbix.runtime")
+
+_KEY_ASSIGN_RE = re.compile(r"([A-Za-z0-9_]*KEY\s*=\s*)\S+")
+_API_KEY_JSON_RE = re.compile(r"""(['"]api_key['"]\s*:\s*['"])[^'"]*(['"])""")
+
+
+def _redact_secrets(text: str) -> str:
+    text = _KEY_ASSIGN_RE.sub(r"\1[REDACTED]", text)
+    return _API_KEY_JSON_RE.sub(r"\1[REDACTED]\2", text)
 
 from verbix.agent.utils.history import validate_and_repair_history
 from verbix.core.events import (
@@ -322,6 +331,7 @@ class Runtime:
 
     def _on_task_finished(self, task_id: str, result: str) -> None:
         """Records task completion into the ledger, context memory, and schedules announcement."""
+        logger.debug("Worker %s finished: %s", task_id, _redact_secrets(result[:2000]))
         self.ledger.mark_completed(task_id, result)
         self._broadcast_event(
             "task_completed",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Protocol, runtime_checkable
 
 
@@ -11,6 +11,42 @@ class SpeechToText(Protocol):
 
     async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
         """Transcribes raw PCM audio data and returns recognized text string."""
+        ...
+
+
+@runtime_checkable
+class STTSessionProtocol(Protocol):
+    """Incremental STT session surface required by VoicePipeline.
+
+    Implemented by STTSession (sherpa_stt) and TranscribeSession
+    (transcribe_stt); test doubles must implement the full surface.
+    """
+
+    on_endpoint: Callable[[], None] | None
+
+    @property
+    def speech_duration(self) -> float:
+        """Duration in seconds of speech buffered in this session."""
+        ...
+
+    def feed(self, pcm: bytes) -> None:
+        """Buffers one PCM chunk (16-bit signed mono) for transcription."""
+        ...
+
+    def feed_barge_in(self, pcm: bytes) -> bool:
+        """Feeds PCM during playback; True when user voice activity is detected."""
+        ...
+
+    async def finalize(self) -> str:
+        """Decodes buffered speech and returns the recognized text."""
+        ...
+
+    def cancel(self) -> None:
+        """Abandons the session: drops audio, cancels pending decodes."""
+        ...
+
+    def reset(self) -> None:
+        """Clears session audio so no previous audio leaks into the next turn."""
         ...
 
 

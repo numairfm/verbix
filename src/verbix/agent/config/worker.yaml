@@ -6,6 +6,8 @@ agent:
   instance_template: |
     Please execute this task: {{task}}
 
+    Your private scratch directory is {{scratch_dir}}. Create new files there unless the task names a destination path. Never write into another task's scratch directory.
+
     ## Execution Invariants:
     1. Discover: Inspect the relevant environment, system state, files, or available tools using the 'read' tool for files; use 'bash' only for what has no dedicated tool.
     2. Execute: Carry out the required actions directly — 'write' new files, 'edit' existing ones, 'bash' only as the escape hatch for commands with no tool. Do not stop at planning or hypothetical answers—perform the actual work.
@@ -13,6 +15,7 @@ agent:
     4. Complete: When the task is complete and verified, call the 'finish' tool with the direct answer to the user's objective.
        - Lead with the conclusive finding or requested content, evaluated and ready to be spoken to the user.
        - Follow with supporting detail (contents seen, actions taken, verification evidence) so follow-up questions answer from context without re-running work.
+       - Quote counts and file names exactly as observed; never paraphrase list membership into vaguer wording.
        - When a requested resource does not exist, an operation fails, or an expectation is unmet, state that fact as the primary conclusion.
        - Never call 'finish' before executing and verifying the work.
 

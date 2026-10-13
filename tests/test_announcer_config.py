@@ -137,6 +137,44 @@ async def test_drain_shares_foreground_context_snapshot():
 
 
 @pytest.mark.asyncio
+async def test_snapshot_strips_tool_syntax_keep_prose():
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from verbix.runtime.announcer import drain_pending_announcements
+
+    foreground_messages = [
+        {"role": "user", "content": "list the files"},
+        {
+            "role": "assistant",
+            "content": "Checking.",
+            "tool_calls": [{"id": "1", "function": {"name": "spawn", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "1", "content": "task started"},
+    ]
+    runtime = SimpleNamespace(
+        floor=SimpleNamespace(is_idle=True),
+        _drain_lock=asyncio.Lock(),
+        _pending_announcements=[("task-1", "two files: a.txt, b.txt")],
+        _request_grounding=lambda: "[grounding]",
+        announcer=SimpleNamespace(messages=[]),
+        foreground=SimpleNamespace(messages=foreground_messages),
+        wake_output=None,
+        on_wake=None,
+        submit=AsyncMock(return_value=""),
+    )
+    await drain_pending_announcements(runtime)
+    msgs = runtime.announcer.messages
+    assert [m.get("content") for m in msgs] == ["list the files", "Checking."]
+    assert all("tool_calls" not in m for m in msgs)
+    assert all(m.get("role") != "tool" for m in msgs)
+    # Foreground originals untouched (no mutation through the copy).
+    assert "tool_calls" in foreground_messages[1]
+    assert foreground_messages[2]["role"] == "tool"
+
+
+@pytest.mark.asyncio
 async def test_drain_blank_result_speaks_nothing():
     import asyncio
     from types import SimpleNamespace

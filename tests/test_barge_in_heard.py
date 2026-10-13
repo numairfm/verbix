@@ -61,6 +61,42 @@ class _StubRuntime:
         self.cancel_kwargs = kwargs
 
 
+class _StubSession:
+    def __init__(self):
+        self.on_endpoint = None
+        self.speech_duration = 0.0
+
+    def feed(self, pcm: bytes) -> None:
+        pass
+
+    @property
+    def is_speech_detected(self) -> bool:
+        return False
+
+    def feed_barge_in(self, pcm: bytes) -> bool:
+        return False
+
+    async def finalize(self) -> str:
+        return ""
+
+    def cancel(self) -> None:
+        pass
+
+    def reset(self) -> None:
+        pass
+
+
+class _StubSTT:
+    def __init__(self):
+        self.sessions = []
+
+    def open_session(self, sample_rate: int = 16000, on_endpoint=None):
+        sess = _StubSession()
+        sess.on_endpoint = on_endpoint
+        self.sessions.append(sess)
+        return sess
+
+
 @pytest.mark.asyncio
 async def test_toggle_passes_pre_interrupt_heard_text_to_cancel():
     """Snapshot ordering: heard text captured before mute, not after."""
@@ -194,7 +230,7 @@ async def test_interrupt_does_not_pass_unplayed_synthesized_text_to_cancel_turn(
     capture = _StubCapture()
     sink = TrackingSink(playback_delay=0.05)
     player = AudioPlayer(tts=MockTextToSpeech(), sink=sink)
-    pipeline = VoicePipeline(runtime=stub, stt=None, player=player, capture=capture)
+    pipeline = VoicePipeline(runtime=stub, stt=_StubSTT(), player=player, capture=capture)
     pipeline._loop = asyncio.get_running_loop()
 
     text = "First sentence here. Second sentence here. Third sentence here."

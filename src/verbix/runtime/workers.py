@@ -37,6 +37,8 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
     prune_spills(Path(runtime.workspace) / ".verbix" / "logs")
     runtime._task_counter += 1
     task_id = f"task-{runtime._task_counter}"
+    scratch_dir = Path(runtime.workspace) / ".verbix" / "tasks" / task_id
+    scratch_dir.mkdir(parents=True, exist_ok=True)
 
     config_dir = Path(__file__).resolve().parent.parent / "agent" / "config"
     worker_path = config_dir / "worker.yaml"
@@ -85,6 +87,7 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
         config=worker_config,
     )
     worker_agent.history = DefaultAgentHistoryProxy(worker_agent)
+    worker_agent.extra_template_vars["scratch_dir"] = str(scratch_dir)
 
     worker_task = WorkerTask(
         id=task_id,

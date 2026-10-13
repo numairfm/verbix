@@ -12,8 +12,8 @@ class FinishTool:
     side_effecting: bool = False
     description: str = (
         "Call this tool when the task objective has been fully executed and verified. "
-        "Provide an information-dense factual summary of actions taken, concrete numbers/metrics, "
-        "and verified results."
+        "Lead the summary with the conclusive outcome or answer, then follow with "
+        "supporting evidence: actions taken, concrete numbers/metrics, and verified results."
     )
 
     @property

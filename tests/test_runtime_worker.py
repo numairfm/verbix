@@ -155,3 +155,60 @@ def test_worker_task_get_status_excludes_system_prompt_and_scaffolding():
     assert 'bash({"command": "pytest"})' in full
     assert "86 passed in 7.0s" in full
     assert "Ran pytest. All 86 passed." in full
+
+
+@pytest.mark.asyncio
+async def test_spawn_creates_private_scratch_dir(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from verbix.runtime.foreground import DEFAULT_WORKER_PROMPT
+    from verbix.runtime.ledger import TaskLedger
+    from verbix.runtime.worker import WorkerTask
+    from verbix.runtime.workers import spawn_worker
+
+    started = []
+    monkeypatch.setattr(WorkerTask, "start", lambda self: started.append(self.id))
+    broadcasted = []
+    runtime = SimpleNamespace(
+        workspace=tmp_path,
+        _task_counter=0,
+        worker_system_prompt=DEFAULT_WORKER_PROMPT,
+        worker_model=None,
+        provider=MagicMock(),
+        worker_echo=False,
+        tasks={},
+        _environments=[],
+        ledger=TaskLedger(),
+        _broadcast_event=lambda *a: broadcasted.append(a),
+    )
+    task_id = await spawn_worker(runtime, "do stuff")
+    assert task_id == "task-1"
+    scratch = tmp_path / ".verbix" / "tasks" / "task-1"
+    assert scratch.is_dir()
+    assert started == ["task-1"]
+    assert ("task_registered", {"task_id": "task-1", "objective": "do stuff"}) in [
+        (a[0], a[1]) for a in broadcasted
+    ]
+
+
+def test_worker_instance_template_renders_scratch_dir(tmp_path):
+    import yaml
+
+    from verbix.agent.agents.default import AgentConfig, DefaultAgent
+
+    cfg_path = (
+        __import__("pathlib").Path(__file__).resolve().parent.parent
+        / "src"
+        / "verbix"
+        / "agent"
+        / "config"
+        / "worker.yaml"
+    )
+    agent_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["agent"]
+    agent = DefaultAgent(
+        model=None, env=None, tools=None, config=AgentConfig(**agent_cfg)
+    )
+    agent.extra_template_vars["scratch_dir"] = str(tmp_path)
+    out = agent._render_template(agent_cfg["instance_template"], task="do stuff")
+    assert "do stuff" in out
+    assert str(tmp_path) in out

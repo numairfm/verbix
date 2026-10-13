@@ -372,6 +372,20 @@ async def test_runtime_announcer_is_dedicated_toolless_agent(tmp_path):
     assert runtime.announcer.messages is not runtime.foreground.messages
 
 
+def test_task_finished_logs_worker_payload(tmp_path, caplog):
+    import logging
+
+    from verbix.runtime.floor import FloorState
+    from verbix.runtime.runtime import Runtime
+
+    runtime = Runtime(workspace=tmp_path, provider=MagicMock())
+    runtime.floor.set_state(FloorState.LISTENING)
+    with caplog.at_level(logging.DEBUG, logger="verbix.runtime"):
+        runtime._on_task_finished("task-9", "found two text files: a.txt, b.txt")
+    assert "task-9" in caplog.text
+    assert "a.txt" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_runtime_multiple_completions_silently_recorded_in_ledger(tmp_path):
     import asyncio
@@ -422,3 +436,22 @@ async def test_cancel_turn_when_idle_leaves_history_unchanged(tmp_path):
         assert runtime.foreground.messages == before
     finally:
         await runtime.aclose()
+
+
+def test_finish_log_redacts_keys(tmp_path, caplog):
+    import logging
+
+    from verbix.runtime.floor import FloorState
+
+    runtime = Runtime(workspace=tmp_path, provider=MagicMock())
+    runtime.floor.set_state(FloorState.LISTENING)
+    runtime.ledger.register_task("task-1", "check keys")
+    secret = "sk-secret-value"
+    with caplog.at_level(logging.DEBUG, logger="verbix.runtime"):
+        runtime._on_task_finished(
+            "task-1",
+            f"done OPENROUTER_API_KEY={secret} and {{\"api_key\": \"{secret}\"}} ok",
+        )
+    assert secret not in caplog.text
+    assert "REDACTED" in caplog.text
+    assert runtime.ledger.get("task-1").result_summary.count(secret) == 2

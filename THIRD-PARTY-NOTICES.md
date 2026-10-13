@@ -21,9 +21,36 @@ This file covers heavy model and media assets by name.
 
 ## STT Speech Recognition
 
-- **Canary 180M Flash** (NVIDIA, CC-BY-4.0) — multilingual FastConformer-CTC/AED ASR
-  by NVIDIA NeMo (<https://huggingface.co/nvidia/canary-180m-flash>).
-  - Pinned checkpoint: `csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8` (INT8 dynamic quantization).
+- **transcribe.cpp** (MIT) — C/C++ speech-to-text library built on ggml,
+  with Python bindings by handy-computer (<https://github.com/handy-computer/transcribe.cpp>).
+  - Pinned packages: `transcribe-cpp==0.4.0`, `transcribe-cpp-native==0.4.0`
+    (native pulled transitively by `transcribe-cpp>=0.4.0` in `pyproject.toml`).
+  - License source: PyPI `license_expression` = MIT on both distributions;
+    upstream `LICENSE` (MIT, The transcribe.cpp authors).
+- **Nemotron 3.5 ASR streaming 0.6B GGUF** (OpenMDW-1.1) — multilingual
+  streaming FastConformer-RNN-T ASR by NVIDIA, GGUF conversion by
+  handy-computer (<https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf>).
+  - Pinned checkpoint: `nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf` (496 MB,
+    fetched by `scripts/fetch_voice_models.py`).
+  - License source: model-card tag `License: openmdw-1.1`, inherited from the
+    base model `nvidia/nemotron-3.5-asr-streaming-0.6b` (governing terms
+    OpenMDW-1.1, <https://openmdw.ai/license/1-1/>); ready for commercial use.
+
+- **Canary 180M Flash** (NVIDIA, CC-BY-4.0) — RETIRED. Weights no longer
+  fetched (`scripts/fetch_voice_models.py` now pins Nemotron GGUF above);
+  superseded as the default STT (`TranscribeSTT` wired in `src/verbix/cli.py`).
+  Legacy code path `src/verbix/voice/sherpa_stt.py` retained; entry kept for
+  provenance. Original checkpoint:
+  `csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8`.
+
+## Voice Activity Detection (Silero)
+
+- **Silero VAD** (MIT) — voice activity detector by the Silero team
+  (<https://github.com/snakers4/silero-vad>), loaded via sherpa-onnx.
+  - Pinned checkpoint: `silero_vad.onnx` (k2-fsa/sherpa-onnx release asset
+    `asr-models`, fetched by `scripts/fetch_voice_models.py`).
+  - License source: upstream `LICENSE` (MIT, Silero Team); copy in
+    `LICENSES/mit-silero.md`.
 
 ## Acoustic Echo Cancellation (pywebrtc-audio)
 

@@ -3,6 +3,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import re
+import wave
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from verbix.voice.capture import PTTCapture
@@ -29,6 +33,7 @@ class VoicePipeline:
         capture: PTTCapture | None = None,
         printer: Any = None,
         aec: Any = None,
+        dump_mic_dir: Path | None = None,
     ) -> None:
         self.runtime = runtime
         self.stt = stt
@@ -58,6 +63,9 @@ class VoicePipeline:
         self._gate_stt_feed: bool = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._mic_lookback: bytes = b""
+        self._dump_mic_dir = Path(dump_mic_dir) if dump_mic_dir else None
+        self._dump_turn = 0
+        self._dump_buf = bytearray()
 
     def _feed_speaker_reference(self, audio: bytes) -> None:
         """Feeds outgoing speaker audio into AEC reference with explicit format parameters."""
@@ -69,6 +77,31 @@ class VoicePipeline:
                 self.aec.feed_reference(audio, source_sample_rate=rate, audio_format=fmt)
             except TypeError:
                 self.aec.feed_reference(audio)
+
+    @staticmethod
+    def _dump_slug(text: str) -> str:
+        slug = re.sub(r"[^A-Za-z0-9_-]+", "_", (text or "").strip())[:40].strip("_")
+        return slug or "nospeech"
+
+    def _dump_wav(self, audio: bytes, *, kind: str, text: str = "") -> None:
+        """Writes mic PCM as 16kHz mono s16 WAV; never raises (evidence must not break turns)."""
+        if self._dump_mic_dir is None or not audio:
+            return
+        try:
+            self._dump_mic_dir.mkdir(parents=True, exist_ok=True)
+            self._dump_turn += 1
+            ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+            label = "lookback" if kind == "lookback" else self._dump_slug(text)
+            path = self._dump_mic_dir / f"{ts}_{self._dump_turn:04d}_{label}.wav"
+            audio = audio[: len(audio) - (len(audio) % 2)]
+            rate = int(getattr(self.capture, "sample_rate", 16000) or 16000)
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(rate)
+                w.writeframes(audio)
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.debug("Mic dump failed: %s", e)
 
     @property
     def is_continuous_active(self) -> bool:
@@ -158,8 +191,7 @@ class VoicePipeline:
         self._loop = None
 
         if self._live_stt is not None:
-            if hasattr(self._live_stt, "cancel"):
-                self._live_stt.cancel()
+            self._live_stt.cancel()
             self._live_stt = None
 
         if hasattr(self, "aec") and hasattr(self.aec, "reset"):
@@ -194,25 +226,25 @@ class VoicePipeline:
             self.runtime.floor.set_state(FloorState.LISTENING)
 
         old = self._live_stt
-        if old is not None and hasattr(old, "cancel"):
+        if old is not None:
             old.cancel()
-        open_fn = getattr(self.stt, "open_session", None)
-        if callable(open_fn):
-            sample_rate = getattr(self.capture, "sample_rate", 16000)
+        sample_rate = getattr(self.capture, "sample_rate", 16000)
+        try:
+            fresh = self.stt.open_session(
+                sample_rate=sample_rate,
+                on_endpoint=self._on_speech_endpoint,
+            )
+        except TypeError:
+            fresh = self.stt.open_session(sample_rate=sample_rate)
+        lookback = getattr(self, "_mic_lookback", b"") or b""
+        if lookback:
+            self._dump_buf = bytearray(lookback)
+            self._dump_wav(lookback, kind="lookback")
             try:
-                fresh = open_fn(
-                    sample_rate=sample_rate,
-                    on_endpoint=self._on_speech_endpoint,
-                )
-            except TypeError:
-                fresh = open_fn(sample_rate=sample_rate)
-            lookback = getattr(self, "_mic_lookback", b"") or b""
-            if lookback and hasattr(fresh, "feed") and callable(fresh.feed):
-                try:
-                    fresh.feed(lookback)
-                except (OSError, RuntimeError) as e:
-                    logger.debug("Error seeding fresh STT session: %s", e)
-            self._live_stt = fresh
+                fresh.feed(lookback)
+            except (OSError, RuntimeError) as e:
+                logger.debug("Error seeding fresh STT session: %s", e)
+        self._live_stt = fresh
 
         if (
             self.runtime is not None
@@ -242,19 +274,19 @@ class VoicePipeline:
         from verbix.runtime.floor import FloorState
 
         self._gate_stt_feed = False
+        self._dump_buf = bytearray()
 
         if hasattr(self.runtime, "floor"):
             self.runtime.floor.set_state(FloorState.LISTENING)
 
         self._speech_endpoint_event.clear()
-        if self._live_stt is not None and hasattr(self._live_stt, "cancel"):
+        if self._live_stt is not None:
             self._live_stt.cancel()
-        if hasattr(self.stt, "open_session"):
-            sample_rate = getattr(self.capture, "sample_rate", 16000)
-            self._live_stt = self.stt.open_session(
-                sample_rate=sample_rate,
-                on_endpoint=self._on_speech_endpoint,
-            )
+        sample_rate = getattr(self.capture, "sample_rate", 16000)
+        self._live_stt = self.stt.open_session(
+            sample_rate=sample_rate,
+            on_endpoint=self._on_speech_endpoint,
+        )
 
         def _feed_chunk(chunk: bytes) -> None:
             if not chunk:
@@ -266,6 +298,7 @@ class VoicePipeline:
                 if not self._gate_stt_feed and self._live_stt is not None:
                     try:
                         self._live_stt.feed(chunk)
+                        self._dump_buf.extend(chunk)
                     except (OSError, RuntimeError) as e:
                         logger.debug("Error feeding STT chunk: %s", e)
                 return
@@ -279,21 +312,20 @@ class VoicePipeline:
                 )
                 self._mic_lookback = (self._mic_lookback + bytes(clean_chunk))[-9600:]
                 if self._live_stt is not None and not self._gate_stt_feed:
-                    feed_barge_in = getattr(self._live_stt, "feed_barge_in", None)
-                    if callable(feed_barge_in):
-                        detected = False
-                        try:
-                            detected = feed_barge_in(clean_chunk)
-                        except (OSError, RuntimeError) as e:
-                            logger.debug("Error feeding STT chunk during playback: %s", e)
-                        if detected:
-                            self._interrupt_active_speech()
+                    detected = False
+                    try:
+                        detected = self._live_stt.feed_barge_in(clean_chunk)
+                    except (OSError, RuntimeError) as e:
+                        logger.debug("Error feeding STT chunk during playback: %s", e)
+                    if detected:
+                        self._interrupt_active_speech()
                 return
 
             self._mic_lookback = (self._mic_lookback + bytes(chunk))[-9600:]
             if not self._gate_stt_feed and self._live_stt is not None:
                 try:
                     self._live_stt.feed(chunk)
+                    self._dump_buf.extend(chunk)
                 except (OSError, RuntimeError) as e:
                     logger.debug("Error feeding STT chunk: %s", e)
 
@@ -323,7 +355,8 @@ class VoicePipeline:
                 speech_dur: float | None = None
                 if self._live_stt is not None:
                     transcribed_text = await self._live_stt.finalize()
-                    speech_dur = getattr(self._live_stt, "speech_duration", None)
+                    speech_dur = self._live_stt.speech_duration
+                    self._dump_wav(bytes(self._dump_buf), kind="turn", text=transcribed_text)
                     self._live_stt = None
 
                 transcribed_text = transcribed_text.strip()
@@ -337,7 +370,7 @@ class VoicePipeline:
 
                 # Bare continuation command handling
                 norm = transcribed_text.lower().rstrip(".!? ")
-                if norm in ("continue", "go on") and getattr(self.runtime, "pending_continuation", None):
+                if norm in ("continue", "go on") and self.runtime.pending_continuation:
                     stashed = self.runtime.pending_continuation
                     self.runtime.pending_continuation = None
                     transcribed_text = (
@@ -448,7 +481,7 @@ class VoicePipeline:
                 transcribed_text = await finalize_res
             else:
                 transcribed_text = finalize_res
-            speech_dur = getattr(self._live_stt, "speech_duration", None)
+            speech_dur = self._live_stt.speech_duration
             self._live_stt = None
         elif audio_bytes and len(audio_bytes) >= 1600:
             transcribe_fn = getattr(self.stt, "transcribe", None)
@@ -460,6 +493,7 @@ class VoicePipeline:
             speech_dur = len(audio_bytes) / 32000.0
 
         transcribed_text = transcribed_text.strip()
+        self._dump_wav(audio_bytes, kind="turn", text=transcribed_text)
         if not transcribed_text:
             if self.runtime is not None and hasattr(self.runtime, "floor"):
                 from verbix.runtime.floor import FloorState

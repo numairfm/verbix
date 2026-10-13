@@ -339,6 +339,9 @@ def build_foreground(
     runtime._task_counter: int = 0
     runtime._environments: list[LocalEnvironment] = []
     runtime._pending_announcements: list[tuple[str, str]] = []
+    # Stashed unplayed text from the latest interruption; consumed/cleared
+    # by an explicit continue, overwritten by newer interrupts.
+    runtime.pending_continuation: str | None = None
     runtime._drain_lock = asyncio.Lock()
     runtime.floor = FloorArbiter(on_change=runtime._on_floor_state_changed)
     runtime.ledger = TaskLedger()

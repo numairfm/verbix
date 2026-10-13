@@ -242,3 +242,68 @@ async def test_edit_empty_old_str(tmp_path: Path):
     assert res.is_error is True
     assert "old_str cannot be empty" in res.observation
 
+
+@pytest.mark.asyncio
+async def test_read_workspace_auth_json_denied(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    (workspace / ".verbix").mkdir(parents=True)
+    (workspace / ".verbix" / "auth.json").write_text('{"openrouter": {"key": "sk-x"}}')
+    ctx = ToolContext(workspace=workspace)
+    res = await FileReadTool().execute({"path": ".verbix/auth.json"}, ctx)
+    assert res.is_error is True
+    assert "secret" in res.observation.lower()
+
+
+@pytest.mark.asyncio
+async def test_read_home_auth_json_denied_regardless_of_spelling(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    home_auth = tmp_path / "home" / ".verbix" / "auth.json"
+    home_auth.parent.mkdir(parents=True)
+    home_auth.write_text('{"openrouter": {"key": "sk-x"}}')
+    ctx = ToolContext(workspace=workspace)
+    res = await FileReadTool().execute({"path": str(home_auth)}, ctx)
+    assert res.is_error is True
+    assert "secret" in res.observation.lower()
+
+
+@pytest.mark.asyncio
+async def test_read_dotenv_denied(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".env").write_text("OPENROUTER_API_KEY=sk-x\n")
+    ctx = ToolContext(workspace=workspace)
+    res = await FileReadTool().execute({"path": ".env"}, ctx)
+    assert res.is_error is True
+    assert "secret" in res.observation.lower()
+
+
+@pytest.mark.asyncio
+async def test_write_and_edit_secret_files_denied(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    (workspace / ".verbix").mkdir(parents=True)
+    (workspace / ".verbix" / "auth.json").write_text("{}")
+    ctx = ToolContext(workspace=workspace)
+    w = await FileWriteTool().execute(
+        {"path": ".verbix/auth.json", "content": "{}"}, ctx
+    )
+    assert w.is_error is True
+    assert "secret" in w.observation.lower()
+    (workspace / ".verbix" / "auth.yaml").write_text("k: v\n")
+    e = await FileEditTool().execute(
+        {"path": ".verbix/auth.yaml", "old_str": "k", "new_str": "v2"}, ctx
+    )
+    assert e.is_error is True
+    assert "secret" in e.observation.lower()
+
+
+@pytest.mark.asyncio
+async def test_legitimate_verbix_paths_still_allowed(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    (workspace / ".verbix" / "logs").mkdir(parents=True)
+    (workspace / ".verbix" / "logs" / "app.log").write_text("hello\n")
+    ctx = ToolContext(workspace=workspace)
+    res = await FileReadTool().execute({"path": ".verbix/logs/app.log"}, ctx)
+    assert res.is_error is False
+    assert "hello" in res.observation
+

@@ -101,3 +101,40 @@ def test_swappable_model_path_via_env(monkeypatch, tmp_path):
     monkeypatch.setenv("VERBIX_STT_MODEL", str(custom_model))
     stt = TranscribeSTT()
     assert Path(stt.model_path).resolve() == custom_model.resolve()
+
+
+def test_project_verbix_models_scope_wins_over_voice_runtime(tmp_path, monkeypatch):
+    from verbix.voice.transcribe_stt import find_default_stt_model
+
+    home = tmp_path / "home"
+    ws = tmp_path / "ws"
+    proj_model = ws / ".verbix" / "models" / "stt" / "a.gguf"
+    proj_model.parent.mkdir(parents=True, exist_ok=True)
+    proj_model.write_bytes(b"dummy")
+    voice_root = tmp_path / "voice-runtime-fake"
+    fallback = voice_root / "models" / "nemotron-gguf" / "fallback.gguf"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_bytes(b"dummy")
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("VERBIX_VOICE_DIR", str(voice_root))
+    monkeypatch.delenv("VERBIX_STT_MODEL", raising=False)
+    assert find_default_stt_model(workspace=ws).resolve() == proj_model.resolve()
+
+
+def test_global_verbix_models_scope_used(tmp_path, monkeypatch):
+    from verbix.voice.transcribe_stt import find_default_stt_model
+
+    home = tmp_path / "home"
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True, exist_ok=True)
+    global_model = home / ".verbix" / "models" / "stt" / "b.gguf"
+    global_model.parent.mkdir(parents=True, exist_ok=True)
+    global_model.write_bytes(b"dummy")
+    voice_root = tmp_path / "voice-runtime-fake"
+    fallback = voice_root / "models" / "nemotron-gguf" / "fallback.gguf"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_bytes(b"dummy")
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("VERBIX_VOICE_DIR", str(voice_root))
+    monkeypatch.delenv("VERBIX_STT_MODEL", raising=False)
+    assert find_default_stt_model(workspace=ws).resolve() == global_model.resolve()

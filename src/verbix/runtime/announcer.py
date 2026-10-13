@@ -102,10 +102,24 @@ def _snapshot_foreground_history(runtime: Any) -> list:
     Same ordered prefix (cache-friendly), fresh objects (the announcer's
     turn cannot mutate foreground entries mid-stream). Snapshot, never a
     live alias: the foreground may append while the announcer streams.
+    Tool calls and tool-role messages are stripped: they are internal
+    mechanics, and their syntax is what a tool-less model imitates into
+    phantom tool use. User/assistant prose (including task findings)
+    passes through untouched.
     """
     foreground = getattr(runtime, "foreground", None)
     messages = getattr(foreground, "messages", None) or []
-    return [dict(m) if isinstance(m, dict) else m for m in messages]
+    clean: list = []
+    for m in messages:
+        if not isinstance(m, dict):
+            clean.append(m)
+            continue
+        if m.get("role") == "tool":
+            continue
+        c = dict(m)
+        c.pop("tool_calls", None)
+        clean.append(c)
+    return clean
 
 
 async def drain_pending_announcements(runtime: Any) -> None:

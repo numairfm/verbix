@@ -43,13 +43,26 @@ def _has_min_voiced_duration(
     return (voiced * _VOICED_FRAME_S) >= min_voiced_s
 
 
-def find_default_stt_model() -> Path:
-    """Discovers the STT model path from env, local runtime, or default root.
+def find_default_stt_model(workspace: Path | None = None) -> Path:
+    """Discovers the STT model path from env, .verbix scopes, local runtime, or default root.
 
     Decoupled and swappable: accepts any GGUF model path without hardcoding.
     """
     if env := os.environ.get("VERBIX_STT_MODEL"):
         return Path(env).resolve()
+
+    # Models layout reservation: models/stt|tts|llm (only stt is read here).
+    if workspace is not None:
+        scoped = Path(workspace) / ".verbix" / "models"
+        if scoped.is_dir():
+            for f in sorted(scoped.glob("**/*.gguf")):
+                if f.is_file():
+                    return f.resolve()
+    scoped_global = Path.home() / ".verbix" / "models"
+    if scoped_global.is_dir():
+        for f in sorted(scoped_global.glob("**/*.gguf")):
+            if f.is_file():
+                return f.resolve()
 
     from scripts.fetch_voice_models import default_root
 
@@ -159,13 +172,19 @@ class TranscribeSTT:
     Transcribes complete utterances in a single clean pass without mid-sentence slicing.
     """
 
-    def __init__(self, model_path: Path | str | None = None) -> None:
+    def __init__(
+        self, model_path: Path | str | None = None, workspace: Path | None = None
+    ) -> None:
         if transcribe_cpp is None:
             raise RuntimeError(
                 "transcribe-cpp is not installed. Run 'uv add transcribe-cpp'."
             )
 
-        self.model_path = Path(model_path).resolve() if model_path else find_default_stt_model()
+        self.model_path = (
+            Path(model_path).resolve()
+            if model_path
+            else find_default_stt_model(workspace=workspace)
+        )
         if not self.model_path.is_file():
             raise FileNotFoundError(
                 f"STT model not found at {self.model_path}. "

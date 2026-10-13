@@ -81,10 +81,18 @@ def resolve_output_limits(tool_output: dict | None) -> tuple[int, int]:
     return (max_lines, max_bytes)
 
 
+def _is_secret_basename(name: str) -> bool:
+    return name == ".env" or name == "auth.json" or name.startswith("auth.")
+
+
 def resolve_contained_path(path_str: str, workspace: Path) -> Path:
     """Resolves a path and ensures it stays strictly within the workspace boundary."""
+    if _is_secret_basename(Path(path_str).name):
+        raise ValueError(f"refusing to access secret file '{path_str}'")
     norm_workspace = workspace.resolve()
     target = (workspace / path_str).resolve()
+    if _is_secret_basename(target.name):
+        raise ValueError(f"refusing to access secret file '{path_str}'")
     try:
         target.relative_to(norm_workspace)
     except ValueError:

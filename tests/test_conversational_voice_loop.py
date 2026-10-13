@@ -31,12 +31,23 @@ class FakeLiveSession:
         self.text = text
         self.speech_duration = speech_duration
         self.on_endpoint = None
+        self.sample_rate = 16000
 
     def feed(self, pcm: bytes):
         self.fed_chunks.append(pcm)
 
+    @property
+    def is_speech_detected(self) -> bool:
+        return False
+
+    def feed_barge_in(self, pcm: bytes) -> bool:
+        return False
+
     def cancel(self):
         self.cancelled = True
+
+    def reset(self):
+        pass
 
     async def finalize(self):
         return self.text
@@ -50,6 +61,7 @@ class FakeSTT:
     def open_session(self, sample_rate: int = 16000, on_endpoint=None):
         text = self._texts.pop(0) if self._texts else ""
         sess = FakeLiveSession(text)
+        sess.sample_rate = sample_rate
         sess.on_endpoint = on_endpoint
         self.sessions.append(sess)
         return sess

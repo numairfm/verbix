@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from verbix.agent.models.litellm_model import LitellmModel, LitellmModelConfig
+from verbix.auth import resolve_provider
+from verbix.config import ensure_global_scaffold, load_config, read_persona
 from verbix.core.events import (
     AgentEvent,
     TextDelta,
@@ -81,6 +83,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Provider API key (optional, LiteLLM auto-detects from environment per provider)",
     )
     parser.add_argument(
+        "--provider",
+        default=None,
+        help="Provider name from ~/.verbix/auth.json (overrides config file and VERBIX_PROVIDER).",
+    )
+    parser.add_argument(
         "--workspace",
         type=Path,
         default=Path.cwd(),
@@ -139,6 +146,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to GGUF speech-to-text model file (default: auto-discover).",
     )
     parser.add_argument(
+        "--dump-mic-dir",
+        type=Path,
+        default=None,
+        help="Directory for per-turn mic-audio WAV dumps (debugging STT glitches; off by default).",
+    )
+    parser.add_argument(
         "--toggle",
         action="store_true",
         help="Send voice toggle event to running Verbix daemon over IPC socket.",
@@ -171,11 +184,23 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
     model_kwargs: dict[str, Any] = {}
     if getattr(args, "max_tokens", None):
         model_kwargs["max_tokens"] = args.max_tokens
+    provider_name = load_config(workspace, args).get("provider")
+    entry = resolve_provider(provider_name) if provider_name else None
     if getattr(args, "base_url", None):
         model_kwargs["api_base"] = args.base_url
+    elif entry and entry.get("base_url"):
+        model_kwargs["api_base"] = entry["base_url"]
     if getattr(args, "api_key", None):
         model_kwargs["api_key"] = args.api_key
+    elif entry and entry.get("key"):
+        model_kwargs["api_key"] = entry["key"]
 
+    default_model = os.environ.get(
+        "VERBIX_MODEL",
+        os.environ.get("OPENROUTER_MODEL", "openrouter/google/gemini-3.5-flash-lite"),
+    )
+    if entry and entry.get("model") and args.model == default_model:
+        args.model = entry["model"]
     receptionist_model_name = getattr(args, "receptionist_model", None) or args.model
     fg_config = LitellmModelConfig(
         model_name=receptionist_model_name,
@@ -191,13 +216,20 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
         )
         worker_model = LitellmModel(config_class=lambda **kw: worker_config)
 
+    flag_prompt = getattr(args, "system_prompt", None)
+    if flag_prompt and flag_prompt.strip():
+        system_prompt = flag_prompt
+    else:
+        persona = read_persona(workspace)
+        system_prompt = f"# USER PERSONA\n{persona}" if persona else None
+
     return Runtime(
         workspace=workspace,
         provider=foreground_model,
         worker_model=worker_model,
         worker_echo=bool(getattr(args, "show_worker_turns", False))
         or os.environ.get("VERBIX_WORKER_ECHO") == "1",
-        system_prompt=getattr(args, "system_prompt", None),
+        system_prompt=system_prompt,
     )
 
 
@@ -335,8 +367,8 @@ def _build_voice_pipeline(
     from verbix.voice.sherpa_tts import SherpaTTS
     from verbix.voice.transcribe_stt import TranscribeSTT
 
-    stt_model = getattr(args, "stt_model", None)
-    stt = TranscribeSTT(model_path=stt_model)
+    stt_model = load_config(runtime.workspace, args).get("stt_model")
+    stt = TranscribeSTT(model_path=stt_model, workspace=runtime.workspace)
     tts = SherpaTTS()
     sink = select_sink(
         getattr(args, "audio_sink", "auto"),
@@ -346,6 +378,8 @@ def _build_voice_pipeline(
     player = AudioPlayer(tts=tts, sink=sink)
     capture = PTTCapture()
     kwargs = {"printer": printer} if printer is not None else {}
+    if getattr(args, "dump_mic_dir", None):
+        kwargs["dump_mic_dir"] = args.dump_mic_dir
     pipeline = VoicePipeline(
         runtime=runtime,
         stt=stt,
@@ -586,6 +620,7 @@ async def async_main(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
+    ensure_global_scaffold()
     load_env()
     parser = build_parser()
     args = parser.parse_args(argv)

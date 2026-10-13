@@ -47,6 +47,44 @@ environment wins over file values (`cli.py:29`).
 Agent tuning lives in `src/verbix/agent/config/`: `voice.yaml`
 (foreground), `worker.yaml` / `swe_worker.yaml` (background workers).
 
+### Config scopes and persona
+
+Two config scopes, merged as builtin defaults < global `~/.verbix/`
+< project `./.verbix/` < env < CLI flags. Both `config.yaml` files are
+optional and accept only `provider` and `stt_model`:
+
+```yaml
+# stt_model: /path/to/model.gguf
+```
+
+First run scaffolds `~/.verbix/` with a commented `config.yaml` and an
+empty `PERSONA.md`; the project scope (`./.verbix/`) is never auto-created.
+
+`PERSONA.md` (global + project, project appended after global) is an
+overlay appended to the system prompt under `# USER PERSONA` — it never
+replaces core prompts. A leading `<!-- ... -->` guidance block is stripped.
+`--system-prompt` replaces file persona entirely when set.
+
+Provider selection: `--provider` flag > `VERBIX_PROVIDER` env > config
+`provider` name. The name selects an entry in `~/.verbix/auth.json`:
+
+```json
+{
+  "openrouter": {
+    "type": "api",
+    "key": "sk-...",
+    "model": "openrouter/google/gemini-3.5-flash-lite",
+    "base_url": "https://openrouter.ai/api/v1"
+  }
+}
+```
+
+`--model` beats the entry model; `--api-key`/`--base-url` beat the entry
+key/base URL.
+
+Warning: gitignore project weights — add `.verbix/models/` to `.gitignore`
+so downloaded `.gguf` files never get committed.
+
 Audio extras are optional: `uv sync --extra audio` (`sounddevice`).
 Voice mode uses sherpa-onnx for on-device inference: Supertonic 3 INT8 for
 TTS and Canary 180M Flash INT8 for STT. Run `uv run scripts/fetch_voice_models.py`

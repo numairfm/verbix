@@ -8,12 +8,12 @@ from typing import Any
 
 import yaml
 
-from verbix.agent.agents.default import AgentConfig, DefaultAgent
 from verbix.agent.environments.local import LocalEnvironment
 from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.worker import WorkerAgent, WorkerConfig
+from verbix.runtime.announcer import drain_pending_announcements
 from verbix.runtime.foreground import (
     DEFAULT_WORKER_PROMPT,
-    DefaultAgentHistoryProxy,
     adapt_provider,
 )
 from verbix.runtime.worker import WorkerTask
@@ -57,7 +57,7 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
         agent_cfg_dict["system_template"] = runtime.worker_system_prompt
         agent_cfg_dict["system_prompt"] = runtime.worker_system_prompt
 
-    worker_config = AgentConfig(**agent_cfg_dict)
+    worker_config = WorkerConfig(**agent_cfg_dict)
 
     env_cfg_dict = raw_worker_cfg.get("environment", {})
     env_extra = env_cfg_dict.get("env", {})
@@ -81,13 +81,12 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
         output_limits=resolve_output_limits(agent_cfg_dict.get("tool_output")),
     )
 
-    worker_agent = DefaultAgent(
+    worker_agent = WorkerAgent(
         model=model_to_use,
         env=env,
         tools=worker_tools,
         config=worker_config,
     )
-    worker_agent.history = DefaultAgentHistoryProxy(worker_agent)
     worker_agent.extra_template_vars["scratch_dir"] = str(scratch_dir)
 
     worker_task = WorkerTask(
@@ -112,14 +111,42 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
                     "content": f"[Task '{t.id}' failed]: {result}",
                 })
             runtime._pending_announcements.append((t.id, result))
-            if runtime.floor.is_idle:
+            if getattr(runtime, "floor", None) and getattr(runtime.floor, "is_idle", False):
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.create_task(runtime._drain_pending_announcements())
+                    loop.create_task(
+                        runtime._drain_pending_announcements()
+                        if hasattr(runtime, "_drain_pending_announcements")
+                        else drain_pending_announcements(runtime)
+                    )
                 except RuntimeError:
                     pass
             return
-        runtime._on_task_finished(t.id, t.result or "Task completed.")
+        if hasattr(runtime, "_on_task_finished"):
+            runtime._on_task_finished(t.id, t.result or "Task completed.")
+        else:
+            result = t.result or "Task completed."
+            if hasattr(runtime, "ledger"):
+                runtime.ledger.mark_completed(t.id, result)
+            if hasattr(runtime, "_broadcast_event"):
+                runtime._broadcast_event("task_completed", {"task_id": t.id, "result": result})
+            if hasattr(runtime, "foreground") and hasattr(runtime.foreground, "messages"):
+                runtime.foreground.messages.append({
+                    "role": "user",
+                    "content": f"[Task '{t.id}' completed]: {result}",
+                })
+            if hasattr(runtime, "_pending_announcements"):
+                runtime._pending_announcements.append((t.id, result))
+            if getattr(runtime, "floor", None) and getattr(runtime.floor, "is_idle", False):
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(
+                        runtime._drain_pending_announcements()
+                        if hasattr(runtime, "_drain_pending_announcements")
+                        else drain_pending_announcements(runtime)
+                    )
+                except RuntimeError:
+                    pass
 
     worker_task.on_completed(_on_finish)
     runtime.tasks[task_id] = worker_task

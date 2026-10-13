@@ -32,6 +32,7 @@ from verbix.core.events import (
 from verbix.runtime.announcer import (
     WakeOutputFanOut,
     build_announcer,
+    build_announcer_agent,
     drain_pending_announcements,
     speak_batch,
 )
@@ -43,6 +44,7 @@ from verbix.runtime.foreground import (
     ProviderStreamAdapter,
     adapt_provider,
     build_foreground,
+    build_foreground_agent,
 )
 from verbix.runtime.worker import WorkerTask
 from verbix.runtime.workers import spawn_worker
@@ -57,7 +59,9 @@ __all__ = [
     "WakeOutputFanOut",
     "adapt_provider",
     "build_announcer",
+    "build_announcer_agent",
     "build_foreground",
+    "build_foreground_agent",
     "drain_pending_announcements",
     "spawn_worker",
     "speak_batch",

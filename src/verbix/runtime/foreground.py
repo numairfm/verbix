@@ -10,9 +10,10 @@ from unittest.mock import Mock, NonCallableMock
 
 import yaml
 
-from verbix.agent.agents.default import AgentConfig, DefaultAgent
+from verbix.agent.agents.default import DefaultAgent
 from verbix.agent.environments.local import LocalEnvironment
 from verbix.agent.models.litellm_model import LitellmModel
+from verbix.agent.voice import VoiceAgent, VoiceConfig
 from verbix.config import fill_persona_slot, read_persona
 from verbix.core.events import (
     AgentEvent,
@@ -284,6 +285,52 @@ class ProviderStreamAdapter:
         if full_text and finish_reason != "tool_calls" and not has_tool_calls:
             yield CoreTurnComplete(final_text=full_text)
 
+    async def query(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        accumulated_text: list[str] = []
+        accumulated_tool_calls: dict[int, dict[str, Any]] = {}
+        async for event in self.query_stream(messages, tools=tools, **kwargs):
+            if isinstance(event, CoreTextDelta):
+                accumulated_text.append(event.text)
+            elif isinstance(event, CoreToolCallDelta):
+                idx = event.index
+                if idx not in accumulated_tool_calls:
+                    accumulated_tool_calls[idx] = {
+                        "call_id": event.call_id or f"call_{idx}",
+                        "name": event.name or "",
+                        "arguments": "",
+                    }
+                tc = accumulated_tool_calls[idx]
+                if event.call_id:
+                    tc["call_id"] = event.call_id
+                if event.name:
+                    tc["name"] = event.name
+                if event.arguments_delta:
+                    tc["arguments"] += event.arguments_delta
+
+        tcs: list[dict[str, Any]] = []
+        for idx in sorted(accumulated_tool_calls.keys()):
+            tc_data = accumulated_tool_calls[idx]
+            tcs.append({
+                "id": tc_data["call_id"],
+                "type": "function",
+                "function": {
+                    "name": tc_data["name"],
+                    "arguments": tc_data["arguments"],
+                },
+            })
+
+        return {
+            "role": "assistant",
+            "content": "".join(accumulated_text) or None,
+            "tool_calls": tcs if tcs else None,
+            "extra": {"cost": 0.0},
+        }
+
 
 def adapt_provider(provider: Any) -> Any:
     if isinstance(provider, (LitellmModel, ProviderStreamAdapter)):
@@ -297,17 +344,17 @@ def adapt_provider(provider: Any) -> Any:
     return provider
 
 
-def build_foreground(
+def build_foreground_agent(
     runtime: Any,
     *,
     system_prompt: str | None = None,
     worker_system_prompt: str | None = None,
     on_wake: Callable[[str], Coroutine[Any, Any, None] | None] | None = None,
-) -> AgentConfig:
+) -> VoiceConfig:
     """Builds the voice-first foreground agent with strictly spawn, status, cancel tools.
 
     Sets runtime.foreground (plus its prompts, floor, ledger, and task state) and
-    returns the foreground AgentConfig for the announcer fallback.
+    returns the foreground VoiceConfig for the announcer fallback.
     """
     # Load voice.yaml configuration
     config_path = (
@@ -367,9 +414,9 @@ def build_foreground(
     agent_cfg_dict["system_template"] = runtime.system_prompt
     agent_cfg_dict["system_prompt"] = runtime.system_prompt
     agent_cfg_dict["turn_scoped_limits"] = True
-    fg_config = AgentConfig(**agent_cfg_dict)
+    fg_config = VoiceConfig(**agent_cfg_dict)
 
-    runtime.foreground = DefaultAgent(
+    runtime.foreground = VoiceAgent(
         model=adapt_provider(runtime.provider),
         env=None,
         tools=registry,
@@ -377,3 +424,6 @@ def build_foreground(
     )
     runtime.foreground.history = DefaultAgentHistoryProxy(runtime.foreground)
     return fg_config
+
+
+build_foreground = build_foreground_agent

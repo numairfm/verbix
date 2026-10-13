@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 from collections.abc import Callable
@@ -12,6 +13,7 @@ from verbix.core.events import TextDelta, ToolCallDelta, ToolCallStarted, TurnCo
 
 if TYPE_CHECKING:
     from verbix.agent.agents.default import DefaultAgent
+    from verbix.agent.worker import WorkerAgent
 
 TaskStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
 
@@ -68,7 +70,7 @@ class WorkerTask:
         self,
         id: str,
         description: str,
-        session: DefaultAgent | Any,
+        session: WorkerAgent | DefaultAgent | Any,
         on_event: Callable[[str, Any], None] | None = None,
     ) -> None:
         self.id = id
@@ -119,69 +121,88 @@ class WorkerTask:
     async def _run(self) -> None:
         session: Any = self.session
         try:
-            has_step_stream = "step_stream" in getattr(session, "__dict__", {}) or (
-                hasattr(type(session), "step_stream")
+            has_run = "run" in getattr(session, "__dict__", {}) or (
+                hasattr(type(session), "run")
                 and not isinstance(session, (Mock, NonCallableMock))
             )
-            rounds = 0
-            while True:
-                rounds += 1
-                if has_step_stream:
-                    async for event in session.step_stream(self.description):
-                        self._emit(event)
-                        if isinstance(event, TurnComplete) and event.final_text:
-                            self._result = event.final_text
-                elif hasattr(session, "step"):
-                    step_res = session.step(self.description)
-                    if hasattr(step_res, "__aiter__"):
-                        async for event in step_res:
+            if has_run and callable(getattr(session, "run", None)):
+                if hasattr(session, "on_event"):
+                    session.on_event = lambda ev: self._emit(ev)
+                res = session.run(self.description)
+                if inspect.isawaitable(res):
+                    res = await res
+                if isinstance(res, dict):
+                    self._status = res.get("status", "completed")
+                    self._result = res.get("summary", "Task completed.")
+                else:
+                    self._status = "completed"
+                    self._result = str(res) if res is not None else "Task completed."
+                if self._status == "failed" and not self._error:
+                    self._error = self._result
+            else:
+                has_step_stream = "step_stream" in getattr(session, "__dict__", {}) or (
+                    hasattr(type(session), "step_stream")
+                    and not isinstance(session, (Mock, NonCallableMock))
+                )
+                rounds = 0
+                while True:
+                    rounds += 1
+                    if has_step_stream:
+                        async for event in session.step_stream(self.description):
                             self._emit(event)
                             if isinstance(event, TurnComplete) and event.final_text:
                                 self._result = event.final_text
+                    elif hasattr(session, "step"):
+                        step_res = session.step(self.description)
+                        if hasattr(step_res, "__aiter__"):
+                            async for event in step_res:
+                                self._emit(event)
+                                if isinstance(event, TurnComplete) and event.final_text:
+                                    self._result = event.final_text
+                        else:
+                            res = await asyncio.to_thread(session.step)
+                            if isinstance(res, list) and res:
+                                last = res[-1]
+                                if isinstance(last, dict):
+                                    self._result = last.get("content")
                     else:
-                        res = await asyncio.to_thread(session.step)
-                        if isinstance(res, list) and res:
-                            last = res[-1]
-                            if isinstance(last, dict):
-                                self._result = last.get("content")
-                else:
-                    self._status = "failed"
-                    self._result = "Task session has no runnable interface."
-                    self._error = self._result
-                    break
-                msgs = self._session_messages(session)
-                if any(_is_finish_tool_message(m) for m in msgs):
-                    if not self._result:
-                        for m in reversed(msgs):
-                            if _is_finish_tool_message(m):
-                                content = (
-                                    m.get("content")
-                                    if isinstance(m, dict)
-                                    else getattr(m, "content", None)
-                                )
-                                text = _content_text(content).strip()
-                                if text:
-                                    self._result = text
-                                    break
-                    if not self._result:
-                        self._result = "Task completed."
-                    self._status = "completed"
-                    break
-                if self._result in ("LimitsExceeded", "TimeExceeded"):
-                    self._status = "failed"
-                    self._result = (
-                        "Task ended without calling finish; no verified result."
-                    )
-                    self._error = self._result
-                    break
-                if rounds >= _MAX_TURNS_WITHOUT_FINISH:
-                    self._status = "failed"
-                    self._result = (
-                        "Task ended without calling finish; no verified result."
-                    )
-                    self._error = self._result
-                    break
-                self._result = None
+                        self._status = "failed"
+                        self._result = "Task session has no runnable interface."
+                        self._error = self._result
+                        break
+                    msgs = self._session_messages(session)
+                    if any(_is_finish_tool_message(m) for m in msgs):
+                        if not self._result:
+                            for m in reversed(msgs):
+                                if _is_finish_tool_message(m):
+                                    content = (
+                                        m.get("content")
+                                        if isinstance(m, dict)
+                                        else getattr(m, "content", None)
+                                    )
+                                    text = _content_text(content).strip()
+                                    if text:
+                                        self._result = text
+                                        break
+                        if not self._result:
+                            self._result = "Task completed."
+                        self._status = "completed"
+                        break
+                    if self._result in ("LimitsExceeded", "TimeExceeded"):
+                        self._status = "failed"
+                        self._result = (
+                            "Task ended without calling finish; no verified result."
+                        )
+                        self._error = self._result
+                        break
+                    if rounds >= _MAX_TURNS_WITHOUT_FINISH:
+                        self._status = "failed"
+                        self._result = (
+                            "Task ended without calling finish; no verified result."
+                        )
+                        self._error = self._result
+                        break
+                    self._result = None
         except asyncio.CancelledError:
             self._status = "cancelled"
             self._result = "Task cancelled by user."

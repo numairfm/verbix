@@ -293,3 +293,69 @@ def test_worker_instance_template_renders_scratch_dir(tmp_path):
     out = agent._render_template(agent_cfg["instance_template"], task="do stuff")
     assert "do stuff" in out
     assert str(tmp_path) in out
+
+
+@pytest.mark.asyncio
+async def test_worker_finish_completes_and_reports_summary():
+    mock_agent = MagicMock()
+
+    async def fake_run(task):
+        return {"status": "completed", "summary": "Wrote flappy.html (2400 bytes, verified)."}
+
+    mock_agent.run = fake_run
+    mock_agent.messages = []
+
+    task = WorkerTask(id="task-1", description="create flappy bird", session=mock_agent)
+    task.start()
+    await task.wait()
+
+    assert task.status == "completed"
+    assert "Wrote flappy.html" in (task.result or "")
+
+
+@pytest.mark.asyncio
+async def test_worker_finish_handoff_to_announcer_queue(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from verbix.runtime.foreground import DEFAULT_WORKER_PROMPT
+    from verbix.runtime.ledger import TaskLedger
+    from verbix.runtime.workers import spawn_worker
+
+    mock_drain = AsyncMock()
+    runtime = SimpleNamespace(
+        workspace=tmp_path,
+        _task_counter=0,
+        worker_system_prompt=DEFAULT_WORKER_PROMPT,
+        worker_model=None,
+        provider=MagicMock(),
+        worker_echo=False,
+        tasks={},
+        _environments=[],
+        ledger=TaskLedger(),
+        _pending_announcements=[],
+        _broadcast_event=lambda *a: None,
+        floor=SimpleNamespace(is_idle=True),
+        _drain_pending_announcements=mock_drain,
+    )
+
+    async def fake_run(self, objective):
+        return {"status": "completed", "summary": "Created game asset."}
+
+    from verbix.agent.worker import WorkerAgent
+
+    original_run = getattr(WorkerAgent, "run", None)
+    WorkerAgent.run = fake_run
+    try:
+        task_id = await spawn_worker(runtime, "create asset")
+        task = runtime.tasks[task_id]
+        await task.wait()
+
+        assert task.status == "completed"
+        assert task.result == "Created game asset."
+        assert (task_id, "Created game asset.") in runtime._pending_announcements
+        assert mock_drain.called
+    finally:
+        if original_run is not None:
+            WorkerAgent.run = original_run
+

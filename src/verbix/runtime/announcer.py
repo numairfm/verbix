@@ -10,8 +10,7 @@ from typing import Any
 
 import yaml
 
-from verbix.agent.agents.default import AgentConfig, DefaultAgent
-from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.announcer import AnnouncerAgent, AnnouncerConfig
 from verbix.core.events import AgentEvent
 from verbix.core.events import (
     TurnComplete as CoreTurnComplete,
@@ -67,7 +66,7 @@ class WakeOutputFanOut:
                 pass
 
 
-def build_announcer(runtime: Any, fg_config: AgentConfig) -> DefaultAgent:
+def build_announcer_agent(runtime: Any, fg_config: Any) -> AnnouncerAgent:
     """Builds the tool-less announcer sharing the foreground voice and grounding."""
     announcer_cfg_path = (
         Path(__file__).resolve().parent.parent
@@ -89,17 +88,22 @@ def build_announcer(runtime: Any, fg_config: AgentConfig) -> DefaultAgent:
         announcer_agent_cfg["system_template"] = grounded
         announcer_agent_cfg["system_prompt"] = grounded
         announcer_agent_cfg["turn_scoped_limits"] = True
-        announcer_config = AgentConfig(**announcer_agent_cfg)
+        announcer_config = AnnouncerConfig(**announcer_agent_cfg)
     else:
-        announcer_config = fg_config.model_copy(update={"tools": []})
-    runtime.announcer = DefaultAgent(
+        cfg_dict = fg_config.model_dump() if hasattr(fg_config, "model_dump") else {}
+        cfg_dict["tools"] = []
+        cfg_dict["tool_choice"] = "none"
+        announcer_config = AnnouncerConfig(**cfg_dict)
+    runtime.announcer = AnnouncerAgent(
         model=adapt_provider(runtime.provider),
         env=None,
-        tools=ToolRegistry(),
         config=announcer_config,
     )
     runtime.announcer.messages = []
     return runtime.announcer
+
+
+build_announcer = build_announcer_agent
 
 
 def _snapshot_foreground_history(runtime: Any) -> list:

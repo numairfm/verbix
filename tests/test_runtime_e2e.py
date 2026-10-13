@@ -343,15 +343,15 @@ async def test_status_includes_completed_task_result(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_runtime_uses_miniswe_agent(tmp_path):
+async def test_runtime_uses_voice_agent(tmp_path):
     from unittest.mock import MagicMock
 
-    from verbix.agent.agents.default import DefaultAgent
+    from verbix.agent.voice import VoiceAgent
     from verbix.runtime.runtime import Runtime
 
-    # Ensure runtime foreground is powered by DefaultAgent
+    # Ensure runtime foreground is powered by VoiceAgent
     runtime = Runtime(workspace=tmp_path, provider=MagicMock())
-    assert isinstance(runtime.foreground, DefaultAgent)
+    assert isinstance(runtime.foreground, VoiceAgent)
     assert hasattr(runtime.foreground, "config")
     assert hasattr(runtime.foreground, "step_stream")
 

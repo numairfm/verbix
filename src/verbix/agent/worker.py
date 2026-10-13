@@ -88,6 +88,7 @@ class WorkerAgent:
         self.n_consecutive_format_errors: int = 0
         self._start_time: float = time.time()
         self.extra_template_vars: dict[str, Any] = {}
+        self.on_event: Any = None
 
     def get_template_vars(self, **kwargs: Any) -> dict[str, Any]:
         env_vars = (
@@ -220,6 +221,14 @@ class WorkerAgent:
             else:
                 args = {}
 
+            if self.on_event is not None:
+                try:
+                    from verbix.core.events import ToolCallStarted
+
+                    self.on_event(ToolCallStarted(call_id=call_id, tool_name=name, arguments=args))
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
             result = await self._execute_tool(name, args)
             last_result = result
 
@@ -239,7 +248,7 @@ class WorkerAgent:
 
     async def run(self, task: str = "", **kwargs: Any) -> dict[str, Any]:
         """Runs autonomous loop until completion, limits exceeded, or failure."""
-        self.extra_template_vars = {"task": task, **kwargs}
+        self.extra_template_vars = {**self.extra_template_vars, "task": task, **kwargs}
         self.messages = []
         self.cost = 0.0
         self.n_calls = 0

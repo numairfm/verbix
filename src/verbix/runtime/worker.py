@@ -15,6 +15,19 @@ if TYPE_CHECKING:
 
 TaskStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
 
+# Backstop for zero-cost models, where the spending cap never trips and a
+# talk-only loop would otherwise run forever. Cost-limited runs end sooner
+# via LimitsExceeded. A worker turn ends only on a finish tool call.
+_MAX_TURNS_WITHOUT_FINISH = 30
+
+
+def _is_finish_tool_message(m: Any) -> bool:
+    role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+    if role != "tool":
+        return False
+    name = m.get("name") if isinstance(m, dict) else getattr(m, "name", None)
+    return name == "finish"
+
 
 
 def _content_text(content: Any) -> str:
@@ -104,63 +117,71 @@ class WorkerTask:
             pass
 
     async def _run(self) -> None:
-        accumulated_text: list[str] = []
         session: Any = self.session
         try:
             has_step_stream = "step_stream" in getattr(session, "__dict__", {}) or (
                 hasattr(type(session), "step_stream")
                 and not isinstance(session, (Mock, NonCallableMock))
             )
-            if has_step_stream:
-                async for event in session.step_stream(self.description):
-                    self._emit(event)
-                    if isinstance(event, TextDelta):
-                        accumulated_text.append(event.text)
-                    elif isinstance(event, TurnComplete) and event.final_text:
-                        self._result = event.final_text
-            elif hasattr(session, "step"):
-                step_res = session.step(self.description)
-                if hasattr(step_res, "__aiter__"):
-                    async for event in step_res:
+            rounds = 0
+            while True:
+                rounds += 1
+                if has_step_stream:
+                    async for event in session.step_stream(self.description):
                         self._emit(event)
-                        if isinstance(event, TextDelta):
-                            accumulated_text.append(event.text)
-                        elif isinstance(event, TurnComplete) and event.final_text:
+                        if isinstance(event, TurnComplete) and event.final_text:
                             self._result = event.final_text
+                elif hasattr(session, "step"):
+                    step_res = session.step(self.description)
+                    if hasattr(step_res, "__aiter__"):
+                        async for event in step_res:
+                            self._emit(event)
+                            if isinstance(event, TurnComplete) and event.final_text:
+                                self._result = event.final_text
+                    else:
+                        res = await asyncio.to_thread(session.step)
+                        if isinstance(res, list) and res:
+                            last = res[-1]
+                            if isinstance(last, dict):
+                                self._result = last.get("content")
                 else:
-                    res = await asyncio.to_thread(session.step)
-                    if isinstance(res, list) and res:
-                        last = res[-1]
-                        if isinstance(last, dict):
-                            self._result = last.get("content")
-            msgs: list[Any] | None = None
-            if not self._result:
-                msgs = getattr(session, "messages", None)
-                if not msgs and hasattr(session, "history"):
-                    msgs = getattr(session.history, "messages", None)
-                if msgs:
-                    for m in reversed(msgs):
-                        role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
-                        tool_calls = m.get("tool_calls") if isinstance(m, dict) else getattr(m, "tool_calls", None)
-                        content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
-                        if role == "assistant" and not tool_calls and content and content.strip():
-                            self._result = content.strip()
-                            break
-
-            if not self._result and accumulated_text:
-                self._result = "".join(accumulated_text).strip()
-            if not self._result and msgs:
-                for m in reversed(msgs):
-                    role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
-                    content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
-                    if role in ("tool", "observation") and content:
-                        text = _content_text(content).strip()
-                        if text:
-                            self._result = text
-                            break
-            if not self._result:
-                self._result = "Task finished without output."
-            self._status = "completed"
+                    self._status = "failed"
+                    self._result = "Task session has no runnable interface."
+                    self._error = self._result
+                    break
+                msgs = self._session_messages(session)
+                if any(_is_finish_tool_message(m) for m in msgs):
+                    if not self._result:
+                        for m in reversed(msgs):
+                            if _is_finish_tool_message(m):
+                                content = (
+                                    m.get("content")
+                                    if isinstance(m, dict)
+                                    else getattr(m, "content", None)
+                                )
+                                text = _content_text(content).strip()
+                                if text:
+                                    self._result = text
+                                    break
+                    if not self._result:
+                        self._result = "Task completed."
+                    self._status = "completed"
+                    break
+                if self._result in ("LimitsExceeded", "TimeExceeded"):
+                    self._status = "failed"
+                    self._result = (
+                        "Task ended without calling finish; no verified result."
+                    )
+                    self._error = self._result
+                    break
+                if rounds >= _MAX_TURNS_WITHOUT_FINISH:
+                    self._status = "failed"
+                    self._result = (
+                        "Task ended without calling finish; no verified result."
+                    )
+                    self._error = self._result
+                    break
+                self._result = None
         except asyncio.CancelledError:
             self._status = "cancelled"
             self._result = "Task cancelled by user."
@@ -176,6 +197,13 @@ class WorkerTask:
                     cb(self)
                 except Exception:  # noqa: BLE001, S110
                     pass
+
+    @staticmethod
+    def _session_messages(session: Any) -> list[Any]:
+        msgs = getattr(session, "messages", None)
+        if not msgs and hasattr(session, "history"):
+            msgs = getattr(session.history, "messages", None)
+        return list(msgs) if isinstance(msgs, list) else []
 
     async def wait(self) -> None:
         """Waits for the background task to complete."""

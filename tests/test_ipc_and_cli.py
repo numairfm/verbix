@@ -9,6 +9,7 @@ from verbix.core.events import TextDelta, ToolCallFinished
 from verbix.ipc.server import VerbixServer
 from verbix.provider.models import Finish as ProviderFinish
 from verbix.provider.models import TextDelta as ProviderTextDelta
+from verbix.provider.models import ToolCallDelta as ProviderToolCallDelta
 from verbix.runtime.runtime import Runtime, WakeOutputFanOut
 
 
@@ -81,10 +82,22 @@ async def test_wake_output_fan_out_reaches_voice_and_broadcast(tmp_path):
 @pytest.mark.asyncio
 async def test_spawn_broadcasts_ledger_transitions(tmp_path):
     provider = MagicMock()
+    stream_calls = 0
 
     async def fake_stream(messages, tools=None, **kwargs):
-        yield ProviderTextDelta(text="done fast")
-        yield ProviderFinish(reason="stop")
+        nonlocal stream_calls
+        stream_calls += 1
+        if stream_calls == 1:
+            yield ProviderToolCallDelta(
+                index=0,
+                call_id="c1",
+                name="finish",
+                arguments_delta=json.dumps({"summary": "done fast"}),
+            )
+            yield ProviderFinish(reason="tool_calls")
+        else:
+            yield ProviderTextDelta(text="done fast")
+            yield ProviderFinish(reason="stop")
 
     provider.stream = fake_stream
     rt = Runtime(workspace=tmp_path, provider=provider, buffer_window=0.02)

@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from verbix.core.events import TextDelta
 from verbix.provider.models import Finish as ProviderFinish
 from verbix.provider.models import TextDelta as ProviderTextDelta
+from verbix.provider.models import ToolCallDelta as ProviderToolCallDelta
 from verbix.runtime.runtime import Runtime
 
 
@@ -29,15 +31,35 @@ def mock_provider():
 
 
 @pytest.mark.asyncio
-async def test_runtime_spawn_and_completion_loop(mock_provider, tmp_path):
+async def test_runtime_spawn_and_completion_loop(tmp_path):
     woken = []
 
     async def on_wake(speech_text):
         woken.append(speech_text)
 
+    stream_calls = 0
+
+    async def finishing_stream(messages, tools=None, **kwargs):
+        """First call (worker turn) finishes via the finish tool; later calls answer normally."""
+        nonlocal stream_calls
+        stream_calls += 1
+        if stream_calls == 1:
+            yield ProviderToolCallDelta(
+                index=0,
+                call_id="c1",
+                name="finish",
+                arguments_delta=json.dumps({"summary": "2, 3, 5, 7, 11 are primes."}),
+            )
+            yield ProviderFinish(reason="tool_calls")
+        else:
+            yield ProviderTextDelta(text="The prime calculation finished: 2, 3, 5, 7, 11.")
+            yield ProviderFinish(reason="stop")
+
+    provider = MagicMock()
+    provider.stream = finishing_stream
     runtime = Runtime(
         workspace=tmp_path,
-        provider=mock_provider,
+        provider=provider,
         buffer_window=0.05,
         on_wake=on_wake,
     )
@@ -200,9 +222,9 @@ async def test_runtime_prompt_grounding(mock_provider, tmp_path):
     import platform
     runtime = Runtime(workspace=tmp_path, provider=mock_provider)
     assert "# IDENTITY & TONE" in runtime.system_prompt
-    assert "# VOICE & AUDIO CONSTRAINTS" in runtime.system_prompt
-    assert "# CAPABILITY ROUTING" in runtime.system_prompt
-    assert "# TOOL OPERATIONS & BACKGROUND WORK" in runtime.system_prompt
+    assert "# DELIVERY" in runtime.system_prompt
+    assert "# TOOLS" in runtime.system_prompt
+    assert "# INTERRUPTIONS" in runtime.system_prompt
     assert "# ENVIRONMENT & GROUNDING" in runtime.system_prompt
     # Volatile clock content stays out of the cacheable system prompt ...
     assert "Current local date and time:" not in runtime.system_prompt
@@ -221,7 +243,7 @@ async def test_runtime_layered_custom_system_prompt(mock_provider, tmp_path):
     runtime = Runtime(workspace=tmp_path, provider=mock_provider, system_prompt=custom)
     # Core invariants must remain intact
     assert "# IDENTITY & TONE" in runtime.system_prompt
-    assert "# VOICE & AUDIO CONSTRAINTS" in runtime.system_prompt
+    assert "# DELIVERY" in runtime.system_prompt
     assert "# ENVIRONMENT & GROUNDING" in runtime.system_prompt
     # Custom instructions must be layered cleanly at the bottom
     assert "# CUSTOM USER INSTRUCTIONS" in runtime.system_prompt
@@ -250,8 +272,17 @@ async def test_runtime_direct_worker_completion_is_silent(tmp_path):
     async def fake_stream(messages, tools=None, reasoning_effort=None):
         nonlocal stream_calls
         stream_calls += 1
-        yield ProviderTextDelta(text="Calculation finished: 42.")
-        yield ProviderFinish(reason="stop")
+        if stream_calls == 1:
+            yield ProviderToolCallDelta(
+                index=0,
+                call_id="c1",
+                name="finish",
+                arguments_delta=json.dumps({"summary": "Calculation finished: 42."}),
+            )
+            yield ProviderFinish(reason="tool_calls")
+        else:
+            yield ProviderTextDelta(text="Calculation finished: 42.")
+            yield ProviderFinish(reason="stop")
 
     provider.stream = fake_stream
 
@@ -328,10 +359,22 @@ async def test_runtime_uses_miniswe_agent(tmp_path):
 @pytest.mark.asyncio
 async def test_runtime_worker_markdown_result_is_silent(tmp_path):
     provider = MagicMock()
+    stream_calls = 0
 
     async def fake_stream(messages, tools=None, reasoning_effort=None):
-        yield ProviderTextDelta(text="# Markdown Result\n- Item 1\n- Item 2")
-        yield ProviderFinish(reason="stop")
+        nonlocal stream_calls
+        stream_calls += 1
+        if stream_calls == 1:
+            yield ProviderToolCallDelta(
+                index=0,
+                call_id="c1",
+                name="finish",
+                arguments_delta=json.dumps({"summary": "# Markdown Result\n- Item 1\n- Item 2"}),
+            )
+            yield ProviderFinish(reason="tool_calls")
+        else:
+            yield ProviderTextDelta(text="# Markdown Result\n- Item 1\n- Item 2")
+            yield ProviderFinish(reason="stop")
 
     provider.stream = fake_stream
 

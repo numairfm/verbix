@@ -8,6 +8,67 @@ from verbix.runtime.worker import WorkerTask
 
 
 @pytest.mark.asyncio
+async def test_worker_without_finish_call_does_not_complete_on_chatter():
+    """A turn that only talks (no finish tool call) must never complete on chatter."""
+    session = MagicMock()
+    calls = 0
+
+    async def chatty_step_stream(desc):
+        nonlocal calls
+        calls += 1
+        yield TextDelta(text="I built the game, all done!")
+        yield TurnComplete(final_text="I built the game, all done!")
+
+    session.step_stream = chatty_step_stream
+    session.messages = [
+        {"role": "user", "content": "build a flappy game"},
+        {"role": "assistant", "content": "I built the game, all done!"},
+    ]
+
+    task = WorkerTask(id="task-9", description="build a flappy game", session=session)
+    task.start()
+    await task.wait()
+
+    assert task.status == "failed"
+    assert "finish" in (task.result or "").lower()
+    assert "I built the game" not in (task.result or "")
+    assert calls > 1  # loop re-drove instead of stopping at narration
+
+
+@pytest.mark.asyncio
+async def test_worker_with_finish_call_completes_with_result():
+    """A turn ending in a finish tool call completes with its result."""
+    session = MagicMock()
+
+    async def finishing_step_stream(desc):
+        yield TextDelta(text="Working...")
+        yield TurnComplete(final_text="Task completed: wrote index.html (412 bytes, verified).")
+
+    session.step_stream = finishing_step_stream
+    session.messages = [
+        {"role": "user", "content": "write index.html"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "function": {"name": "finish", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "name": "finish",
+            "content": "wrote index.html (412 bytes, verified).",
+        },
+    ]
+
+    task = WorkerTask(id="task-10", description="write index.html", session=session)
+    task.start()
+    await task.wait()
+
+    assert task.status == "completed"
+    assert "412 bytes" in (task.result or "")
+
+
+@pytest.mark.asyncio
 async def test_worker_task_lifecycle_success():
     session = MagicMock()
 
@@ -17,6 +78,20 @@ async def test_worker_task_lifecycle_success():
 
     session.step = fake_step
     session.history.messages = []
+    session.messages = [
+        {"role": "user", "content": "run tests"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "function": {"name": "finish", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "name": "finish",
+            "content": "All tests passed successfully.",
+        },
+    ]
 
     task = WorkerTask(id="task-1", description="run tests", session=session)
     assert task.status == "pending"
@@ -96,6 +171,12 @@ async def test_worker_task_extracts_final_result_not_intermediate_scratchpad():
         {"role": "user", "content": "list dependencies"},
         {"role": "assistant", "content": "I will start by analyzing the codebase...", "tool_calls": [{"id": "c1"}]},
         {"role": "tool", "content": "pyproject.toml found"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c2", "function": {"name": "finish", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "c2", "name": "finish", "content": "The dependencies are pytest, litellm."},
         {"role": "assistant", "content": "The dependencies are pytest, litellm."},
     ]
 

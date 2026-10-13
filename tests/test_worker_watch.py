@@ -9,6 +9,14 @@ from verbix.runtime.worker import WorkerTask, format_worker_event
 class _Session:
     def __init__(self, events):
         self._events = events
+        self.messages = [
+            {
+                "role": "tool",
+                "tool_call_id": "c9",
+                "name": "finish",
+                "content": "done",
+            }
+        ]
 
     async def step_stream(self, description):
         for e in self._events:

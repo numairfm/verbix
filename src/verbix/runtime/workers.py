@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +101,23 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
         if t.status == "cancelled":
             runtime.ledger.mark_cancelled(t.id)
             runtime._broadcast_event("task_cancelled", {"task_id": t.id})
+            return
+        if t.status == "failed":
+            result = t.result or "Task failed without a verified result."
+            runtime.ledger.mark_failed(t.id, result)
+            runtime._broadcast_event("task_failed", {"task_id": t.id, "result": result})
+            if hasattr(runtime, "foreground") and hasattr(runtime.foreground, "messages"):
+                runtime.foreground.messages.append({
+                    "role": "user",
+                    "content": f"[Task '{t.id}' failed]: {result}",
+                })
+            runtime._pending_announcements.append((t.id, result))
+            if runtime.floor.is_idle:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(runtime._drain_pending_announcements())
+                except RuntimeError:
+                    pass
             return
         runtime._on_task_finished(t.id, t.result or "Task completed.")
 

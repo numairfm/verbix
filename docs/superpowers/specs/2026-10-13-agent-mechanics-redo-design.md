@@ -9,71 +9,66 @@
 ## 1. Executive Summary & Goals
 
 ### Problem
-Verbix previously forced three fundamentally different roles—the foreground voice receptionist, the autonomous background worker, and the spoken announcer—into a single monolithic agent class (`DefaultAgent`). This caused:
+Verbix previously forced three fundamentally different roles—the foreground voice receptionist, the autonomous background worker, and the spoken announcer—into a single monolithic agent class (`DefaultAgent`). Furthermore, the code was scattered confusingly: builder logic sat in `verbix/runtime/`, while the execution loop sat in `verbix/agent/agents/default.py`.
+
+This caused:
 1. **Voice buffer bleed**: Autonomous workers were subjected to TTS speech segmentation (`split_chunks`), buffering generated code and text in memory.
 2. **Missing tool enforcement**: When a worker generated text/code without a tool call, the turn silently ended as "speech". The outer task runner then re-injected duplicate user prompts in a 30-round loop.
 3. **Streaming deadlocks**: Background workers used unshielded SSE streaming (`litellm.acompletion(stream=True)`) with no per-chunk idle timeout, causing multi-minute hangs on large code generations.
 
 ### Goals
-1. **Clean Seams**: Completely decouple the autonomous background worker from the voiced foreground/announcer agents.
+1. **Clean Packaging (Option A)**: All three agent definitions live together in `verbix/agent/` (`worker.py`, `voice.py`, `announcer.py`), while `verbix/runtime/` remains strictly the audio/task coordinator.
 2. **Mini-SWE Worker Parity**: Restore the worker agent to a pure `mini-swe-agent` execution loop (`run()` / `step()`) with strict tool enforcement and non-streaming model calls.
 3. **Preserve Dynamic Tools**: Keep tool registration fully dynamic per `AGENTS.md`: tools live in `tools/<name>.py`, are listed in agent YAML `tools:`, and can be added or removed with zero agent code changes.
 4. **Seamless Voice & Announcement Handoff**: When a worker calls `finish`, its summary automatically enqueues into the announcer, which presents the result to the user when the voice floor is idle and records the outcome into shared conversation memory.
 
 ---
 
-## 2. Architecture & Seams
+## 2. Architecture & Packaging
+
+### Package Layout
 
 ```
-+-------------------------------------------------------------------+
-|                        VERBIX RUNTIME                             |
-|                                                                   |
-|  +--------------------+         spawn(objective)                  |
-|  |  Foreground Voice  | ------------------------------+           |
-|  |  Agent             |                               |           |
-|  |  (voice.yaml)      | <-------------+               v           |
-|  |  [spawn, status,   |               |      +-----------------+  |
-|  |   cancel]          |               |      |  Worker Task    |  |
-|  +--------------------+               |      |  (worker.yaml)  |  |
-|            |                          |      |  [read, write,  |  |
-|     speaks |                          |      |   edit, bash,   |  |
-|            v                          |      |   finish]       |  |
-|  +--------------------+               |      +-----------------+  |
-|  | Audio Playback /   |               |               |           |
-|  | Floor Arbiter      |               |        finish | (summary) |
-|  +--------------------+               |               v           |
-|            ^                          |      +-----------------+  |
-|     speaks |                          |      |  Announcer      |  |
-|  +--------------------+               |      |  (announcer.y.) |  |
-|  |  Announcer Voice   |               |      |  [tools: none]  |  |
-|  |  Agent             | --------------+      +-----------------+  |
-|  +--------------------+   appends result to                       |
-|                           foreground memory                       |
-+-------------------------------------------------------------------+
+src/verbix/
+├── agent/                         # ALL AGENT DEFINITIONS LIVE HERE
+│   ├── config/
+│   │   ├── voice.yaml             # Foreground voice config (tools: spawn, status, cancel)
+│   │   ├── worker.yaml            # Autonomous worker config (tools: read, write, edit, bash, finish)
+│   │   └── announcer.yaml         # Spoken announcer config (tools: [])
+│   ├── voice.py                   # VoiceAgent: live streaming, TTS segmentation (split_chunks)
+│   ├── worker.py                  # WorkerAgent: pure Mini-SWE loop, strict tool enforcement
+│   ├── announcer.py               # AnnouncerAgent: tool-less voice presenter
+│   └── tools/                     # Tool registry and definitions
+└── runtime/                       # COORDINATION & DESKTOP RUNTIME ONLY
+    ├── runtime.py                 # Core Runtime: wires floor, tasks, audio loop
+    ├── floor.py                   # Audio floor arbiter (IDLE, FOREGROUND, CONTINUATION)
+    ├── ledger.py                  # Task status and progress tracking
+    ├── workers.py                 # WorkerTask: asyncio.Task lifecycle & status formatting
+    └── announcer.py               # Announcer queue drainer & voice floor bridge
 ```
 
-### The Three Agents
+### The Three Agents (`verbix/agent/`)
 
-1. **Foreground Voice Agent (`verbix/runtime/foreground.py`)**
+1. **`VoiceAgent` (`verbix/agent/voice.py`)**
    - **Role**: Conversational desktop receptionist.
    - **Config**: `verbix/agent/config/voice.yaml`.
    - **Tools**: Dynamic list from config, strictly `spawn`, `status`, `cancel`.
    - **Wire**: Live streaming (`query_stream`) to feed early audio to TTS via `split_chunks`.
    - **Behavior**: Direct conversational dialog; delegates tasks to `spawn`.
 
-2. **Autonomous Worker Agent (`verbix/agent/worker.py`)**
+2. **`WorkerAgent` (`verbix/agent/worker.py`)**
    - **Role**: Autonomous task executor.
    - **Config**: `verbix/agent/config/worker.yaml`.
    - **Tools**: Dynamic list from config, typically `read`, `write`, `edit`, `bash`, `finish`.
    - **Wire**: Standard, reliable non-streaming model queries (`litellm.completion`).
    - **Behavior**: Pure `mini-swe-agent` step loop. Every turn must call a tool. Stops only when `finish` is called or limits are reached.
 
-3. **Announcer Voice Agent (`verbix/runtime/announcer.py`)**
+3. **`AnnouncerAgent` (`verbix/agent/announcer.py`)**
    - **Role**: Spoken debriefer for completed worker tasks.
    - **Config**: `verbix/agent/config/announcer.yaml`.
    - **Tools**: None (`tools: []`, `tool_choice: "none"`).
    - **Wire**: Live streaming (`query_stream`) to TTS.
-   - **Behavior**: Activated when worker finishes and floor is idle. Synthesizes concise spoken debrief, plays audio, and appends the final text into `runtime.foreground.messages`.
+   - **Behavior**: Tool-less voice presenter. Summarizes completed findings into spoken prose and appends the outcome to `runtime.foreground.messages`.
 
 ---
 

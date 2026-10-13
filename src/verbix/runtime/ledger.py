@@ -46,6 +46,15 @@ class TaskLedger:
         entry.finished_at = time.time()
         entry.delivery = "interrupted"
 
+    def mark_failed(self, task_id: str, result_summary: str = "") -> None:
+        entry = self._tasks.get(task_id)
+        if entry is None:
+            return
+        entry.status = "failed"
+        entry.finished_at = time.time()
+        entry.result_summary = result_summary
+        entry.delivery = "pending"
+
     def mark_heard(self, task_id: str) -> None:
         entry = self._tasks.get(task_id)
         if entry is None:

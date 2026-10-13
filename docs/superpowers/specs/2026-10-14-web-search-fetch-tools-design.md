@@ -84,10 +84,11 @@ class SearchResult:
 ```
 
 The provider resolution logic:
-1. If `VERBIX_SEARCH_PROVIDER` is set in environment (or in app config `search_provider`), use that provider (`duckduckgo`, `tavily`, `brave`).
-2. Else if `TAVILY_API_KEY` is present, use `tavily`.
-3. Else if `BRAVE_API_KEY` is present, use `brave`.
-4. Else default to `duckduckgo`.
+1. If `VERBIX_SEARCH_PROVIDER` is set in environment (or in app config `search_provider`), use that provider (`duckduckgo`, `tavily`, `brave`, `exa`).
+2. Else if `EXA_API_KEY` is present, use `exa`.
+3. Else if `TAVILY_API_KEY` is present, use `tavily`.
+4. Else if `BRAVE_API_KEY` is present, use `brave`.
+5. Else default to `duckduckgo`.
 
 #### DuckDuckGo Lite Wire Implementation
 - **Endpoint**: `POST https://lite.duckduckgo.com/lite/`
@@ -99,9 +100,10 @@ The provider resolution logic:
 - **Body**: `q=<url-encoded-query>`
 - **Parsing**: An `HTMLParser` that ignores `<tr class="result-sponsored">` (ad rows) and extracts clean organic results from `<a class="result-link">` and `<td class="result-snippet">`. Direct organic destination URLs are used (skipping internal DDG redirects). This endpoint does not require JavaScript or browser cookies.
 
-#### Tavily & Brave Wire Implementations
+#### Tavily, Brave & Exa Wire Implementations
 - **Tavily**: `POST https://api.tavily.com/search` with JSON payload `{"query": query, "max_results": max_results, "api_key": key}`.
 - **Brave**: `GET https://api.search.brave.com/res/v1/web/search?q=<query>&count=<count>` with header `X-Subscription-Token: <key>`.
+- **Exa**: `POST https://api.exa.ai/search` with JSON payload `{"query": query, "numResults": max_results, "contents": {"text": {"maxCharacters": 500}}}` and header `x-api-key: <key>` (or MCP call to `https://mcp.exa.ai/mcp`).
 
 #### Output Format
 ```
@@ -130,6 +132,12 @@ If no results: `No results found for query: '<query>'.`
     "url": {
       "type": "string",
       "description": "The absolute HTTP or HTTPS URL of the web page to fetch"
+    },
+    "format": {
+      "type": "string",
+      "enum": ["markdown", "text", "html"],
+      "description": "The format to return the content in (markdown, text, or html). Defaults to markdown.",
+      "default": "markdown"
     }
   },
   "required": ["url"]
@@ -138,12 +146,18 @@ If no results: `No results found for query: '<query>'.`
 
 #### Wire & Content Processing
 1. **Validation**: URL must begin with `http://` or `https://`. Reject local file protocols (`file://`), private IP addresses or localhost (`127.0.0.1`, `localhost`) to prevent SSRF vulnerabilities.
-2. **HTTP Fetch**: `urllib.request.Request` with `User-Agent: Mozilla/5.0 ...` and a 15-second timeout.
+2. **HTTP Fetch**:
+   - Primary request uses desktop Chrome `User-Agent`.
+   - Bounded response limit (5MB) and 30-second timeout.
+   - **Cloudflare Retry Mechanism**: If the server returns `HTTP 403` with header `cf-mitigated: challenge` (indicating Cloudflare TLS fingerprint mismatch on the browser UA), automatically retries once with honest `User-Agent: verbix`.
 3. **HTML Extraction (`HTMLTextExtractor`)**:
    - Subclasses `html.parser.HTMLParser`.
    - Ignores content inside noise tags: `<script>`, `<style>`, `<nav>`, `<header>`, `<footer>`, `<noscript>`, `<svg>`, `<form>`, `<aside>`, elements with roles `navigation`/`banner`/`contentinfo`, or navigational classes.
    - Maintains an `ignored_stack` accounting for HTML void elements (`img`, `br`, `hr`, `input`, `meta`, `link`) to avoid broken tag-depth tracking on void tags.
    - Formats block elements (`<h1>`-`<h6>`, `<p>`, `<li>`, `<tr>`, `<div>`, `<article>`, `<section>`) with appropriate spacing and newlines.
+   - For `format="markdown"`: preserves markdown headings (`#`, `##`), bullet markers (`- `), and bold formatting.
+   - For `format="text"`: plain text representation without markdown delimiters.
+   - For `format="html"`: raw HTML content returned directly.
    - Extracts page `<title>` at the top.
    - Normalizes multiple spaces and consecutive blank lines into clean text.
 4. **Output Budgeting**:

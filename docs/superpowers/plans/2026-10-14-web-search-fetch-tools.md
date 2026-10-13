@@ -51,9 +51,10 @@ Write tests in `tests/test_tools_web_search.py` covering:
 2. `test_web_search_duckduckgo_no_results`: Mock DDG response with empty result table and verify `"No results found for query: '...'"` is returned.
 3. `test_web_search_tavily_provider`: Mock Tavily JSON API response and verify structured output when `TAVILY_API_KEY` is set.
 4. `test_web_search_brave_provider`: Mock Brave Search JSON API response and verify structured output when `BRAVE_API_KEY` is set.
-5. `test_web_search_provider_resolution`: Verify priority order (`VERBIX_SEARCH_PROVIDER` > keys > duckduckgo default).
-6. `test_web_search_empty_query_error`: Verify `ToolResult` returns `is_error=True` when query is empty.
-7. `test_web_search_http_error_handled`: Mock `urllib.error.HTTPError` (e.g. 500 or 429) and verify clean error message without unhandled exception.
+5. `test_web_search_exa_provider`: Mock Exa JSON API response and verify structured output when `EXA_API_KEY` is set.
+6. `test_web_search_provider_resolution`: Verify priority order (`VERBIX_SEARCH_PROVIDER` > keys > duckduckgo default).
+7. `test_web_search_empty_query_error`: Verify `ToolResult` returns `is_error=True` when query is empty.
+8. `test_web_search_http_error_handled`: Mock `urllib.error.HTTPError` (e.g. 500 or 429) and verify clean error message without unhandled exception.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -68,8 +69,10 @@ Implement `WebSearchTool`:
   - `_search_duckduckgo(query, max_results)`: POST `https://lite.duckduckgo.com/lite/` with `urllib.request` using `ssl.create_default_context(cafile=certifi.where())`, parse with `DuckDuckGoLiteParser(html.parser.HTMLParser)` skipping `<tr class="result-sponsored">` and extracting `<a class="result-link">` and `<td class="result-snippet">`.
   - `_search_tavily(query, max_results, api_key)`: POST `https://api.tavily.com/search` with JSON payload.
   - `_search_brave(query, max_results, api_key)`: GET `https://api.search.brave.com/res/v1/web/search` with `X-Subscription-Token` header.
+  - `_search_exa(query, max_results, api_key)`: POST `https://api.exa.ai/search` with JSON payload and `x-api-key` header.
 - Resolution logic:
   - Read `os.environ.get("VERBIX_SEARCH_PROVIDER")`.
+  - Fall back to `"exa"` if `os.environ.get("EXA_API_KEY")`.
   - Fall back to `"tavily"` if `os.environ.get("TAVILY_API_KEY")`.
   - Fall back to `"brave"` if `os.environ.get("BRAVE_API_KEY")`.
   - Fall back to `"duckduckgo"`.
@@ -106,17 +109,18 @@ git commit -m "feat(tools): add web_search tool with pluggable providers"
 - Produces: `WebFetchTool` with:
   - `name: str = "web_fetch"`
   - `side_effecting: bool = False`
-  - `parameters_schema: dict[str, Any]` (accepts `url: str`)
+  - `parameters_schema: dict[str, Any]` (accepts `url: str`, optional `format: str = "markdown"`)
   - `async execute(args: dict[str, Any], context: ToolContext) -> ToolResult`
 
 - [ ] **Step 1: Write failing tests for `WebFetchTool`**
 
 Write tests in `tests/test_tools_web_fetch.py` covering:
-1. `test_web_fetch_extracts_clean_text`: Mock `urlopen` returning HTML with `<title>`, `<style>`, `<script>`, `<nav>`, `<img ...>`, and `<p>` tags; verify `<style>`, `<script>`, and `<nav>` are discarded while `<title>` and `<p>` content are preserved without tag tracking corruption from void tags.
-2. `test_web_fetch_blocks_ssrf`: Test with `file:///etc/passwd`, `http://localhost:8000/`, `http://127.0.0.1/`, `http://[::1]/`, `http://0.0.0.0/`; verify `is_error=True` without network calls.
-3. `test_web_fetch_plain_text`: Mock `urlopen` returning `text/plain` or `application/json`; verify content is returned directly without HTML parser truncation.
-4. `test_web_fetch_http_error_handled`: Mock `urllib.error.HTTPError(404, "Not Found")` and verify `ToolResult("error: failed to fetch '...': 404 Not Found", is_error=True)`.
-5. `test_web_fetch_timeout_handled`: Mock `TimeoutError` and verify clean error message.
+1. `test_web_fetch_extracts_markdown_by_default`: Mock `urlopen` returning HTML with headings, paragraphs, and list items; verify clean markdown formatting returned by default.
+2. `test_web_fetch_formats`: Verify `format="text"` returns plain text without markdown markers, and `format="html"` returns raw HTML.
+3. `test_web_fetch_cloudflare_challenge_retries_with_honest_ua`: Mock first request raising `HTTPError(403)` with `headers={"cf-mitigated": "challenge"}`; verify handler automatically retries with `User-Agent: verbix` and succeeds.
+4. `test_web_fetch_blocks_ssrf`: Test with `file:///etc/passwd`, `http://localhost:8000/`, `http://127.0.0.1/`, `http://[::1]/`, `http://0.0.0.0/`; verify `is_error=True` without network calls.
+5. `test_web_fetch_http_error_handled`: Mock `urllib.error.HTTPError(404, "Not Found")` and verify `ToolResult("error: failed to fetch '...': 404 Not Found", is_error=True)`.
+6. `test_web_fetch_timeout_handled`: Mock `TimeoutError` and verify clean error message.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -126,15 +130,18 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'verbix.tools.web_fetc
 - [ ] **Step 3: Implement `WebFetchTool` in `src/verbix/tools/web_fetch.py`**
 
 Implement `WebFetchTool`:
-- Schema: `url` (required string).
+- Schema: `url` (required string), `format` (optional string, enum `["markdown", "text", "html"]`, default `"markdown"`).
 - Validation: Validate scheme is `http` or `https`; parse hostname with `urllib.parse.urlparse` and reject `localhost`, loopback, or private hostnames.
 - `HTMLTextExtractor(html.parser.HTMLParser)`:
   - Skip contents inside noise tags: `script`, `style`, `noscript`, `svg`, `nav`, `header`, `footer`, `aside`, `form`, and roles `navigation`/`banner`/`contentinfo`.
   - Maintain `ignored_stack` accounting for HTML void tags (`img`, `br`, `hr`, `input`, `meta`, `link`) to avoid void tags breaking end-tag tracking.
-  - Track block elements (`p`, `h1`-`h6`, `li`, `div`, `article`, `section`, `tr`) to insert newlines.
+  - Track block elements (`p`, `h1`-`h6`, `li`, `div`, `article`, `section`, `tr`) to format appropriate markdown tags (`#`, `##`, `- `) or newlines.
   - Extract `<title>` tag and prepend `Title: <title>\nURL: <url>\n\n`.
-  - Collapse excessive blank lines and whitespace into readable clean text.
-- Fetch with `urllib.request.Request` using standard desktop User-Agent, timeout=15s, and `ssl.create_default_context(cafile=certifi.where())`.
+  - Collapse excessive blank lines and whitespace.
+- Fetch with `urllib.request.Request`:
+  - Desktop Chrome User-Agent by default.
+  - Catch `HTTPError(403)`: if header `cf-mitigated == "challenge"`, retry with `User-Agent: "verbix"`.
+  - 30-second timeout, 5MB response size limit.
 - Execute via `asyncio.to_thread`.
 
 - [ ] **Step 4: Run test to verify it passes**

@@ -21,6 +21,8 @@ from verbix.tools.sandbox import SandboxConfig, SandboxResult, execute_sandboxed
 from verbix.tools.shared import bind_output, resolve_contained_path
 from verbix.tools.spawn import SpawnTool
 from verbix.tools.status import StatusTool
+from verbix.tools.web_fetch import WebFetchTool
+from verbix.tools.web_search import WebSearchTool
 from verbix.tools.write import FileWriteTool
 
 if TYPE_CHECKING:
@@ -43,6 +45,8 @@ __all__ = [
     "Tool",
     "ToolContext",
     "ToolResult",
+    "WebFetchTool",
+    "WebSearchTool",
     "build_registry",
     "execute_sandboxed",
     "parse_lenient_json",
@@ -56,6 +60,8 @@ TOOL_CATALOG: dict[str, Callable[[Any], Any]] = {
     "bash": lambda runtime: BashTool(),
     "grep": lambda runtime: GrepTool(),
     "glob": lambda runtime: GlobTool(),
+    "web_search": lambda runtime: WebSearchTool(),
+    "web_fetch": lambda runtime: WebFetchTool(),
     "spawn": SpawnTool,
     "status": StatusTool,
     "cancel": CancelTool,

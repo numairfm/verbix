@@ -35,6 +35,8 @@ agent:
     - edit
     - grep
     - glob
+    - web_search
+    - web_fetch
     - bash
     - finish
   step_limit: 0
@@ -92,6 +94,14 @@ model:
     Use 'glob' to find files matching a pattern:
     - Tool: glob
     - Arguments: {"pattern": "**/*.py", "path": "."}
+
+    Use 'web_search' to search the web for information:
+    - Tool: web_search
+    - Arguments: {"query": "search query"}
+
+    Use 'web_fetch' to fetch and read content from a web URL:
+    - Tool: web_fetch
+    - Arguments: {"url": "https://example.com"}
 
     Use 'bash' only for commands with no dedicated tool:
     - Tool: bash

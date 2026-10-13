@@ -314,3 +314,54 @@ async def test_web_search_max_results_clamped(
     assert "1. R1" in res.observation
     assert "2. R2" in res.observation
     assert "3. R3" not in res.observation
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [403, 429])
+async def test_web_search_duckduckgo_rate_limited_tip(
+    search_tool: WebSearchTool,
+    tool_context: ToolContext,
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+):
+    monkeypatch.delenv("VERBIX_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+
+    http_error = urllib.error.HTTPError(
+        url="https://lite.duckduckgo.com/lite/",
+        code=status_code,
+        msg="Too Many Requests" if status_code == 429 else "Forbidden",
+        hdrs=Message(),
+        fp=io.BytesIO(b"Blocked"),
+    )
+
+    with patch("urllib.request.urlopen", side_effect=http_error):
+        res = await search_tool.execute({"query": "python"}, tool_context)
+
+    assert res.is_error is True
+    assert f"HTTP {status_code}" in res.observation
+    assert "TAVILY_API_KEY" in res.observation
+    assert "BRAVE_API_KEY" in res.observation
+    assert "EXA_API_KEY" in res.observation
+
+
+@pytest.mark.asyncio
+async def test_web_search_timeout_error_handling(
+    search_tool: WebSearchTool,
+    tool_context: ToolContext,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("VERBIX_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+
+    url_err = urllib.error.URLError(TimeoutError("connection timed out"))
+    with patch("urllib.request.urlopen", side_effect=url_err):
+        res = await search_tool.execute({"query": "test query"}, tool_context)
+
+    assert res.is_error is True
+    assert res.observation == "error: search request timed out for query 'test query'"
+

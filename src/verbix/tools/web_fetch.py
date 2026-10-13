@@ -4,6 +4,7 @@ import asyncio
 import html.parser
 import ipaddress
 import re
+import socket
 import ssl
 import urllib.error
 import urllib.parse
@@ -86,17 +87,21 @@ def _validate_url(url: str) -> str | None:
         return f"error: blocked host '{hostname}'"
 
     try:
-        ip = ipaddress.ip_address(host)
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_unspecified
-            or ip.is_reserved
-            or ip.is_link_local
-        ):
-            return f"error: blocked private/loopback host '{hostname}'"
+        ip: ipaddress.IPv4Address | ipaddress.IPv6Address | None = ipaddress.ip_address(host)
     except ValueError:
-        pass
+        try:
+            ip = ipaddress.IPv4Address(socket.inet_aton(host))
+        except (OSError, ValueError):
+            ip = None
+
+    if ip is not None and (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_unspecified
+        or ip.is_reserved
+        or ip.is_link_local
+    ):
+        return f"error: blocked private/loopback host '{hostname}'"
 
     return None
 
@@ -141,7 +146,9 @@ def _build_opener() -> urllib.request.OpenerDirector:
     )
 
 
-def _fetch_html(url: str, opener: urllib.request.OpenerDirector | None = None) -> str:
+def _fetch_html(
+    url: str, opener: urllib.request.OpenerDirector | None = None
+) -> tuple[str, str]:
     active_opener = opener or _build_opener()
     req = urllib.request.Request(
         url,
@@ -173,11 +180,17 @@ def _fetch_html(url: str, opener: urllib.request.OpenerDirector | None = None) -
 
     charset = "utf-8"
     if "charset=" in content_type.lower():
-        charset = content_type.lower().split("charset=")[-1].split(";")[0].strip()
+        charset = (
+            content_type.lower()
+            .split("charset=")[-1]
+            .split(";")[0]
+            .strip()
+            .strip("\"'")
+        )
     try:
-        return content_bytes.decode(charset, errors="replace")
+        return content_bytes.decode(charset, errors="replace"), content_type
     except (LookupError, UnicodeDecodeError):
-        return content_bytes.decode("utf-8", errors="replace")
+        return content_bytes.decode("utf-8", errors="replace"), content_type
 
 
 class HTMLTextExtractor(html.parser.HTMLParser):
@@ -187,6 +200,7 @@ class HTMLTextExtractor(html.parser.HTMLParser):
         self.title = ""
         self._title_parts: list[str] = []
         self._in_title = False
+        self._in_pre = False
         self._ignored_stack: list[str] = []
         self._chunks: list[str] = []
 
@@ -203,6 +217,11 @@ class HTMLTextExtractor(html.parser.HTMLParser):
         if self._ignored_stack or is_noise:
             if tag not in VOID_TAGS:
                 self._ignored_stack.append(tag)
+            return
+
+        if tag == "pre":
+            self._chunks.append("\n\n\x00PRE_START\x00")
+            self._in_pre = True
             return
 
         if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
@@ -236,6 +255,11 @@ class HTMLTextExtractor(html.parser.HTMLParser):
                     self._ignored_stack.pop()
             return
 
+        if tag == "pre":
+            self._in_pre = False
+            self._chunks.append("\x00PRE_END\x00\n\n")
+            return
+
         if tag in ("h1", "h2", "h3", "h4", "h5", "h6", "p", "article", "section", "ul", "ol"):
             self._chunks.append("\n\n")
         elif tag in ("div", "tr"):
@@ -249,28 +273,46 @@ class HTMLTextExtractor(html.parser.HTMLParser):
             return
         if not data:
             return
+        if self._in_pre:
+            self._chunks.append(data)
+            return
         normalized = re.sub(r"[ \t\r\n]+", " ", data)
         self._chunks.append(normalized)
 
     def close(self) -> None:
         super().close()
+        if self._in_pre:
+            self._in_pre = False
+            self._chunks.append("\x00PRE_END\x00\n\n")
         if self._title_parts and not self.title:
             self.title = " ".join("".join(self._title_parts).split())
 
     def get_text(self, url: str) -> str:
         raw_text = "".join(self._chunks)
-        lines = [re.sub(r"[ \t]+", " ", line.strip()) for line in raw_text.splitlines()]
-        cleaned_lines: list[str] = []
-        blank = False
-        for line in lines:
-            if line:
-                cleaned_lines.append(line)
+        blocks: list[str] = []
+        for part in re.split(r"(\x00PRE_START\x00[\s\S]*?\x00PRE_END\x00)", raw_text):
+            if not part:
+                continue
+            if part.startswith("\x00PRE_START\x00") and part.endswith("\x00PRE_END\x00"):
+                pre_content = part[len("\x00PRE_START\x00") : -len("\x00PRE_END\x00")].strip("\r\n")
+                if pre_content:
+                    blocks.append(pre_content)
+            else:
+                lines = [re.sub(r"[ \t]+", " ", line.strip()) for line in part.splitlines()]
+                cleaned_lines: list[str] = []
                 blank = False
-            elif not blank:
-                cleaned_lines.append("")
-                blank = True
-        body = "\n".join(cleaned_lines).strip()
+                for line in lines:
+                    if line:
+                        cleaned_lines.append(line)
+                        blank = False
+                    elif not blank:
+                        cleaned_lines.append("")
+                        blank = True
+                normal_text = "\n".join(cleaned_lines).strip()
+                if normal_text:
+                    blocks.append(normal_text)
 
+        body = "\n\n".join(blocks).strip()
         title_header = f"Title: {self.title}\n" if self.title else ""
         return f"{title_header}URL: {url}\n\n{body}"
 
@@ -319,7 +361,7 @@ class WebFetchTool:
 
     def _fetch_and_process(self, url: str, fmt: str) -> ToolResult:
         try:
-            html_text = _fetch_html(url)
+            content_text, content_type = _fetch_html(url)
         except urllib.error.HTTPError as e:
             return ToolResult(
                 f"error: failed to fetch '{url}': {e.code} {e.reason}",
@@ -344,9 +386,13 @@ class WebFetchTool:
             return ToolResult(f"error: failed to fetch '{url}': {e}", is_error=True)
 
         if fmt == "html":
-            return ToolResult(html_text)
+            return ToolResult(content_text)
+
+        ct = content_type.lower()
+        if any(t in ct for t in ("application/json", "text/plain", "text/markdown", "+json")):
+            return ToolResult(content_text)
 
         extractor = HTMLTextExtractor(mode=fmt)
-        extractor.feed(html_text)
+        extractor.feed(content_text)
         extractor.close()
         return ToolResult(extractor.get_text(url))

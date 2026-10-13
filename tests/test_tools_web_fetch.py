@@ -165,6 +165,8 @@ async def test_web_fetch_cloudflare_challenge_retries_with_honest_ua(
         "file:///etc/passwd",
         "http://localhost:8000/",
         "http://127.0.0.1/",
+        "http://127.1/",
+        "http://2130706433/",
         "http://[::1]/",
         "http://0.0.0.0/",
         "http://192.168.1.100/admin",
@@ -316,3 +318,93 @@ async def test_web_fetch_invalid_args(fetch_tool: WebFetchTool, tool_context: To
         {"url": "https://example.com", "format": "unsupported"}, tool_context
     )
     assert res_format.is_error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content_type", "raw_body"),
+    [
+        (
+            "application/json",
+            b'{\n  "name": "verbix",\n  "status": "ok",\n  "nested": {\n    "key": "val"\n  }\n}',
+        ),
+        (
+            "text/plain; charset=utf-8",
+            b"Line 1\n    Indented line 2\n\n\nTriple spaced line 3",
+        ),
+        (
+            "text/markdown",
+            b"# Heading\n\n```python\ndef test():\n    pass\n```\n",
+        ),
+        (
+            "application/problem+json",
+            b'{\n  "type": "https://example.com/probs/out-of-credit",\n  "title": "You do not have enough credit."\n}',
+        ),
+    ],
+)
+async def test_web_fetch_preserves_non_html_formatting(
+    fetch_tool: WebFetchTool,
+    tool_context: ToolContext,
+    content_type: str,
+    raw_body: bytes,
+):
+    with patch.object(
+        urllib.request.OpenerDirector,
+        "open",
+        return_value=_mock_response(raw_body, headers={"Content-Type": content_type}),
+    ):
+        res = await fetch_tool.execute({"url": "https://example.com/api/data"}, tool_context)
+
+    assert not res.is_error
+    assert res.observation == raw_body.decode("utf-8")
+
+
+def test_html_text_extractor_preserves_pre_tag_formatting():
+    html_doc = """<!DOCTYPE html>
+<html>
+<head><title>Code Sample</title></head>
+<body>
+  <p>Here is sample code:</p>
+  <pre>
+def factorial(n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+</pre>
+  <p>End of explanation.</p>
+</body>
+</html>"""
+
+    extractor = HTMLTextExtractor(mode="markdown")
+    extractor.feed(html_doc)
+    extractor.close()
+    text = extractor.get_text("https://example.com/code")
+
+    expected_code = (
+        "def factorial(n):\n"
+        "    if n <= 1:\n"
+        "        return 1\n"
+        "    return n * factorial(n - 1)"
+    )
+    assert expected_code in text
+    assert "Here is sample code:" in text
+    assert "End of explanation." in text
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_strips_quotes_from_charset(
+    fetch_tool: WebFetchTool, tool_context: ToolContext
+):
+    body = "Résumé test".encode("iso-8859-1")
+    with patch.object(
+        urllib.request.OpenerDirector,
+        "open",
+        return_value=_mock_response(
+            body, headers={"Content-Type": 'text/html; charset="iso-8859-1"'}
+        ),
+    ):
+        res = await fetch_tool.execute({"url": "https://example.com/resume"}, tool_context)
+
+    assert not res.is_error
+    assert "Résumé test" in res.observation
+

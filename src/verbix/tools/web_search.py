@@ -350,13 +350,21 @@ class WebSearchTool:
             )
             return ToolResult(self._format_results(results, query))
         except urllib.error.HTTPError as e:
-            return ToolResult(
-                f"error: search request failed with HTTP {e.code}: {e.reason}",
-                is_error=True,
-            )
+            msg = f"error: search request failed with HTTP {e.code}: {e.reason}"
+            if provider == "duckduckgo" and e.code in (403, 429):
+                msg += " (set TAVILY_API_KEY, BRAVE_API_KEY, or EXA_API_KEY for reliable search API access)"
+            return ToolResult(msg, is_error=True)
         except urllib.error.URLError as e:
+            if isinstance(e.reason, TimeoutError) or "timed out" in str(e.reason).lower():
+                return ToolResult(
+                    f"error: search request timed out for query '{query}'",
+                    is_error=True,
+                )
             return ToolResult(f"error: search network error: {e.reason}", is_error=True)
         except TimeoutError:
-            return ToolResult("error: search request timed out", is_error=True)
+            return ToolResult(
+                f"error: search request timed out for query '{query}'",
+                is_error=True,
+            )
         except Exception as e:  # noqa: BLE001
             return ToolResult(f"error: search failed: {e}", is_error=True)

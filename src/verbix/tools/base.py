@@ -62,7 +62,7 @@ def parse_lenient_json(raw: str) -> dict[str, Any]:
 
     # 1. Direct JSON parse
     try:
-        val = json.loads(trimmed)
+        val = json.loads(trimmed, strict=False)
         if isinstance(val, dict):
             return val
     except json.JSONDecodeError:
@@ -72,7 +72,7 @@ def parse_lenient_json(raw: str) -> dict[str, Any]:
     fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", trimmed, re.DOTALL)
     if fence_match:
         try:
-            val = json.loads(fence_match.group(1))
+            val = json.loads(fence_match.group(1), strict=False)
             if isinstance(val, dict):
                 return val
         except json.JSONDecodeError:
@@ -84,7 +84,7 @@ def parse_lenient_json(raw: str) -> dict[str, Any]:
     if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
         candidate = trimmed[first_brace : last_brace + 1]
         try:
-            val = json.loads(candidate)
+            val = json.loads(candidate, strict=False)
             if isinstance(val, dict):
                 return val
         except json.JSONDecodeError:

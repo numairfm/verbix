@@ -383,3 +383,44 @@ def test_long_plain_text_still_truncates():
         multimodal_regex=r"(?s)<MSWEA_MULTIMODAL_CONTENT><CONTENT_TYPE>(.+?)</CONTENT_TYPE>(.+?)</MSWEA_MULTIMODAL_CONTENT>",
     )
     assert msgs[0]["content"] == [{"type": "text", "text": "xxxxxxxxxx"}]
+
+
+def test_parse_toolcall_actions_accepts_unescaped_control_characters_in_strings():
+    from verbix.agent.models.utils.actions_toolcall import parse_toolcall_actions
+
+    raw = '{"path": "flappy.html", "content": "<!DOCTYPE html>\n<html>\n<body>\n</body>\n</html>"}'
+    actions = parse_toolcall_actions(
+        [_call("write", raw)],
+        format_error_template="{{ error }}",
+        allowed_tools={"write"},
+    )
+    assert len(actions) == 1
+    assert actions[0]["name"] == "write"
+    assert actions[0]["arguments"]["path"] == "flappy.html"
+    assert "<body>" in actions[0]["arguments"]["content"]
+
+
+def test_parse_toolcall_actions_accepts_markdown_code_fenced_arguments():
+    from verbix.agent.models.utils.actions_toolcall import parse_toolcall_actions
+
+    raw = '```json\n{"command": "echo 1"}\n```'
+    actions = parse_toolcall_actions(
+        [_call("bash", raw)],
+        format_error_template="{{ error }}",
+    )
+    assert len(actions) == 1
+    assert actions[0]["command"] == "echo 1"
+
+
+def test_litellm_model_defaults_to_ignore_errors_cost_tracking(monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("MSWEA_COST_TRACKING", raising=False)
+    config = LitellmModelConfig(model_name="openrouter/google/gemini-3.5-flash-lite")
+    assert config.cost_tracking == "ignore_errors"
+
+    model = LitellmModel(config_class=lambda **kw: config)
+    mock_resp = MagicMock()
+    with patch("litellm.cost_calculator.completion_cost", return_value=0.0):
+        result = model._calculate_cost(mock_resp)
+        assert result == {"cost": 0.0}

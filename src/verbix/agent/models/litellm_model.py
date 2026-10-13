@@ -65,7 +65,7 @@ class LitellmModelConfig(BaseModel):
     """Set explicit cache control markers, for example for Anthropic models."""
     cost_tracking: Literal["default", "ignore_errors"] = cast(
         Literal["default", "ignore_errors"],
-        os.getenv("MSWEA_COST_TRACKING", "default"),
+        os.getenv("MSWEA_COST_TRACKING", "ignore_errors"),
     )
     """Cost tracking mode for this model. Can be 'default' or 'ignore_errors'."""
     format_error_template: str = "{{ error }}"
@@ -299,8 +299,7 @@ class LitellmModel:
     def _calculate_cost(self, response: Any) -> dict[str, float]:
         try:
             cost = litellm.cost_calculator.completion_cost(response, model=self.config.model_name)
-            if cost <= 0.0:
-                raise ValueError(f"Cost must be > 0.0, got {cost}")
+            cost = max(cost, 0.0)
         except Exception as e:
             cost = 0.0
             if self.config.cost_tracking != "ignore_errors":

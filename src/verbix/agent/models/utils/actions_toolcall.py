@@ -9,6 +9,7 @@ from jinja2 import StrictUndefined, Template
 
 from verbix.agent.exceptions import FormatError
 from verbix.agent.models.utils.openai_multimodal import expand_multimodal_content
+from verbix.tools.base import parse_lenient_json
 
 BASH_TOOL = {
     "type": "function",
@@ -63,7 +64,12 @@ def parse_toolcall_actions(
         try:
             fn = getattr(tool_call, "function", None)
             arguments_str = getattr(fn, "arguments", "{}") if fn else "{}"
-            args = json.loads(arguments_str)
+            try:
+                args = json.loads(arguments_str, strict=False)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                args = parse_lenient_json(arguments_str)
+                if "_raw" in args and len(args) == 1:
+                    raise json.JSONDecodeError("Could not parse JSON", arguments_str, 0)
         except (json.JSONDecodeError, TypeError, ValueError) as e:
             error_msg = f"Error parsing tool call arguments: {e}."
         fn_name = getattr(getattr(tool_call, "function", None), "name", "")

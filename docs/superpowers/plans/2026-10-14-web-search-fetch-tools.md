@@ -65,7 +65,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'verbix.tools.web_sear
 Implement `WebSearchTool`:
 - Schema: `query` (required string), `max_results` (integer, default 5, clamped between 1 and 10).
 - Providers:
-  - `_search_duckduckgo(query, max_results)`: POST `https://lite.duckduckgo.com/lite/` with `urllib.request`, parse with `DuckDuckGoLiteParser(html.parser.HTMLParser)` extracting `<a class="result-link">` and `<td class="result-snippet">`.
+  - `_search_duckduckgo(query, max_results)`: POST `https://lite.duckduckgo.com/lite/` with `urllib.request` using `ssl.create_default_context(cafile=certifi.where())`, parse with `DuckDuckGoLiteParser(html.parser.HTMLParser)` skipping `<tr class="result-sponsored">` and extracting `<a class="result-link">` and `<td class="result-snippet">`.
   - `_search_tavily(query, max_results, api_key)`: POST `https://api.tavily.com/search` with JSON payload.
   - `_search_brave(query, max_results, api_key)`: GET `https://api.search.brave.com/res/v1/web/search` with `X-Subscription-Token` header.
 - Resolution logic:
@@ -112,7 +112,7 @@ git commit -m "feat(tools): add web_search tool with pluggable providers"
 - [ ] **Step 1: Write failing tests for `WebFetchTool`**
 
 Write tests in `tests/test_tools_web_fetch.py` covering:
-1. `test_web_fetch_extracts_clean_text`: Mock `urlopen` returning HTML with `<title>`, `<style>`, `<script>`, `<nav>`, and `<p>` tags; verify `<style>`, `<script>`, and `<nav>` are discarded while `<title>` and `<p>` content are preserved.
+1. `test_web_fetch_extracts_clean_text`: Mock `urlopen` returning HTML with `<title>`, `<style>`, `<script>`, `<nav>`, `<img ...>`, and `<p>` tags; verify `<style>`, `<script>`, and `<nav>` are discarded while `<title>` and `<p>` content are preserved without tag tracking corruption from void tags.
 2. `test_web_fetch_blocks_ssrf`: Test with `file:///etc/passwd`, `http://localhost:8000/`, `http://127.0.0.1/`, `http://[::1]/`, `http://0.0.0.0/`; verify `is_error=True` without network calls.
 3. `test_web_fetch_plain_text`: Mock `urlopen` returning `text/plain` or `application/json`; verify content is returned directly without HTML parser truncation.
 4. `test_web_fetch_http_error_handled`: Mock `urllib.error.HTTPError(404, "Not Found")` and verify `ToolResult("error: failed to fetch '...': 404 Not Found", is_error=True)`.
@@ -129,11 +129,12 @@ Implement `WebFetchTool`:
 - Schema: `url` (required string).
 - Validation: Validate scheme is `http` or `https`; parse hostname with `urllib.parse.urlparse` and reject `localhost`, loopback, or private hostnames.
 - `HTMLTextExtractor(html.parser.HTMLParser)`:
-  - Skip contents inside `{"script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form"}`.
-  - Track block elements `{"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "div", "article", "section", "tr"}` to insert newlines.
+  - Skip contents inside noise tags: `script`, `style`, `noscript`, `svg`, `nav`, `header`, `footer`, `aside`, `form`, and roles `navigation`/`banner`/`contentinfo`.
+  - Maintain `ignored_stack` accounting for HTML void tags (`img`, `br`, `hr`, `input`, `meta`, `link`) to avoid void tags breaking end-tag tracking.
+  - Track block elements (`p`, `h1`-`h6`, `li`, `div`, `article`, `section`, `tr`) to insert newlines.
   - Extract `<title>` tag and prepend `Title: <title>\nURL: <url>\n\n`.
-  - Collapse excessive blank lines and whitespace.
-- Fetch with `urllib.request.Request` using standard desktop User-Agent, timeout=15s.
+  - Collapse excessive blank lines and whitespace into readable clean text.
+- Fetch with `urllib.request.Request` using standard desktop User-Agent, timeout=15s, and `ssl.create_default_context(cafile=certifi.where())`.
 - Execute via `asyncio.to_thread`.
 
 - [ ] **Step 4: Run test to verify it passes**

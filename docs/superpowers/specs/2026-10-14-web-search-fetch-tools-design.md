@@ -91,12 +91,13 @@ The provider resolution logic:
 
 #### DuckDuckGo Lite Wire Implementation
 - **Endpoint**: `POST https://lite.duckduckgo.com/lite/`
+- **SSL Context**: Uses `ssl.create_default_context(cafile=certifi.where())` (using `certifi` from the venv) to ensure rock-solid TLS verification across all Linux/macOS/Windows systems.
 - **Headers**:
   - `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36`
   - `Content-Type: application/x-www-form-urlencoded`
   - `Accept: text/html`
 - **Body**: `q=<url-encoded-query>`
-- **Parsing**: An `HTMLParser` that extracts results from `<a class="result-link">` and subsequent `<td class="result-snippet">`. This endpoint does not require JavaScript or browser cookies.
+- **Parsing**: An `HTMLParser` that ignores `<tr class="result-sponsored">` (ad rows) and extracts clean organic results from `<a class="result-link">` and `<td class="result-snippet">`. Direct organic destination URLs are used (skipping internal DDG redirects). This endpoint does not require JavaScript or browser cookies.
 
 #### Tavily & Brave Wire Implementations
 - **Tavily**: `POST https://api.tavily.com/search` with JSON payload `{"query": query, "max_results": max_results, "api_key": key}`.
@@ -140,10 +141,11 @@ If no results: `No results found for query: '<query>'.`
 2. **HTTP Fetch**: `urllib.request.Request` with `User-Agent: Mozilla/5.0 ...` and a 15-second timeout.
 3. **HTML Extraction (`HTMLTextExtractor`)**:
    - Subclasses `html.parser.HTMLParser`.
-   - Ignores content inside noise tags: `<script>`, `<style>`, `<nav>`, `<header>`, `<footer>`, `<noscript>`, `<svg>`, `<form>`, `<aside>`.
-   - Formats block elements (`<h1>`-`<h6>`, `<p>`, `<li>`, `<tr>`, `<div>`) with appropriate spacing and newlines.
+   - Ignores content inside noise tags: `<script>`, `<style>`, `<nav>`, `<header>`, `<footer>`, `<noscript>`, `<svg>`, `<form>`, `<aside>`, elements with roles `navigation`/`banner`/`contentinfo`, or navigational classes.
+   - Maintains an `ignored_stack` accounting for HTML void elements (`img`, `br`, `hr`, `input`, `meta`, `link`) to avoid broken tag-depth tracking on void tags.
+   - Formats block elements (`<h1>`-`<h6>`, `<p>`, `<li>`, `<tr>`, `<div>`, `<article>`, `<section>`) with appropriate spacing and newlines.
    - Extracts page `<title>` at the top.
-   - Normalizes multiple spaces and blank lines.
+   - Normalizes multiple spaces and consecutive blank lines into clean text.
 4. **Output Budgeting**:
    - The returned text passes through `bind_output` automatically via `build_registry`.
 

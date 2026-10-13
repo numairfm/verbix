@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -114,3 +117,15 @@ def check_fresh(target: Path, context: ToolContext) -> str | None:
     if hashlib.sha256(target.read_bytes()).hexdigest() != recorded:
         return "stale"
     return None
+
+
+def find_ripgrep_binary() -> str:
+    """Finds the ripgrep binary bundled in the venv or available in PATH."""
+    venv_bin = Path(sys.executable).parent / ("rg.exe" if sys.platform == "win32" else "rg")
+    if venv_bin.is_file() and os.access(venv_bin, os.X_OK):
+        return str(venv_bin)
+    found = shutil.which("rg")
+    if found:
+        return found
+    return "rg"
+

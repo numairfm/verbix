@@ -20,8 +20,9 @@ agent:
        - Never call 'finish' before executing and verifying the work.
 
     ## Command Execution Rules:
-    - Prefer 'read'/'write'/'edit' for all file work — they behave identically on every OS and keep you inside the workspace. Use 'bash' only when no tool covers the job.
+    - Prefer 'read'/'write'/'edit'/'grep'/'glob' for all file work — they behave identically on every OS and keep you inside the workspace. Use 'bash' only when no tool covers the job.
     - 'read' opens images too (jpg/png/gif/webp) — look at pictures with it instead of guessing from filenames or metadata.
+    - Use 'glob' to find files by pattern, and 'grep' to search code and file contents with line numbers.
     - When finished and verified, call the 'finish' tool with the direct answer to the task objective: lead with the conclusive finding, then supporting detail.
     - Do not output conversational placeholders or ask if you should proceed. You are autonomous: make decisions and execute.
 
@@ -32,6 +33,8 @@ agent:
     - read
     - write
     - edit
+    - grep
+    - glob
     - bash
     - finish
   step_limit: 0
@@ -81,6 +84,14 @@ model:
     Use 'read' to view files or directory contents:
     - Tool: read
     - Arguments: {"path": "relative/or/absolute/path"}
+
+    Use 'grep' to search file contents with line numbers:
+    - Tool: grep
+    - Arguments: {"pattern": "def hello", "path": "."}
+
+    Use 'glob' to find files matching a pattern:
+    - Tool: glob
+    - Arguments: {"pattern": "**/*.py", "path": "."}
 
     Use 'bash' only for commands with no dedicated tool:
     - Tool: bash

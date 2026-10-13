@@ -55,3 +55,10 @@ This file covers heavy model and media assets by name.
 ## Acoustic Echo Cancellation (pywebrtc-audio)
 
 - **pywebrtc-audio** (BSD-3-Clause) — WebRTC AudioProcessingModule bindings for real-time acoustic echo cancellation (<https://github.com/strands-labs/pywebrtc-audio>).
+
+## Fast Text Search (ripgrep)
+
+- **ripgrep** (MIT / Unlicense) — fast recursive line-oriented regex search engine by Andrew Gallant (<https://github.com/BurntSushi/ripgrep>).
+  - Pinned package: `ripgrep==15.1.0` (native binary wheels for Linux, macOS, and Windows).
+  - License source: `LICENSE-MIT` (MIT License, Copyright 2015 Andrew Gallant).
+

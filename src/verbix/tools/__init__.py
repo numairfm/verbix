@@ -14,6 +14,8 @@ from verbix.tools.bash import BashTool
 from verbix.tools.cancel import CancelTool
 from verbix.tools.edit import FileEditTool
 from verbix.tools.finish import FinishTool
+from verbix.tools.glob import GlobTool
+from verbix.tools.grep import GrepTool
 from verbix.tools.read import FileReadTool
 from verbix.tools.sandbox import SandboxConfig, SandboxResult, execute_sandboxed
 from verbix.tools.shared import bind_output, resolve_contained_path
@@ -32,6 +34,8 @@ __all__ = [
     "FileReadTool",
     "FileWriteTool",
     "FinishTool",
+    "GlobTool",
+    "GrepTool",
     "SandboxConfig",
     "SandboxResult",
     "SpawnTool",
@@ -50,6 +54,8 @@ TOOL_CATALOG: dict[str, Callable[[Any], Any]] = {
     "write": lambda runtime: FileWriteTool(),
     "edit": lambda runtime: FileEditTool(),
     "bash": lambda runtime: BashTool(),
+    "grep": lambda runtime: GrepTool(),
+    "glob": lambda runtime: GlobTool(),
     "spawn": SpawnTool,
     "status": StatusTool,
     "cancel": CancelTool,

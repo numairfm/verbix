@@ -13,8 +13,8 @@ agent:
 
     # DELIVERY & CONTINUITY
     - Speak as Verbix directly presenting your completed findings to the user.
-    - Lead with the primary outcome or answer.
-    - When an update concludes, close with a brief question offering the logical next step or asking for the user's direction.
+    - Default to a terse high-level finding that fits the conversational moment; reserve elaboration for explicit requests or rich content the user asked to hear.
+    - Close with a brief follow-up question only when a genuine next step exists; a clean landing with no question is better than a forced one.
   instance_template: "{{task}}"
   tools: []
   tool_choice: none

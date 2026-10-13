@@ -91,3 +91,102 @@ async def test_tool_choice_absent_by_default():
     )
     [e async for e in agent.step_stream("hi")]
     assert "tool_choice" not in seen
+
+
+@pytest.mark.asyncio
+async def test_drain_shares_foreground_context_snapshot():
+    import asyncio
+    from types import SimpleNamespace
+
+    from verbix.runtime.announcer import drain_pending_announcements
+
+    foreground_messages = [
+        {"role": "user", "content": "check the last commit"},
+        {"role": "assistant", "content": "Sure."},
+    ]
+    seen = {}
+
+    async def fake_submit(prompt, output, agent=None):
+        seen["prompt"] = prompt
+        seen["agent"] = agent
+        return "There is no git repo here yet."
+
+    runtime = SimpleNamespace(
+        floor=SimpleNamespace(is_idle=True),
+        _drain_lock=asyncio.Lock(),
+        _pending_announcements=[("task-1", "no git repository here")],
+        _request_grounding=lambda: "[grounding]",
+        announcer=SimpleNamespace(messages=[{"role": "user", "content": "stale"}]),
+        foreground=SimpleNamespace(messages=foreground_messages),
+        wake_output=None,
+        on_wake=None,
+        submit=fake_submit,
+    )
+    await drain_pending_announcements(runtime)
+    assert runtime._pending_announcements == []
+    assert "Task 'task-1'" not in seen["prompt"]
+    assert "no git repository here" in seen["prompt"]
+    msgs = runtime.announcer.messages
+    assert msgs is not foreground_messages
+    assert [m.get("content") for m in msgs] == ["check the last commit", "Sure."]
+    assert all(a is not b for a, b in zip(msgs, foreground_messages))
+    assert foreground_messages[-1] == {
+        "role": "assistant",
+        "content": "There is no git repo here yet.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_drain_blank_result_speaks_nothing():
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from verbix.runtime.announcer import drain_pending_announcements
+
+    runtime = SimpleNamespace(
+        floor=SimpleNamespace(is_idle=True),
+        _drain_lock=asyncio.Lock(),
+        _pending_announcements=[("task-1", "   ")],
+        _request_grounding=lambda: "[grounding]",
+        announcer=SimpleNamespace(messages=[]),
+        foreground=SimpleNamespace(messages=[]),
+        wake_output=None,
+        on_wake=None,
+        submit=AsyncMock(),
+    )
+    await drain_pending_announcements(runtime)
+    assert runtime._pending_announcements == []
+    runtime.submit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_speak_batch_shares_snapshot_and_writes_back():
+    from types import SimpleNamespace
+
+    from verbix.core.events import TurnComplete
+    from verbix.runtime.announcer import speak_batch
+
+    async def fake_step_stream(prompt):
+        yield TurnComplete(final_text="spoken answer")
+
+    announcer = SimpleNamespace(
+        messages=[{"role": "user", "content": "stale"}],
+        n_calls=7,
+        cost=1.0,
+        model=None,
+        step_stream=fake_step_stream,
+    )
+    foreground_messages = [{"role": "user", "content": "original question"}]
+    runtime = SimpleNamespace(
+        _request_grounding=lambda: "[grounding]",
+        wake_output=None,
+        _broadcast_wake_event=None,
+        provider=object(),
+        announcer=announcer,
+        foreground=SimpleNamespace(messages=foreground_messages),
+        on_wake=None,
+    )
+    assert await speak_batch(runtime, [("task-9", "result text")]) is True
+    assert [m.get("content") for m in announcer.messages] == ["original question"]
+    assert foreground_messages[-1] == {"role": "assistant", "content": "spoken answer"}

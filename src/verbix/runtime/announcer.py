@@ -96,6 +96,18 @@ def build_announcer(runtime: Any, fg_config: AgentConfig) -> DefaultAgent:
     return runtime.announcer
 
 
+def _snapshot_foreground_history(runtime: Any) -> list:
+    """Copy foreground chat history for the tool-less announcer.
+
+    Same ordered prefix (cache-friendly), fresh objects (the announcer's
+    turn cannot mutate foreground entries mid-stream). Snapshot, never a
+    live alias: the foreground may append while the announcer streams.
+    """
+    foreground = getattr(runtime, "foreground", None)
+    messages = getattr(foreground, "messages", None) or []
+    return [dict(m) if isinstance(m, dict) else m for m in messages]
+
+
 async def drain_pending_announcements(runtime: Any) -> None:
     """Speaks accumulated background completions via the single foreground companion."""
     if not runtime.floor.is_idle or not runtime._pending_announcements:
@@ -109,13 +121,16 @@ async def drain_pending_announcements(runtime: Any) -> None:
         items = [res.strip() for _, res in batch if res.strip()]
         if not items:
             return
+        runtime.announcer.messages = _snapshot_foreground_history(runtime)
         prompt = (
             f"{runtime._request_grounding()}\n"
             "[Present these completed findings directly to the user. "
-            "State the outcome clearly, then invite their next instruction:]\n"
+            "State the outcome clearly, and only add a follow-up question if a genuine next step exists:]\n"
             + "\n\n".join(items)
         )
         final_text = await runtime.submit(prompt, runtime.wake_output, agent=runtime.announcer)
+        if final_text:
+            runtime.foreground.messages.append({"role": "assistant", "content": final_text})
         if final_text and runtime.on_wake:
             wake_res = runtime.on_wake(final_text)
             if asyncio.iscoroutine(wake_res):
@@ -130,13 +145,13 @@ async def speak_batch(runtime: Any, batch: list[tuple[str, str]]) -> bool:
     wake_prompt = (
         f"{runtime._request_grounding()}\n"
         "[Present these completed findings directly to the user in spoken conversational prose. "
-        "State the outcome clearly, then invite their next instruction:]\n"
+        "State the outcome clearly, and only add a follow-up question if a genuine next step exists:]\n"
         + "\n\n".join(items)
     )
     final_text = ""
     fan_out = WakeOutputFanOut(runtime.wake_output, runtime._broadcast_wake_event)
     try:
-        runtime.announcer.messages = []
+        runtime.announcer.messages = _snapshot_foreground_history(runtime)
         runtime.announcer.n_calls = 0
         runtime.announcer.cost = 0.0
         runtime.announcer.model = adapt_provider(runtime.provider)

@@ -110,7 +110,39 @@ def _is_cf_challenge(error: urllib.error.HTTPError) -> bool:
     return False
 
 
-def _fetch_html(url: str) -> str:
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Rejects HTTP redirects to blocked or private/loopback hostnames."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        validation_error = _validate_url(newurl)
+        if validation_error:
+            raise urllib.error.HTTPError(
+                newurl,
+                code,
+                f"redirect blocked: {validation_error}",
+                headers,
+                fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _build_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=_SSL_CONTEXT),
+        _SafeRedirectHandler(),
+    )
+
+
+def _fetch_html(url: str, opener: urllib.request.OpenerDirector | None = None) -> str:
+    active_opener = opener or _build_opener()
     req = urllib.request.Request(
         url,
         headers={
@@ -120,7 +152,7 @@ def _fetch_html(url: str) -> str:
         method="GET",
     )
     try:
-        with urllib.request.urlopen(req, context=_SSL_CONTEXT, timeout=TIMEOUT_SECONDS) as resp:
+        with active_opener.open(req, timeout=TIMEOUT_SECONDS) as resp:
             content_bytes = resp.read(MAX_RESPONSE_BYTES)
             content_type = resp.headers.get("Content-Type", "") if resp.headers else ""
     except urllib.error.HTTPError as e:
@@ -133,7 +165,7 @@ def _fetch_html(url: str) -> str:
                 },
                 method="GET",
             )
-            with urllib.request.urlopen(retry_req, context=_SSL_CONTEXT, timeout=TIMEOUT_SECONDS) as resp:
+            with active_opener.open(retry_req, timeout=TIMEOUT_SECONDS) as resp:
                 content_bytes = resp.read(MAX_RESPONSE_BYTES)
                 content_type = resp.headers.get("Content-Type", "") if resp.headers else ""
         else:
@@ -204,9 +236,9 @@ class HTMLTextExtractor(html.parser.HTMLParser):
                     self._ignored_stack.pop()
             return
 
-        if tag in ("h1", "h2", "h3", "h4", "h5", "h6", "p", "article", "section"):
+        if tag in ("h1", "h2", "h3", "h4", "h5", "h6", "p", "article", "section", "ul", "ol"):
             self._chunks.append("\n\n")
-        elif tag in ("li", "div", "tr"):
+        elif tag in ("div", "tr"):
             self._chunks.append("\n")
 
     def handle_data(self, data: str) -> None:
@@ -294,6 +326,11 @@ class WebFetchTool:
                 is_error=True,
             )
         except urllib.error.URLError as e:
+            if isinstance(e.reason, TimeoutError) or "timed out" in str(e.reason).lower():
+                return ToolResult(
+                    f"error: request timed out fetching '{url}'",
+                    is_error=True,
+                )
             return ToolResult(
                 f"error: network error fetching '{url}': {e.reason}",
                 is_error=True,

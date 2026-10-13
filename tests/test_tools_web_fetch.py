@@ -1,4 +1,6 @@
+import io
 import urllib.error
+import urllib.request
 from email.message import Message
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -6,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from verbix.tools.base import ToolContext
-from verbix.tools.web_fetch import HTMLTextExtractor, WebFetchTool
+from verbix.tools.web_fetch import HTMLTextExtractor, WebFetchTool, _SafeRedirectHandler
 
 
 @pytest.fixture
@@ -55,7 +57,9 @@ async def test_web_fetch_extracts_markdown_by_default(
 </body>
 </html>"""
 
-    with patch("urllib.request.urlopen", return_value=_mock_response(html_content)):
+    with patch.object(
+        urllib.request.OpenerDirector, "open", return_value=_mock_response(html_content)
+    ):
         res = await fetch_tool.execute({"url": "https://example.com/docs"}, tool_context)
 
     assert not res.is_error
@@ -64,8 +68,8 @@ async def test_web_fetch_extracts_markdown_by_default(
     assert "# Getting Started" in res.observation
     assert "Welcome to the guide. Here is an introductory paragraph." in res.observation
     assert "## Features" in res.observation
-    assert "- Fast parsing" in res.observation
-    assert "- Zero dependencies" in res.observation
+    # Tighter list formatting: adjacent items without empty lines in between
+    assert "- Fast parsing\n- Zero dependencies" in res.observation
 
 
 @pytest.mark.asyncio
@@ -83,7 +87,9 @@ async def test_web_fetch_formats(fetch_tool: WebFetchTool, tool_context: ToolCon
 </html>"""
 
     # Test format="text"
-    with patch("urllib.request.urlopen", return_value=_mock_response(html_content)):
+    with patch.object(
+        urllib.request.OpenerDirector, "open", return_value=_mock_response(html_content)
+    ):
         res_text = await fetch_tool.execute(
             {"url": "https://example.com/page", "format": "text"},
             tool_context,
@@ -98,7 +104,9 @@ async def test_web_fetch_formats(fetch_tool: WebFetchTool, tool_context: ToolCon
     assert "Bullet item" in res_text.observation
 
     # Test format="html"
-    with patch("urllib.request.urlopen", return_value=_mock_response(html_content)):
+    with patch.object(
+        urllib.request.OpenerDirector, "open", return_value=_mock_response(html_content)
+    ):
         res_html = await fetch_tool.execute(
             {"url": "https://example.com/page", "format": "html"},
             tool_context,
@@ -128,13 +136,13 @@ async def test_web_fetch_cloudflare_challenge_retries_with_honest_ua(
 
     calls = []
 
-    def mock_urlopen(req, *args, **kwargs):
+    def mock_open(self, req, *args, **kwargs):
         calls.append(req)
         if len(calls) == 1:
             raise cf_error
         return success_resp
 
-    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+    with patch.object(urllib.request.OpenerDirector, "open", mock_open):
         res = await fetch_tool.execute({"url": "https://example.com/protected"}, tool_context)
 
     assert not res.is_error
@@ -166,12 +174,46 @@ async def test_web_fetch_cloudflare_challenge_retries_with_honest_ua(
 async def test_web_fetch_blocks_ssrf(
     fetch_tool: WebFetchTool, tool_context: ToolContext, ssrf_url: str
 ):
-    with patch("urllib.request.urlopen") as mock_urlopen:
+    with patch.object(urllib.request.OpenerDirector, "open") as mock_open:
         res = await fetch_tool.execute({"url": ssrf_url}, tool_context)
 
     assert res.is_error
     assert "error" in res.observation.lower()
-    mock_urlopen.assert_not_called()
+    mock_open.assert_not_called()
+
+
+def test_safe_redirect_handler_blocks_private_ip():
+    handler = _SafeRedirectHandler()
+    req = urllib.request.Request("https://example.com/initial")
+    headers = Message()
+    headers["Location"] = "http://127.0.0.1/admin"
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        handler.http_error_302(req, None, 302, "Found", headers)
+
+    assert exc_info.value.code == 302
+    assert "redirect blocked" in exc_info.value.reason
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_blocks_ssrf_on_redirect(
+    fetch_tool: WebFetchTool, tool_context: ToolContext
+):
+    class MockRedirectHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            resp = urllib.request.addinfourl(io.BytesIO(b""), Message(), req.full_url, 302)
+            resp.msg = "Found"
+            resp.headers["Location"] = "http://127.0.0.1/sensitive"
+            return self.parent.error("http", req, resp, 302, "Found", resp.headers)
+
+    mock_opener = urllib.request.build_opener(MockRedirectHandler, _SafeRedirectHandler)
+
+    with patch("verbix.tools.web_fetch._build_opener", return_value=mock_opener):
+        res = await fetch_tool.execute({"url": "http://example.com/redirect"}, tool_context)
+
+    assert res.is_error
+    assert "redirect blocked" in res.observation
+    assert "127.0.0.1" in res.observation
 
 
 @pytest.mark.asyncio
@@ -186,7 +228,7 @@ async def test_web_fetch_http_error_handled(
         fp=None,
     )
 
-    with patch("urllib.request.urlopen", side_effect=error):
+    with patch.object(urllib.request.OpenerDirector, "open", side_effect=error):
         res = await fetch_tool.execute({"url": "https://example.com/missing"}, tool_context)
 
     assert res.is_error
@@ -197,8 +239,24 @@ async def test_web_fetch_http_error_handled(
 async def test_web_fetch_timeout_handled(
     fetch_tool: WebFetchTool, tool_context: ToolContext
 ):
-    with patch("urllib.request.urlopen", side_effect=TimeoutError("Connection timed out")):
+    with patch.object(
+        urllib.request.OpenerDirector,
+        "open",
+        side_effect=TimeoutError("Connection timed out"),
+    ):
         res = await fetch_tool.execute({"url": "https://example.com/slow"}, tool_context)
+
+    assert res.is_error
+    assert "timed out" in res.observation.lower()
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_url_error_timeout_handled(
+    fetch_tool: WebFetchTool, tool_context: ToolContext
+):
+    url_err = urllib.error.URLError(TimeoutError("operation timed out"))
+    with patch.object(urllib.request.OpenerDirector, "open", side_effect=url_err):
+        res = await fetch_tool.execute({"url": "https://example.com/slow_url"}, tool_context)
 
     assert res.is_error
     assert "timed out" in res.observation.lower()

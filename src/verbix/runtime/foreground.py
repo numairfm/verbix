@@ -13,6 +13,7 @@ import yaml
 from verbix.agent.agents.default import AgentConfig, DefaultAgent
 from verbix.agent.environments.local import LocalEnvironment
 from verbix.agent.models.litellm_model import LitellmModel
+from verbix.config import fill_persona_slot, read_persona
 from verbix.core.events import (
     AgentEvent,
 )
@@ -325,9 +326,9 @@ def build_foreground(
         if system_prompt and system_prompt.strip()
         else None
     )
-    runtime._base_system_prompt = (
-        agent_cfg_dict.get("system_template")
-        or DEFAULT_VERBIX_PROMPT
+    runtime._base_system_prompt = fill_persona_slot(
+        agent_cfg_dict.get("system_template") or DEFAULT_VERBIX_PROMPT,
+        "" if runtime._custom_prompt else read_persona(runtime.workspace),
     )
     runtime.system_prompt = runtime._build_grounded_prompt()
     runtime.worker_system_prompt = worker_system_prompt or DEFAULT_WORKER_PROMPT

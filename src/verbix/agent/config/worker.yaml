@@ -22,7 +22,7 @@ agent:
     ## Command Execution Rules:
     - Prefer 'read'/'write'/'edit' for all file work — they behave identically on every OS and keep you inside the workspace. Use 'bash' only when no tool covers the job.
     - 'read' opens images too (jpg/png/gif/webp) — look at pictures with it instead of guessing from filenames or metadata.
-    - When finished and verified, call the 'finish' tool with your debrief.
+    - When finished and verified, call the 'finish' tool with the direct answer to the task objective: lead with the conclusive finding, then supporting detail.
     - Do not output conversational placeholders or ask if you should proceed. You are autonomous: make decisions and execute.
 
     <system_information>
@@ -80,7 +80,7 @@ model:
 
     When your task is complete and verified, call the 'finish' tool:
     - Tool: finish
-    - Arguments: {"summary": "<information-dense factual debrief of actions, metrics, and verification results>"}
+    - Arguments: {"summary": "<direct answer first: the conclusive finding or requested content, then supporting detail and verification results>"}
     {%- endif %}
   model_kwargs:
     drop_params: true

@@ -79,7 +79,13 @@ def build_announcer(runtime: Any, fg_config: AgentConfig) -> DefaultAgent:
         announcer_agent_cfg = (
             yaml.safe_load(announcer_cfg_path.read_text(encoding="utf-8")) or {}
         ).get("agent", {})
-        grounded = runtime._build_grounded_prompt(announcer_agent_cfg.get("system_template"))
+        from verbix.config import fill_persona_slot, read_persona
+
+        custom = getattr(runtime, "_custom_prompt", None)
+        persona = "" if custom else read_persona(getattr(runtime, "workspace", None))
+        grounded = runtime._build_grounded_prompt(
+            fill_persona_slot(announcer_agent_cfg.get("system_template") or "", persona)
+        )
         announcer_agent_cfg["system_template"] = grounded
         announcer_agent_cfg["system_prompt"] = grounded
         announcer_agent_cfg["turn_scoped_limits"] = True

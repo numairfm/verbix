@@ -228,3 +228,25 @@ async def test_speak_batch_shares_snapshot_and_writes_back():
     assert await speak_batch(runtime, [("task-9", "result text")]) is True
     assert [m.get("content") for m in announcer.messages] == ["original question"]
     assert foreground_messages[-1] == {"role": "assistant", "content": "spoken answer"}
+
+
+def test_announcer_receives_persona_and_flag_beats_file(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from verbix.runtime.runtime import Runtime
+
+    home = tmp_path / "home"
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True)
+    persona_file = home / ".verbix" / "PERSONA.md"
+    persona_file.parent.mkdir(parents=True)
+    persona_file.write_text("Be chill.\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: home)
+
+    rt = Runtime(workspace=ws, provider=MagicMock())
+    assert "Be chill." in rt.announcer.config.system_template
+    assert "# USER PERSONA" in rt.announcer.config.system_template
+
+    rt2 = Runtime(workspace=ws, provider=MagicMock(), system_prompt="Flag persona.")
+    assert "Flag persona." in rt2.announcer.config.system_template
+    assert "Be chill." not in rt2.announcer.config.system_template

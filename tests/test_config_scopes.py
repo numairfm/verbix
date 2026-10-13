@@ -159,7 +159,7 @@ def test_persona_appends_as_section_not_replacement(tmp_path, monkeypatch):
     runtime = build_runtime(args)
     assert "# USER PERSONA" in runtime.system_prompt
     assert "Be chill." in runtime.system_prompt
-    assert "# VOICE & AUDIO CONSTRAINTS" in runtime.system_prompt
+    assert "# DELIVERY" in runtime.system_prompt
 
 
 def test_cli_system_prompt_flag_beats_persona_file(tmp_path, monkeypatch):

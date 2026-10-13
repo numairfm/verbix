@@ -12,7 +12,7 @@ from typing import Any
 
 from verbix.agent.models.litellm_model import LitellmModel, LitellmModelConfig
 from verbix.auth import resolve_provider
-from verbix.config import ensure_global_scaffold, load_config, read_persona
+from verbix.config import ensure_global_scaffold, load_config
 from verbix.core.events import (
     AgentEvent,
     TextDelta,
@@ -217,11 +217,7 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
         worker_model = LitellmModel(config_class=lambda **kw: worker_config)
 
     flag_prompt = getattr(args, "system_prompt", None)
-    if flag_prompt and flag_prompt.strip():
-        system_prompt = flag_prompt
-    else:
-        persona = read_persona(workspace)
-        system_prompt = f"# USER PERSONA\n{persona}" if persona else None
+    system_prompt = flag_prompt.strip() if flag_prompt and flag_prompt.strip() else None
 
     return Runtime(
         workspace=workspace,

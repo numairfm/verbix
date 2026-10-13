@@ -79,6 +79,12 @@ def read_persona(workspace: Path | None) -> str:
     return "\n".join(parts)
 
 
+def fill_persona_slot(template: str, persona: str) -> str:
+    """Fills the {{persona}} slot with persona text (or "(none)" when empty)."""
+    text = persona.strip() if persona else ""
+    return template.replace("{{persona}}", text if text else "(none)")
+
+
 def ensure_global_scaffold() -> None:
     """Create ~/.verbix/ with commented templates on first run only."""
     root = Path.home() / ".verbix"

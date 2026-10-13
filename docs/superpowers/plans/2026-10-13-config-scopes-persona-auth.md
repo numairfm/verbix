@@ -292,3 +292,15 @@ Expected: PASS.
 git add src/verbix/config.py src/verbix/cli.py README.md tests/test_config_scopes.py
 git commit -m "feat(config): global scaffold, docs, project scope stays user-created"
 ```
+
+---
+
+## Deferred to UI build (not in scope now)
+
+Parity with the old app's `~/.verbix/settings.json`, planned when a settings UI exists. No code changes until then:
+- `tts_voice` selection (bundled-vs-custom override by name, per old custom-voices doc)
+- `cached_models` picker list (model discovery for the UI to display)
+- Default `workspace`
+- `verbix auth add/remove/list` CLI as the stepping stone to in-app provider management
+
+All fit the existing files (`config.yaml`, `auth.json`, `.verbix/models`) with no format changes.

@@ -28,12 +28,30 @@ def estimate_tokens(messages: list[dict[str, Any]]) -> int:
         return sum(len(json.dumps(m, default=str)) for m in messages) // 4
 
 
+def _elide_large_values(obj: Any, threshold: int) -> Any:
+    if isinstance(obj, str):
+        return "[truncated]" if len(obj) > threshold else obj
+    if isinstance(obj, dict):
+        return {k: _elide_large_values(v, threshold) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_elide_large_values(v, threshold) for v in obj]
+    return obj
+
+
 def _truncate_args(tool_calls: list[dict[str, Any]]) -> None:
     for tc in tool_calls:
         fn = tc.get("function") if isinstance(tc, dict) else None
         args = fn.get("arguments") if isinstance(fn, dict) else None
         if isinstance(args, str) and len(args) > MAX_TOOL_ARG_CHARS:
-            fn["arguments"] = args[:MAX_TOOL_ARG_CHARS]
+            try:
+                parsed = json.loads(args)
+                dumped = json.dumps(_elide_large_values(parsed, MAX_TOOL_ARG_CHARS))
+                if len(dumped) > MAX_TOOL_ARG_CHARS:
+                    dumped = json.dumps(_elide_large_values(parsed, 100))
+                fn["arguments"] = dumped
+            except (json.JSONDecodeError, TypeError):
+                fn["arguments"] = args[:MAX_TOOL_ARG_CHARS]
+
 
 
 def _atomic_units(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:

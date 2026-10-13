@@ -1,6 +1,7 @@
 """Tier 1 deterministic context compaction tests (Task 4)."""
 
 import copy
+import json
 
 from verbix.agent.utils.compaction import compact_messages
 
@@ -81,3 +82,60 @@ def test_compact_messages_single_over_budget_group_is_capped():
     call_ids = {tc["id"] for m in compacted if m.get("tool_calls") for tc in m["tool_calls"]}
     result_ids = {m.get("tool_call_id") for m in compacted if m.get("role") == "tool"}
     assert result_ids <= call_ids
+
+
+def test_compaction_never_breaks_json_arguments():
+    huge_code = "<!DOCTYPE html>\n" + "x" * 20000
+    messages = [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": "create app"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "write", "arguments": json.dumps({"path": "app.html", "content": huge_code})},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "c1", "name": "write", "content": "Wrote 20016 characters"},
+    ]
+    compacted = compact_messages(messages, max_tokens=1000)
+    found_tool_call = False
+    for m in compacted:
+        for tc in m.get("tool_calls", []):
+            found_tool_call = True
+            args_str = tc.get("function", {}).get("arguments", "")
+            # Must always remain decodable JSON
+            parsed = json.loads(args_str)
+            assert parsed.get("path") == "app.html"
+            assert parsed.get("content") == "[truncated]"
+    assert found_tool_call
+
+
+def test_compaction_stage1_truncates_old_tool_arguments_as_valid_json():
+    huge_arg = json.dumps({"file": "old.py", "code": "print('hello')\n" + "#" * 2000})
+    msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "task 0"}]
+    msgs += [
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "function": {"name": "write", "arguments": huge_arg}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+    ]
+    for i in (2, 3, 4):
+        msgs += [
+            {"role": "user", "content": f"task {i}"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": f"c{i}", "function": {"name": "read", "arguments": '{"file": "x"}'}}]},
+            {"role": "tool", "tool_call_id": f"c{i}", "content": "ok"},
+            {"role": "assistant", "content": f"done {i}"},
+        ]
+    compacted = compact_messages(msgs, max_tokens=150)
+    old_call = next(
+        tc
+        for m in compacted
+        if m.get("tool_calls")
+        for tc in m["tool_calls"]
+        if tc.get("id") == "c1"
+    )
+    parsed = json.loads(old_call["function"]["arguments"])
+    assert parsed["file"] == "old.py"
+    assert parsed["code"] == "[truncated]"
+

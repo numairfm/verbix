@@ -77,6 +77,8 @@ class LitellmModelConfig(BaseModel):
     """Template used to render the observation after executing an action."""
     multimodal_regex: str = DEFAULT_MULTIMODAL_REGEX
     """Regex to extract multimodal content. Empty string disables multimodal processing."""
+    stream_idle_timeout_s: float = 60.0
+    """Max silence per stream chunk before the provider read fails loudly."""
 
 
 class LitellmModel:
@@ -170,6 +172,7 @@ class LitellmModel:
         call_kwargs = dict(self.config.model_kwargs)
         call_kwargs.update(kwargs)
         call_kwargs.setdefault("num_retries", 3)
+        call_kwargs.setdefault("timeout", self.config.stream_idle_timeout_s)
         call_kwargs.setdefault("stream_options", {"include_usage": True})
         if tools is not None:
             call_kwargs["tools"] = tools

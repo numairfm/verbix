@@ -100,3 +100,31 @@ async def test_auth_failure_fails_fast_with_no_retry(monkeypatch):
     with pytest.raises(litellm.exceptions.AuthenticationError):
         [e async for e in model.query_stream([{"role": "user", "content": "hi"}])]
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_passes_idle_timeout_default(monkeypatch):
+    model, calls = _model(monkeypatch, [("stream", [_text_chunk("hi", "stop")])])
+    [e async for e in model.query_stream([{"role": "user", "content": "hi"}])]
+    assert calls[0]["timeout"] == 60.0
+
+
+@pytest.mark.asyncio
+async def test_stream_idle_timeout_override_honored(monkeypatch):
+    async def fake_acompletion(**kwargs):
+        async def gen():
+            yield _text_chunk("hi", "stop")
+
+        return gen()
+
+    captured: dict = {}
+    orig = fake_acompletion
+
+    async def spy(**kwargs):
+        captured.update(kwargs)
+        return await orig(**kwargs)
+
+    monkeypatch.setattr("litellm.acompletion", spy)
+    model = LitellmModel(model_name="test/model", stream_idle_timeout_s=0.5)
+    [e async for e in model.query_stream([{"role": "user", "content": "hi"}])]
+    assert captured["timeout"] == 0.5

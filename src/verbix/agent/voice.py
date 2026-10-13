@@ -58,7 +58,7 @@ class VoiceConfig(BaseModel):
 
     system_template: str = ""
     instance_template: str = "{{task}}"
-    tools: list[str] = Field(default_factory=lambda: ["spawn", "status", "cancel"])
+    tools: list[str] = Field(default_factory=list)
     step_limit: int = 0
     cost_limit: float = 3.0
     wall_time_limit_seconds: int = 0
@@ -161,32 +161,29 @@ class VoiceAgent:
         """Return tool schemas configured for this agent from the registry."""
         if self.tools is None or self.config.tool_choice == "none":
             return None
-        if not self.config.tools:
-            return None
-        try:
+        if self.config.tools:
             defs = self.tools.get_definitions(self.config.tools)
             return defs if defs else None
-        except KeyError:
-            return None
+        defs = self.tools.get_definitions()
+        return defs if defs else None
 
     def _model_stream_cost(self) -> float:
         cost = getattr(self.model, "last_stream_cost", 0.0)
         return cost if isinstance(cost, (int, float)) else 0.0
 
     async def _execute_tool(self, name: str, args: dict[str, Any]) -> ToolResult:
-        if self.tools is not None and name in getattr(self.tools, "_handlers", {}):
-            try:
-                res = await self.tools.aexecute(name, args)
-                if isinstance(res, ToolResult):
-                    return res
-                elif isinstance(res, str):
-                    return ToolResult(res, is_error=False, is_terminal=False)
-                else:
-                    return ToolResult(str(res), is_error=False, is_terminal=False)
-            except Exception as e:  # noqa: BLE001
-                return ToolResult(f"Error executing tool '{name}': {e}", is_error=True)
-
-        return ToolResult(f"Error: Tool '{name}' is not registered or supported.", is_error=True)
+        if self.tools is None:
+            return ToolResult(f"Error: Tool '{name}' is not registered or supported.", is_error=True)
+        try:
+            res = await self.tools.aexecute(name, args)
+            if isinstance(res, ToolResult):
+                return res
+            elif isinstance(res, str):
+                return ToolResult(res, is_error=False, is_terminal=False)
+            else:
+                return ToolResult(str(res), is_error=False, is_terminal=False)
+        except Exception as e:  # noqa: BLE001
+            return ToolResult(f"Error executing tool '{name}': {e}", is_error=True)
 
     async def step_stream(self, user_input: str | None = None) -> AsyncIterator[AgentEvent]:
         """Stream an agent turn asynchronously, yielding AgentEvents and executing tools."""
@@ -327,7 +324,7 @@ class VoiceAgent:
                                 try:
                                     args_dict = parse_lenient_json(args_str)
                                 except Exception:  # noqa: BLE001
-                                    args_dict = {"command": args_str}
+                                    args_dict = {}
                         tool_calls_to_execute.append(
                             {
                                 "call_id": tc_info["call_id"],
@@ -361,7 +358,11 @@ class VoiceAgent:
 
                         yield ToolCallStarted(call_id=call_id, tool_name=name, arguments=args)
 
-                        if self.tools is not None and self.tools.is_side_effecting(name):
+                        if (
+                            self.tools is not None
+                            and hasattr(self.tools, "is_side_effecting")
+                            and self.tools.is_side_effecting(name)
+                        ):
                             pending = asyncio.ensure_future(self._execute_tool(name, args))
                             try:
                                 res = await asyncio.shield(pending)

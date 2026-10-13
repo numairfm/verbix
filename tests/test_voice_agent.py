@@ -46,6 +46,25 @@ def test_announcer_config_defaults():
     assert cfg.tool_choice == "none"
 
 
+def test_voice_agent_unknown_tool_raises_key_error():
+    tools = ToolRegistry()
+    config = VoiceConfig(tools=["nonexistent_tool"])
+    agent = VoiceAgent(model=MagicMock(), tools=tools, config=config)
+    with pytest.raises(KeyError):
+        agent.get_tool_definitions()
+
+
+@pytest.mark.asyncio
+async def test_voice_agent_execute_tool_encapsulation():
+    class MockAdapter:
+        async def aexecute(self, name, args):
+            return ToolResult(f"executed {name}", is_error=False)
+
+    agent = VoiceAgent(model=MagicMock(), tools=MockAdapter())
+    res = await agent._execute_tool("my_tool", {"a": 1})
+    assert res.observation == "executed my_tool"
+
+
 @pytest.mark.asyncio
 async def test_voice_agent_speech_segmentation_split_chunks():
     mock_model = MagicMock()

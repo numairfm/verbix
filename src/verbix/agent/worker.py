@@ -181,7 +181,8 @@ class WorkerAgent:
             if self._tools_executed > 0 and e.messages:
                 first_msg = e.messages[0]
                 if isinstance(first_msg, dict) and first_msg.get("role") == "assistant":
-                    content = (first_msg.get("content") or "").strip()
+                    raw_content = first_msg.get("content")
+                    content = raw_content.strip() if isinstance(raw_content, str) else ""
                     if content:
                         self.messages.append(first_msg)
                         self.n_consecutive_format_errors = 0
@@ -222,7 +223,8 @@ class WorkerAgent:
 
         # 4. Strict tool-calling guard
         if not tool_calls:
-            content = (assistant_msg.get("content") or "").strip()
+            raw_content = assistant_msg.get("content")
+            content = raw_content.strip() if isinstance(raw_content, str) else ""
             if self._tools_executed > 0 and content:
                 self.n_consecutive_format_errors = 0
                 return ToolResult(content, is_error=False, is_terminal=True)

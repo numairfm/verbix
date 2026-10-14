@@ -633,3 +633,35 @@ async def test_worker_completes_on_speech_in_format_error_path():
     assert result["status"] == "completed"
     assert result["summary"] == "Here is the stock summary."
     assert agent.n_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_format_error_chatter_on_turn_one():
+    mock_model = MagicMock()
+    assistant_speech = {"role": "assistant", "content": "I plan to look at the repo first.", "extra": {}}
+    user_err = {"role": "user", "content": "No tool calls found in the response.", "extra": {}}
+
+    mock_model.query.side_effect = [
+        FormatError(assistant_speech, user_err),
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "function": {"name": "finish", "arguments": '{"summary": "done"}'}}],
+        },
+    ]
+
+    tools = ToolRegistry()
+    tools.register(
+        "finish",
+        {"type": "function", "function": {"name": "finish"}},
+        lambda a: ToolResult("done", is_terminal=True),
+    )
+
+    agent = WorkerAgent(model=mock_model, tools=tools)
+    result = await agent.run("do something")
+
+    assert result["status"] == "completed"
+    assert result["summary"] == "done"
+    assert agent.n_calls == 2
+    # Ensure format error feedback occurred and chatter was not accepted prematurely
+    assert any("No tool calls found" in m.get("content", "") for m in agent.messages if m.get("role") == "user")

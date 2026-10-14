@@ -61,6 +61,13 @@ class TaskLedger:
             return
         entry.delivery = "heard"
 
+    def pending_deliveries(self) -> list[TaskEntry]:
+        return [
+            e
+            for e in self._tasks.values()
+            if e.status in ("completed", "failed") and e.delivery == "pending"
+        ]
+
     def get_status(self, task_id: str) -> str:
         entry = self.get(task_id)
         if entry is None:

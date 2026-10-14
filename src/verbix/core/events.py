@@ -1,7 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+
+ExitReason = Literal[
+    "ok",
+    "terminal_tool",
+    "repeated_tool_call",
+    "limits_exceeded",
+    "time_exceeded",
+    "format_error",
+    "empty_response",
+    "exception",
+]
 
 
 @dataclass(frozen=True)
@@ -44,3 +55,5 @@ class ToolCallFinished(AgentEvent):
 @dataclass(frozen=True)
 class TurnComplete(AgentEvent):
     final_text: str
+    exit_reason: ExitReason = "ok"
+    is_error: bool = False

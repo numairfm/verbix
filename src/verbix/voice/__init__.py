@@ -8,12 +8,11 @@ from verbix.voice.base import (
     SpeechToText,
     TextToSpeech,
 )
-from verbix.voice.callback_sink import CallbackAudioSink, select_sink
+from verbix.voice.callback_sink import CallbackAudioSink
 from verbix.voice.capture import PTTCapture
 from verbix.voice.output import SpeechOutput
 from verbix.voice.pipeline import VoicePipeline
 from verbix.voice.player import AudioPlayer
-from verbix.voice.sinks import SubprocessAudioSink
 
 
 def __getattr__(name: str) -> Any:
@@ -25,10 +24,6 @@ def __getattr__(name: str) -> Any:
         from verbix.voice.sherpa_tts import SherpaTTS
 
         return SherpaTTS
-    if name == "SherpaSTT":
-        from verbix.voice.sherpa_stt import SherpaSTT
-
-        return SherpaSTT
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -40,13 +35,10 @@ __all__ = [
     "MockSpeechToText",
     "MockTextToSpeech",
     "PTTCapture",
-    "SherpaSTT",
     "SherpaTTS",
     "SpeechOutput",
     "SpeechToText",
-    "SubprocessAudioSink",
     "TextToSpeech",
     "TranscribeSTT",
     "VoicePipeline",
-    "select_sink",
 ]

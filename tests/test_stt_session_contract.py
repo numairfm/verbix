@@ -5,8 +5,7 @@ from unittest.mock import MagicMock
 from tests.test_conversational_voice_loop import FakeSTT as ConvFakeSTT
 from tests.test_draft_shelf import FakeSTT as ShelfFakeSTT
 from verbix.voice.base import STTSessionProtocol
-from verbix.voice.sherpa_stt import STTSession
-from verbix.voice.transcribe_stt import TranscribeSession
+from verbix.voice.transcribe_stt import STTSession, TranscribeSession
 
 
 def _assert_surface(sess, name):

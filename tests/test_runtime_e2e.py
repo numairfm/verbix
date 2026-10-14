@@ -279,8 +279,8 @@ async def test_runtime_direct_worker_completion_is_silent(tmp_path):
             yield ProviderToolCallDelta(
                 index=0,
                 call_id="c1",
-                name="finish",
-                arguments_delta=json.dumps({"summary": "Calculation finished: 42."}),
+                name="read",
+                arguments_delta=json.dumps({"path": "."}),
             )
             yield ProviderFinish(reason="tool_calls")
         else:
@@ -371,8 +371,8 @@ async def test_runtime_worker_markdown_result_is_silent(tmp_path):
             yield ProviderToolCallDelta(
                 index=0,
                 call_id="c1",
-                name="finish",
-                arguments_delta=json.dumps({"summary": "# Markdown Result\n- Item 1\n- Item 2"}),
+                name="read",
+                arguments_delta=json.dumps({"path": "."}),
             )
             yield ProviderFinish(reason="tool_calls")
         else:
@@ -501,3 +501,221 @@ def test_finish_log_redacts_keys(tmp_path, caplog):
     assert secret not in caplog.text
     assert "REDACTED" in caplog.text
     assert runtime.ledger.get("task-1").result_summary.count(secret) == 2
+
+
+def test_runtime_status_without_task_id_includes_recent_actions_and_honors_full(tmp_path):
+    from verbix.runtime.worker import WorkerTask
+
+    runtime = Runtime(workspace=tmp_path, provider=MagicMock())
+    session = MagicMock(spec=["messages"])
+    session.messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "read", "arguments": '{"path": "README.md"}'}}
+            ],
+        },
+        {"role": "tool", "content": "showing lines 1-10 of 10\n# Verbix"},
+    ]
+    t = WorkerTask(id="task-1", description="read docs", session=session)
+    t._status = "running"
+    runtime.tasks["task-1"] = t
+
+    concise = runtime.status()
+    assert "Called read" in concise
+
+    full = runtime.status(full=True)
+    assert 'read({"path": "README.md"})' in full
+
+
+def test_foreground_grounding_and_spawn_tool_derive_worker_capabilities_once_per_runtime(
+    tmp_path, monkeypatch
+):
+    from verbix.tools.sandbox import SandboxStatus
+    from verbix.tools.spawn import SpawnTool
+
+    # 1. When sandbox is available, worker capabilities include screenshot, web_search, and bash
+    monkeypatch.setattr(
+        "verbix.tools.sandbox.probe_sandbox",
+        lambda allow_network=False: SandboxStatus(
+            available=True, backend="bwrap", reason="ok", capabilities="sandboxed bash"
+        ),
+    )
+    rt_with_bash = Runtime(workspace=tmp_path, provider=MagicMock())
+    assert "screenshot" in rt_with_bash.system_prompt
+    assert "web_search" in rt_with_bash.system_prompt
+    assert "web_fetch" in rt_with_bash.system_prompt
+    assert "bash" in rt_with_bash.system_prompt
+    assert "screenshot" in SpawnTool(rt_with_bash).description
+    assert hasattr(rt_with_bash, "worker_capabilities")
+    assert hasattr(rt_with_bash, "worker_tool_names")
+
+    # 2. When sandbox is unavailable, bash is automatically omitted from worker capabilities
+    monkeypatch.setattr(
+        "verbix.tools.sandbox.probe_sandbox",
+        lambda allow_network=False: SandboxStatus(
+            available=False, backend=None, reason="no bwrap", capabilities=""
+        ),
+    )
+    rt_no_bash = Runtime(workspace=tmp_path, provider=MagicMock())
+    assert "screenshot" in rt_no_bash.system_prompt
+    assert "bash" not in rt_no_bash.system_prompt
+    assert "bash" not in SpawnTool(rt_no_bash).description
+
+
+@pytest.mark.asyncio
+async def test_scripted_live_session_replay_has_no_duplicate_spawns_and_no_double_spoken_results(
+    tmp_path,
+):
+    import asyncio
+
+    from verbix.provider.models import (
+        Finish as ProviderFinish,
+    )
+    from verbix.provider.models import (
+        TextDelta as ProviderTextDelta,
+    )
+    from verbix.provider.models import (
+        ToolCallDelta as ProviderToolCallDelta,
+    )
+    from verbix.runtime.floor import FloorState
+
+    spawned_objectives: list[str] = []
+    seen_turn_prompts: list[str] = []
+    announcer_spoken: list[str] = []
+
+    provider = MagicMock()
+
+    async def scripted_stream(messages, tools=None, **kw):
+        last_msg = messages[-1].content if messages else ""
+        seen_turn_prompts.append(last_msg)
+
+        if "[Present these completed findings" in last_msg:
+            text = "Proactively announcing: Nvidia closed at 228 dollars and 52 cents."
+            announcer_spoken.append(text)
+            yield ProviderTextDelta(text=text)
+            yield ProviderFinish(reason="stop")
+            return
+
+        # If this is the post-tool continuation after spawn, finish the turn
+        if messages and messages[-1].role == "tool":
+            yield ProviderFinish(reason="stop")
+            return
+
+        if "What's on my screen?" in last_msg:
+            yield ProviderTextDelta(text="Checking your screen now.")
+            yield ProviderToolCallDelta(
+                index=0,
+                call_id="c1",
+                name="spawn",
+                arguments_delta='{"objective": "Capture screenshot and describe screen"}',
+            )
+            yield ProviderFinish(reason="tool_calls")
+        elif "Nvidia bought Hugging Face" in last_msg:
+            # Sees active task-1 in grounding, spawns only the new verification task
+            assert "[Active background tasks: task-1" in last_msg
+            yield ProviderTextDelta(text="Looking into that deal now.")
+            yield ProviderToolCallDelta(
+                index=0,
+                call_id="c2",
+                name="spawn",
+                arguments_delta='{"objective": "Verify if NVIDIA acquired Hugging Face for $13B"}',
+            )
+            yield ProviderFinish(reason="tool_calls")
+        elif "What's the status?" in last_msg:
+            # Sees Newly completed background tasks in grounding -> reports directly without re-spawning!
+            assert "[Newly completed background tasks" in last_msg
+            assert "No acquisition happened." in last_msg
+            yield ProviderTextDelta(
+                text="Your screen shows VS Code, and Nvidia did not acquire Hugging Face."
+            )
+            yield ProviderFinish(reason="stop")
+        elif "Nvidia stock price" in last_msg:
+            yield ProviderTextDelta(text="Checking Nvidia's stock price.")
+            yield ProviderToolCallDelta(
+                index=0,
+                call_id="c3",
+                name="spawn",
+                arguments_delta='{"objective": "Get current NVIDIA stock price"}',
+            )
+            yield ProviderFinish(reason="tool_calls")
+        elif "Wait, is that right?" in last_msg:
+            # Follows up on most recent exchange (NVDA stock price), does NOT re-spawn Hugging Face
+            yield ProviderTextDelta(
+                text="Yes, 228 dollars and 52 cents was the latest closing price."
+            )
+            yield ProviderFinish(reason="stop")
+
+    provider.stream = scripted_stream
+    rt = Runtime(workspace=tmp_path, provider=provider)
+
+    async def fake_spawn(task: str) -> str:
+        spawned_objectives.append(task)
+        tid = f"task-{len(spawned_objectives)}"
+        from verbix.runtime.worker import WorkerTask
+
+        wt = WorkerTask(id=tid, description=task, session=MagicMock(messages=[]))
+        wt._status = "running"
+        rt.tasks[tid] = wt
+        rt.ledger.register_task(tid, task)
+        return f"Started background task {tid}: {task}"
+
+    rt.spawn = fake_spawn
+
+    # Hold floor in LISTENING with user_speaking=True during turns 1-2
+    rt.floor.set_state(FloorState.LISTENING)
+    rt.floor.set_user_speaking(True)
+
+    # Turn 1: "What's on my screen?" -> spawns task-1 (screenshot is in worker capabilities)
+    assert "screenshot" in rt.system_prompt
+    await rt.submit("What's on my screen?")
+    assert len(spawned_objectives) == 1
+
+    # Turn 2: "Someone told me Nvidia bought Hugging Face for 13B" -> sees active task-1, spawns task-2
+    rt.floor.set_state(FloorState.LISTENING)
+    rt.floor.set_user_speaking(True)
+    await rt.submit("Someone told me Nvidia bought Hugging Face for 13B, is that true?")
+    assert len(spawned_objectives) == 2
+
+    # Tasks 1 and 2 complete while user is about to ask "What's the status?"
+    rt.floor.set_state(FloorState.LISTENING)
+    rt.floor.set_user_speaking(True)
+    rt.tasks["task-1"]._status = "completed"
+    rt.tasks["task-1"]._result = "Screen shows VS Code."
+    rt._on_task_finished("task-1", "Screen shows VS Code.")
+    rt.tasks["task-2"]._status = "completed"
+    rt.tasks["task-2"]._result = "No acquisition happened."
+    rt._on_task_finished("task-2", "No acquisition happened.")
+
+    # Turn 3: "What's the status?" -> folds both completions into the turn, marks them heard, no announcer double-speak!
+    reply3 = await rt.submit("What's the status?")
+    assert "did not acquire Hugging Face" in reply3
+    assert rt.ledger.get("task-1").delivery == "heard"
+    assert rt.ledger.get("task-2").delivery == "heard"
+    assert announcer_spoken == []
+
+    # Turn 4: "What's the Nvidia stock price?" -> spawns task-3
+    await rt.submit("What's the Nvidia stock price?")
+    assert len(spawned_objectives) == 3
+
+    # Task 3 finishes while floor is LISTENING and user is silent -> announced proactively!
+    rt.floor.set_state(FloorState.LISTENING)
+    rt.floor.set_user_speaking(False)
+    rt.tasks["task-3"]._status = "completed"
+    rt.tasks["task-3"]._result = "$228.52"
+    rt._on_task_finished("task-3", "$228.52")
+    for _ in range(30):
+        if rt.ledger.get("task-3").delivery == "heard":
+            break
+        await asyncio.sleep(0.02)
+    assert rt.ledger.get("task-3").delivery == "heard"
+    assert len(announcer_spoken) == 1
+
+    # Turn 5: "Wait, is that right?" -> resolves against NVDA stock price, no duplicate spawn!
+    reply5 = await rt.submit("Wait, is that right?")
+    assert "228" in reply5
+    assert len(spawned_objectives) == 3
+    await rt.aclose()
+
+
+

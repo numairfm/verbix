@@ -34,7 +34,6 @@ from verbix.runtime.announcer import (
     build_announcer,
     build_announcer_agent,
     drain_pending_announcements,
-    speak_batch,
 )
 from verbix.runtime.floor import FloorState
 from verbix.runtime.foreground import (
@@ -64,7 +63,6 @@ __all__ = [
     "build_foreground_agent",
     "drain_pending_announcements",
     "spawn_worker",
-    "speak_batch",
 ]
 
 
@@ -156,10 +154,20 @@ class Runtime:
         if "Host operating system:" in prompt_to_use:
             base = prompt_to_use
         else:
+            from verbix.tools.sandbox import probe_sandbox
+
+            shell_part = " Shell: bash." if probe_sandbox().available else ""
+            caps = getattr(self, "worker_capabilities", "")
+            caps_line = (
+                f"\n- Background worker capabilities (available via spawn): {caps}."
+                if caps
+                else ""
+            )
             grounding = (
                 "\n\n# ENVIRONMENT & GROUNDING"
-                f"\n- Host operating system: {platform.system()}. Shell: bash."
+                f"\n- Host operating system: {platform.system()}.{shell_part}"
                 f"\n- The working directory is {self.workspace}."
+                f"{caps_line}"
             )
             base = prompt_to_use.rstrip() + grounding
 
@@ -192,6 +200,48 @@ class Runtime:
             )
         return "\n".join(envelope)
 
+    def _mark_task_heard(self, task_id: str) -> None:
+        if hasattr(self, "ledger"):
+            self.ledger.mark_heard(task_id)
+        if hasattr(self, "_pending_announcements"):
+            self._pending_announcements[:] = [
+                (tid, r) for tid, r in self._pending_announcements if tid != task_id
+            ]
+
+    def _foreground_grounding(self, interruption: Any = None) -> tuple[str, list[str]]:
+        """Builds per-turn foreground grounding including active and newly completed tasks."""
+        envelope = [self._request_grounding(interruption)]
+        active = self.list_active_tasks()
+        if active:
+            active_parts = [
+                f"{t.id} ('{t.description}', running for {max(0, int(time.time() - t._created_at))}s)"
+                for t in active
+            ]
+            envelope.append(f"[Active background tasks: {'; '.join(active_parts)}]")
+
+        folded_ids: list[str] = []
+        pending_lines: list[str] = []
+        if hasattr(self, "ledger"):
+            for entry in self.ledger.pending_deliveries():
+                folded_ids.append(entry.id)
+                desc_part = f" ('{entry.objective}')" if entry.objective else ""
+                pending_lines.append(
+                    f"[Task '{entry.id}'{desc_part} {entry.status}]: {entry.result_summary}"
+                )
+        if hasattr(self, "_pending_announcements"):
+            for tid, res in self._pending_announcements:
+                if tid not in folded_ids and res.strip():
+                    entry = self.ledger.get(tid) if hasattr(self, "ledger") else None
+                    if entry is None or entry.delivery == "pending":
+                        folded_ids.append(tid)
+                        pending_lines.append(f"[Task '{tid}' completed]: {res.strip()}")
+        if pending_lines:
+            envelope.append(
+                "[Newly completed background tasks (briefly report every item below before answering):]\n"
+                + "\n".join(pending_lines)
+            )
+        return "\n".join(envelope), folded_ids
+
     async def step(
         self, user_text: str | None = None, *, interruption: Any = None
     ) -> AsyncIterator[AgentEvent]:
@@ -206,12 +256,23 @@ class Runtime:
             )
             self._turn_handle = handle
             self._last_turn_handle = handle
+            folded_ids: list[str] = []
+            turn_ok = False
             try:
-                async for event in self._step_inner(user_text, interruption=interruption):
+                async for event in self._step_inner(
+                    user_text, interruption=interruption, folded_ids_out=folded_ids
+                ):
+                    if isinstance(event, CoreTurnComplete) and not getattr(
+                        event, "is_error", False
+                    ):
+                        turn_ok = True
                     yield event
             finally:
                 if not self.floor.interrupt_requested:
-                    handle.completed = True
+                    handle.completed = turn_ok
+                    if turn_ok:
+                        for tid in folded_ids:
+                            self._mark_task_heard(tid)
                 handle.task = None
 
     async def _step_inner(
@@ -220,13 +281,20 @@ class Runtime:
         *,
         agent: Any = None,
         interruption: Any = None,
+        folded_ids_out: list[str] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         # System prompt stays static (provider cache prefix); volatile
         # grounding rides on the user message at request time only.
         session = agent or self.foreground
         session.model = adapt_provider(self.provider)
         if user_text is not None:
-            user_text = f"{self._request_grounding(interruption)}\n{user_text}"
+            if session is self.foreground:
+                grounding, folded = self._foreground_grounding(interruption)
+                if folded_ids_out is not None:
+                    folded_ids_out.extend(folded)
+                user_text = f"{grounding}\n{user_text}"
+            else:
+                user_text = f"{self._request_grounding(interruption)}\n{user_text}"
         async for event in session.step_stream(user_text):
             yield event
 
@@ -243,24 +311,35 @@ class Runtime:
         final_text = ""
         async with self.floor.acquire(FloorState.FOREGROUND):
             self._turn_counter = getattr(self, "_turn_counter", 0) + 1
+            turn_kind = (
+                "announcer" if session is getattr(self, "announcer", None) else "foreground"
+            )
             handle = TurnHandle(
                 task=asyncio.current_task(),
-                kind="foreground",
+                kind=turn_kind,
                 turn_id=self._turn_counter,
                 delivered_text_provider=lambda: self._submit_delivered_text(output, session),
             )
             self._turn_handle = handle
             self._last_turn_handle = handle
+            folded_ids: list[str] = []
+            turn_ok = False
             try:
                 async for event in self._step_inner(
-                    user_text, agent=session, interruption=interruption
+                    user_text,
+                    agent=session,
+                    interruption=interruption,
+                    folded_ids_out=folded_ids,
                 ):
                     if output and hasattr(output, "emit"):
                         res = output.emit(event)
                         if asyncio.iscoroutine(res):
                             await res
-                    if isinstance(event, CoreTurnComplete) and event.final_text:
-                        final_text = event.final_text
+                    if isinstance(event, CoreTurnComplete):
+                        if not getattr(event, "is_error", False):
+                            turn_ok = True
+                        if event.final_text:
+                            final_text = event.final_text
                 if output and getattr(output, "is_playing", False):
                     while output.is_playing:
                         await asyncio.sleep(0.02)
@@ -271,7 +350,10 @@ class Runtime:
                     or (output is not None and getattr(output, "last_interruption", None) is not None)
                 )
                 if not was_interrupted:
-                    handle.completed = True
+                    handle.completed = turn_ok
+                    if turn_ok:
+                        for tid in folded_ids:
+                            self._mark_task_heard(tid)
                 handle.task = None
         return final_text
 
@@ -315,10 +397,11 @@ class Runtime:
         if not had_active and heard is None:
             return
 
-        delivered = heard if heard is not None else target.delivered_text()
-        self.foreground.messages[:] = validate_and_repair_history(
-            self.foreground.messages, delivered_text=delivered
-        )
+        if target.kind == "foreground":
+            delivered = heard if heard is not None else target.delivered_text()
+            self.foreground.messages[:] = validate_and_repair_history(
+                self.foreground.messages, delivered_text=delivered
+            )
         target.repaired = True
 
     async def spawn(self, task: str) -> str:
@@ -326,7 +409,7 @@ class Runtime:
         return await spawn_worker(self, task)
 
     def _on_floor_state_changed(self, prev_state: FloorState, new_state: FloorState) -> None:
-        if new_state == FloorState.IDLE and self._pending_announcements:
+        if self.floor.can_announce() and self._pending_announcements:
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(self._drain_pending_announcements())
@@ -370,6 +453,8 @@ class Runtime:
             task = self.tasks.get(task_id)
             if not task:
                 return f"No task found with ID '{task_id}'."
+            if task.status in ("completed", "failed"):
+                self._mark_task_heard(task.id)
             return task.get_status(full=full)
 
         active = self.list_active_tasks()
@@ -382,12 +467,12 @@ class Runtime:
         if active:
             lines.append("Active tasks:")
             for t in active:
-                start_str = datetime.fromtimestamp(t._created_at).astimezone().strftime("%H:%M:%S")
-                elapsed = int(time.time() - t._created_at)
-                lines.append(f"- {t.id}: '{t.description}' (running for {elapsed}s, started at {start_str})")
+                lines.append(f"- {t.get_status(full=full)}")
         if recent_done:
             lines.append("Recently completed:")
             for t in recent_done:
+                if t.status in ("completed", "failed"):
+                    self._mark_task_heard(t.id)
                 finish_time = t._finished_at or time.time()
                 duration = int(finish_time - t._created_at)
                 finish_str = datetime.fromtimestamp(finish_time).astimezone().strftime("%H:%M:%S")
@@ -430,14 +515,6 @@ class Runtime:
             f"{task_lines}"
         )
 
-    async def _announce_ids(self, batch: list[str]) -> bool:
-        """AnnouncerLoop speak_fn: floor already held, resolve results via ledger."""
-        tuples = []
-        for task_id in batch:
-            entry = self.ledger.get(task_id)
-            tuples.append((task_id, entry.result_summary if entry else ""))
-        return await self._speak_batch(tuples)
-
     def _broadcast_wake_event(self, event: AgentEvent) -> None:
         """Broadcasts a wake-turn event to IPC subscribers as plain data."""
         payload: dict[str, Any] = {}
@@ -447,15 +524,8 @@ class Runtime:
                 payload[attr] = val
         self._broadcast_event("wake_event", {"event": type(event).__name__, **payload})
 
-    async def _speak_batch(self, batch: list[tuple[str, str]]) -> bool:
-        """Synthesizes background worker results via dedicated announcer and delivers to output."""
-        return await speak_batch(self, batch)
-
     async def aclose(self) -> None:
         """Teardown: SIGKILL tracked in-flight process groups."""
-        for env in self._environments:
-            try:
-                env.kill_all()
-            except Exception:
-                logger.exception("Failed to kill worker process groups on shutdown")
-        self._environments.clear()
+        from verbix.tools.sandbox import kill_active_processes
+
+        kill_active_processes()

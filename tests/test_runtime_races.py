@@ -4,16 +4,17 @@ import subprocess
 
 import pytest
 
-from verbix.agent.agents.default import AgentConfig, DefaultAgent
-from verbix.agent.environments.local import LocalEnvironment
 from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.voice import VoiceAgent, VoiceConfig
 from verbix.core.events import ToolCallDelta
 from verbix.runtime.ledger import TaskLedger
+from verbix.tools.base import ToolContext
+from verbix.tools.bash import BashTool
+from verbix.tools.sandbox import probe_sandbox
 
 
 @pytest.mark.asyncio
 async def test_regression_completion_buffer_drops_concurrent_finish():
-    # Announcer collapsed; concurrent completions record directly into TaskLedger without dropping.
     ledger = TaskLedger()
 
     for task_id, res in (("task-1", "res-1"), ("task-2", "res-2")):
@@ -23,6 +24,7 @@ async def test_regression_completion_buffer_drops_concurrent_finish():
     assert "res-1" in ledger.get_status("task-1")
     assert "res-2" in ledger.get_status("task-2")
 
+
 @pytest.mark.asyncio
 async def test_regression_cancel_mid_tool_call_orphans_state():
     class SlowToolModel:
@@ -30,12 +32,15 @@ async def test_regression_cancel_mid_tool_call_orphans_state():
             yield ToolCallDelta(index=0, call_id="c1", name="slow", arguments_delta="{}")
 
     reg = ToolRegistry()
+
     async def slow(args, **kw):
         await asyncio.sleep(5)
         return "done"
+
     reg.register("slow", {"type": "function", "function": {"name": "slow", "parameters": {}}}, slow)
 
-    agent = DefaultAgent(model=SlowToolModel(), tools=reg, config=AgentConfig(system_template="sys"))
+    agent = VoiceAgent(model=SlowToolModel(), tools=reg, config=VoiceConfig(system_template="sys"))
+
     async def run():
         async for _ in agent.step_stream("hi"):
             pass
@@ -46,17 +51,20 @@ async def test_regression_cancel_mid_tool_call_orphans_state():
     with pytest.raises(asyncio.CancelledError):
         await t
 
-    # In current codebase, agent.messages ends with assistant message containing tool_calls without tool response
     last = agent.messages[-1]
     assert last.get("role") != "assistant" or not last.get("tool_calls"), "Dangling tool_calls message left in history!"
 
+
 @pytest.mark.asyncio
-async def test_regression_worker_cancel_kills_process_group():
-    env = LocalEnvironment(cwd="/tmp", timeout=10)
+async def test_regression_worker_cancel_kills_process_group(tmp_path):
+    if not probe_sandbox().available:
+        pytest.skip("bwrap sandbox unavailable")
+    tool = BashTool()
+    ctx = ToolContext(workspace=tmp_path)
     marker = f"verbix_test_proc_{os.getpid()}_{int(asyncio.get_event_loop().time() * 1000)}"
 
     async def run():
-        await env.aexecute({"command": f"exec -a {marker} sleep 10"})
+        await tool.execute({"command": f"exec -a {marker} sleep 10"}, ctx)
 
     t = asyncio.create_task(run())
     await asyncio.sleep(0.1)

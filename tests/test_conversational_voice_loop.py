@@ -8,7 +8,7 @@ from verbix.runtime.floor import FloorArbiter, FloorState
 from verbix.voice.base import MockAudioSink, MockTextToSpeech
 from verbix.voice.pipeline import VoicePipeline
 from verbix.voice.player import AudioPlayer
-from verbix.voice.sherpa_stt import STTSession
+from verbix.voice.transcribe_stt import STTSession
 
 
 class FakeCapture:
@@ -609,6 +609,223 @@ async def test_barge_in_transcript_matches_ptt_transcript_word_for_word():
     assert await old.finalize() == ""
 
     await pipeline.stop_continuous_session()
+
+
+@pytest.mark.asyncio
+async def test_continuous_loop_cancels_old_session_after_playback_and_preserves_tail_speech():
+    sessions = []
+
+    def make_session(**kw):
+        s = MagicMock()
+        s.polluted_by_barge_in = False
+        s.is_speech_detected = False
+        s.speech_duration = 1.0
+        s.fed_chunks = []
+        s.feed = MagicMock(side_effect=s.fed_chunks.append)
+
+        def _barge(chunk):
+            s.polluted_by_barge_in = True
+            if b"tail_speech" in chunk:
+                s.is_speech_detected = True
+            return False
+
+        s.feed_barge_in = _barge
+        s.finalize = AsyncMock(return_value="hello there")
+        s.cancel = MagicMock()
+        s.reset = MagicMock()
+        sessions.append(s)
+        return s
+
+    stt = MagicMock()
+    stt.open_session = MagicMock(side_effect=make_session)
+
+    runtime = MagicMock()
+    runtime.floor = FloorArbiter()
+    runtime.is_idle = True
+    runtime.pending_continuation = None
+
+    capture = MagicMock()
+    capture.sample_rate = 16000
+    capture.is_recording = False
+    capture.start_recording = AsyncMock()
+    capture.stop_recording = AsyncMock(return_value=b"")
+
+    pipeline = VoicePipeline(
+        runtime=runtime,
+        stt=stt,
+        player=AudioPlayer(tts=MockTextToSpeech(), sink=MockAudioSink()),
+        capture=capture,
+        aec=MagicMock(is_available=False),
+    )
+
+    async def fake_submit(text, output, **kw):
+        runtime.floor.set_state("SPEAKING")
+        # User starts speaking right at the end of playback (before barge-in interrupts)
+        pipeline.capture.on_chunk(b"tail_speech_onset")
+        return "Hi!"
+
+    runtime.submit = fake_submit
+
+    await pipeline.start_continuous_session()
+    pipeline._speech_endpoint_event.set()
+    await asyncio.sleep(0.05)
+
+    # Old session must be cancelled before opening the new post-playback session,
+    # and the new session must be unpolluted by barge-in yet seeded with the tail speech onset!
+    assert len(sessions) == 2
+    assert sessions[0].cancel.called is True
+    assert pipeline._live_stt is sessions[1]
+    assert pipeline._live_stt.polluted_by_barge_in is False
+    assert b"tail_speech_onset" in b"".join(pipeline._live_stt.fed_chunks)
+    await pipeline.stop_continuous_session()
+
+
+@pytest.mark.asyncio
+async def test_continuous_mode_proactively_announces_completed_task_while_listening(
+    tmp_path,
+):
+    from verbix.provider.models import Finish as ProviderFinish
+    from verbix.provider.models import TextDelta as ProviderTextDelta
+    from verbix.runtime.runtime import Runtime
+
+    provider = MagicMock()
+
+    async def fake_stream(messages, tools=None, **kw):
+        yield ProviderTextDelta(text="Nvidia closed at 228 dollars and 52 cents.")
+        yield ProviderFinish(reason="stop")
+
+    provider.stream = fake_stream
+    rt = Runtime(workspace=tmp_path, provider=provider)
+    sink = MockAudioSink(playback_delay=0.02)
+    player = AudioPlayer(tts=MockTextToSpeech(), sink=sink)
+    stt = FakeSTT()
+    capture = FakeCapture()
+
+    pipeline = VoicePipeline(
+        runtime=rt,
+        stt=stt,
+        player=player,
+        capture=capture,
+        aec=MagicMock(is_available=False),
+    )
+
+    await pipeline.start_continuous_session()
+    assert rt.floor.state == FloorState.LISTENING
+
+    # Background task finishes while in continuous LISTENING mode (user is silent)
+    rt.ledger.register_task("task-1", "Get NVIDIA stock price")
+    rt._on_task_finished("task-1", "$228.52")
+
+    for _ in range(40):
+        if rt.ledger.get("task-1").delivery == "heard":
+            break
+        await asyncio.sleep(0.02)
+
+    assert rt.ledger.get("task-1").delivery == "heard"
+    assert len(sink.played_chunks) > 0
+    assert rt.floor.state == FloorState.LISTENING
+    await pipeline.stop_continuous_session()
+    await rt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_barge_in_during_proactive_announcement_keeps_task_pending_and_folds_into_next_turn(
+    tmp_path,
+):
+    from verbix.provider.models import Finish as ProviderFinish
+    from verbix.provider.models import TextDelta as ProviderTextDelta
+    from verbix.runtime.runtime import Runtime
+
+    seen_fg_prompts = []
+    announcer_calls = 0
+    provider = MagicMock()
+
+    async def fake_stream(messages, tools=None, **kw):
+        nonlocal announcer_calls
+        last_msg = messages[-1].content if messages else ""
+        if "[Present these completed findings" in last_msg:
+            announcer_calls += 1
+            yield ProviderTextDelta(
+                text="Long announcement sentence one. Long announcement sentence two."
+            )
+            yield ProviderFinish(reason="stop")
+        else:
+            seen_fg_prompts.append(last_msg)
+            yield ProviderTextDelta(text="Got it, folding the result into your answer.")
+            yield ProviderFinish(reason="stop")
+
+    provider.stream = fake_stream
+    rt = Runtime(workspace=tmp_path, provider=provider)
+    sink = MockAudioSink(playback_delay=0.25)
+    player = AudioPlayer(tts=MockTextToSpeech(), sink=sink)
+    stt = FakeSTT()
+    stt._texts = ["initial session", "Wait what happened?"]
+    capture = FakeCapture()
+
+    pipeline = VoicePipeline(
+        runtime=rt,
+        stt=stt,
+        player=player,
+        capture=capture,
+        aec=MagicMock(is_available=False),
+    )
+
+    await pipeline.start_continuous_session()
+    try:
+        # Seed a prior completed foreground turn so we verify barge-in on an announcement
+        # does not delete or overwrite the previous foreground turn's assistant message
+        rt.foreground.messages.append({"role": "user", "content": "Check stock"})
+        rt.foreground.messages.append({"role": "assistant", "content": "On it, checking NVDA."})
+
+        sess1 = stt.sessions[0]
+        sess1.feed_barge_in = lambda chunk: b"BARGE" in chunk
+
+        # 1. Task finishes while listening -> proactive announcement starts playing
+        rt.ledger.register_task("task-1", "Check stock")
+        rt._on_task_finished("task-1", "NVDA is $228.52")
+
+        for _ in range(30):
+            if pipeline.turn_output.is_playing:
+                break
+            await asyncio.sleep(0.01)
+        assert pipeline.turn_output.is_playing is True
+        assert announcer_calls == 1
+
+        # 2. User speaks over the proactive announcement -> barge-in interrupts it!
+        capture.on_chunk(b"BARGE_SPEECH")
+        await asyncio.sleep(0.05)
+
+        assert pipeline.turn_output.is_playing is False
+        assert rt.floor.user_speaking is True
+        # Prior foreground assistant message MUST remain intact!
+        assert any(
+            m.get("role") == "assistant" and m.get("content") == "On it, checking NVDA."
+            for m in rt.foreground.messages
+        )
+        # Task MUST remain pending (not heard), and announcer MUST NOT restart while user_speaking is True!
+        assert rt.ledger.get("task-1").delivery == "pending"
+        await asyncio.sleep(0.08)
+        assert announcer_calls == 1
+
+        # 3. User finishes their barge-in utterance -> completion is folded into the foreground turn
+        sink.playback_delay = 0.01
+        sess2 = stt.sessions[1]
+        sess2.on_endpoint()
+        for _ in range(50):
+            if rt.ledger.get("task-1").delivery == "heard":
+                break
+            await asyncio.sleep(0.02)
+
+        assert rt.ledger.get("task-1").delivery == "heard"
+        assert len(seen_fg_prompts) == 1
+        assert "NVDA is $228.52" in seen_fg_prompts[0]
+        assert "Wait what happened?" in seen_fg_prompts[0]
+        assert announcer_calls == 1  # announcer never ran a second time!
+    finally:
+        await pipeline.stop_continuous_session()
+        await rt.aclose()
+
+
 
 
 

@@ -5,7 +5,7 @@ import asyncio
 import numpy as np
 import pytest
 
-from verbix.voice.sherpa_stt import STTSession
+from verbix.voice.transcribe_stt import STTSession
 
 
 class FakeSegmenter:

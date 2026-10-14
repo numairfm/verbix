@@ -116,3 +116,21 @@ def test_build_runtime_worker_max_tokens_env_var(tmp_path, monkeypatch):
     assert runtime.worker_model is not None
     assert runtime.worker_model.config.model_kwargs.get("max_tokens") == 4096
 
+
+def test_pyproject_python_ceiling_and_ci_workflow():
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    assert data["project"]["requires-python"] == ">=3.13,<3.15"
+
+    ci_file = root / ".github" / "workflows" / "ci.yml"
+    assert ci_file.is_file()
+    ci_text = ci_file.read_text(encoding="utf-8")
+    assert "ubuntu-latest" in ci_text
+    assert "macos-latest" in ci_text
+    assert "windows-latest" in ci_text
+    assert "apparmor_restrict_unprivileged_userns=0" in ci_text
+
+

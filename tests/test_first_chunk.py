@@ -1,7 +1,7 @@
 import pytest
 
-from verbix.agent.agents.default import AgentConfig, DefaultAgent
 from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.voice import VoiceAgent, VoiceConfig
 from verbix.core.events import TextDelta, ToolCallDelta, TurnComplete
 
 
@@ -21,10 +21,10 @@ class ChunkThenToolModel:
 
 @pytest.mark.asyncio
 async def test_first_chunk_released_before_tool_call():
-    agent = DefaultAgent(
+    agent = VoiceAgent(
         model=ChunkThenToolModel(),
         tools=ToolRegistry(),
-        config=AgentConfig(system_template="sys"),
+        config=VoiceConfig(system_template="sys"),
     )
     seen = [e async for e in agent.step_stream("hi")]
     texts = [e.text for e in seen if isinstance(e, TextDelta)]

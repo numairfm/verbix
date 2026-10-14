@@ -19,6 +19,7 @@ class EchoCanceller:
 
     def __init__(self, sample_rate: int = 16000, stream_delay_ms: int = 0) -> None:
         self.sample_rate = sample_rate
+        self.stream_delay_ms = stream_delay_ms
         self._ref_buffer: bytearray = bytearray()
         self._mic_pending: bytearray = bytearray()
         self._processor: Any = None

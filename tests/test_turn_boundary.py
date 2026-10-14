@@ -4,7 +4,7 @@ turns — the session always survives."""
 import pytest
 
 from tests.conftest import assert_history_valid
-from verbix.agent.agents.default import AgentConfig, DefaultAgent
+from verbix.agent.voice import VoiceAgent, VoiceConfig
 from verbix.core.events import TextDelta, ToolCallDelta, TurnComplete
 
 
@@ -32,7 +32,7 @@ class BlipModel:
 
 
 def _agent():
-    return DefaultAgent(model=BlipModel(), env=None, tools=None, config=AgentConfig())
+    return VoiceAgent(model=BlipModel(), env=None, tools=None, config=VoiceConfig())
 
 
 @pytest.mark.asyncio
@@ -64,7 +64,7 @@ async def test_failed_turn_logs_no_traceback(caplog):
     import logging
 
     agent = _agent()
-    with caplog.at_level(logging.WARNING, logger="agent"):
+    with caplog.at_level(logging.WARNING, logger="verbix.agent.voice"):
         [e async for e in agent.step_stream("do thing")]
         [e async for e in agent.step_stream("try again")]
     assert not [r for r in caplog.records if r.exc_info], "no tracebacks in user log"

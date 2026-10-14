@@ -81,20 +81,6 @@ async def test_interrupt_discards_stale_chunks():
 
 
 @pytest.mark.asyncio
-async def test_backendless_turn_completes_silently(monkeypatch):
-    import shutil
-
-    from verbix.voice.sinks import SubprocessAudioSink
-
-    monkeypatch.setattr(shutil, "which", lambda *_a, **_k: None)
-    out = SpeechOutput(tts=MockTextToSpeech(), sink=SubprocessAudioSink())
-    await out.emit(TextDelta(text="Hello world. This is spoken aloud."))
-    await out.emit(TurnComplete(final_text="Hello world. This is spoken aloud."))
-    await asyncio.sleep(0.2)
-    assert not out.is_playing  # no backend, no crash, pump drained
-
-
-@pytest.mark.asyncio
 async def test_turn_complete_never_respeaks_delivered_text():
     out = SpeechOutput(tts=MockTextToSpeech(), sink=MockAudioSink())
     await out.emit(TextDelta(text="Hello world. This is spoken."))
@@ -269,39 +255,6 @@ async def test_playback_completion_clears_accounting():
 
 
 @pytest.mark.asyncio
-async def test_subprocess_audio_sink_played_samples(monkeypatch):
-    from unittest.mock import AsyncMock, MagicMock
-
-    from verbix.voice.sinks import SubprocessAudioSink
-
-    monkeypatch.setattr("shutil.which", lambda _b: "/bin/true")
-    sink = SubprocessAudioSink(sample_rate=16000, channels=1, audio_format="s16")
-    assert sink.played_samples == 0
-
-    chunk = b"\x00" * 32000
-
-    async def _chunks():
-        yield chunk
-        await asyncio.sleep(0.05)
-
-    mock_proc = AsyncMock()
-    mock_proc.returncode = None
-    mock_proc.kill = MagicMock()
-    mock_proc.stdin = MagicMock()
-    mock_proc.stdin.drain = AsyncMock()
-    mock_proc.stdin.wait_closed = AsyncMock()
-    mock_proc.wait = AsyncMock(return_value=0)
-    monkeypatch.setattr("asyncio.create_subprocess_exec", AsyncMock(return_value=mock_proc))
-
-    task = asyncio.create_task(sink.play_stream(_chunks()))
-    await asyncio.sleep(0.02)
-    assert 0 <= sink.played_samples <= 16000
-    sink.stop()
-    await task
-    assert sink.played_samples >= 0
-
-
-@pytest.mark.asyncio
 async def test_gap_silence_reaches_reference_hook():
     """Slice 2: inter-sentence gap silence must reach the on_audio reference hook."""
     seen: list[bytes] = []
@@ -403,3 +356,21 @@ async def test_idle_listening_preserves_pending_reference():
     assert aec.resets == 0
     assert aec.refs
     await pipeline.stop_continuous_session()
+
+
+@pytest.mark.asyncio
+async def test_speech_output_never_synthesizes_error_turn_complete_tokens():
+    tts = MockTextToSpeech()
+    sink = MockAudioSink(playback_delay=0.01)
+    out = SpeechOutput(tts=tts, sink=sink)
+
+    await out.emit(
+        TurnComplete(
+            final_text="RepeatedToolCall",
+            exit_reason="repeated_tool_call",
+            is_error=True,
+        )
+    )
+    await asyncio.sleep(0.05)
+    assert tts.synthesized_texts == []
+

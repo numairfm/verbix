@@ -50,7 +50,7 @@ def test_default_worker_prompt_invariants():
     assert "Discover" in DEFAULT_WORKER_PROMPT
     assert "execute" in DEFAULT_WORKER_PROMPT.lower()
     assert "verify" in DEFAULT_WORKER_PROMPT.lower()
-    assert "finish" in DEFAULT_WORKER_PROMPT.lower()
+    assert "call the finish tool" not in DEFAULT_WORKER_PROMPT.lower()
     assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in DEFAULT_WORKER_PROMPT
 
 

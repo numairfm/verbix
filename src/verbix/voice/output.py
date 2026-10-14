@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 _TERMINAL = (".", "!", "?")
+_INTERNAL_CONTROL_TOKENS = frozenset({
+    "RepeatedToolCall",
+    "LimitsExceeded",
+    "TimeExceeded",
+    "RepeatedFormatError",
+    "FormatError",
+})
 
 # Prefetch depth: synth tasks kept warm while earlier frames play.
 _WARM_DEPTH = 2
@@ -87,6 +94,10 @@ class SpeechOutput:
         self.sink = sink
         self.printer = printer
         self.on_audio = on_audio
+        self._sink_handles_ref = False
+        if self.on_audio is not None and hasattr(self.sink, "on_played"):
+            self.sink.on_played = self._emit_ref
+            self._sink_handles_ref = True
         self._buf = ""
         self._seen = ""
         self._delivered: list[str] = []
@@ -129,10 +140,13 @@ class SpeechOutput:
             self._top_up()
         elif isinstance(event, TurnComplete):
             buf, self._buf = self._buf, ""
-            if buf.strip():
+            if buf.strip() and buf.strip() not in _INTERNAL_CONTROL_TOKENS:
                 for s in _sentences(buf) or [buf]:
                     self._frames.put_nowait((self._epoch, "text", s))
-            rest = self._tail(event.final_text)
+            final_text = (event.final_text or "").strip()
+            if final_text in _INTERNAL_CONTROL_TOKENS:
+                final_text = ""
+            rest = self._tail(final_text)
             if rest:
                 for s in _sentences(rest) or [rest]:
                     self._frames.put_nowait((self._epoch, "text", s))
@@ -350,13 +364,18 @@ class SpeechOutput:
         fmt = getattr(self.sink, "audio_format", "f32")
         return bytes(int(rate * _GAP_SECONDS) * (2 if fmt != "f32" else 4))
 
-    def _notify_ref(self, audio: bytes) -> None:
-        """Feeds played bytes (incl. gaps/cues) to the on_audio reference hook."""
+    def _emit_ref(self, audio: bytes) -> None:
         if self.on_audio:
             try:
                 self.on_audio(audio)
             except Exception as e:  # noqa: BLE001
                 logger.debug("on_audio error: %s", e)
+
+    def _notify_ref(self, audio: bytes) -> None:
+        """Feeds played bytes (incl. gaps/cues) to the on_audio reference hook when sink does not."""
+        if self._sink_handles_ref:
+            return
+        self._emit_ref(audio)
 
     def _drop_warm(self) -> None:
         for _, _, _, t in self._warm:

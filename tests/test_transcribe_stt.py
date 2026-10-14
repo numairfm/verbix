@@ -103,7 +103,9 @@ def test_swappable_model_path_via_env(monkeypatch, tmp_path):
     assert Path(stt.model_path).resolve() == custom_model.resolve()
 
 
-def test_project_verbix_models_scope_wins_over_voice_runtime(tmp_path, monkeypatch):
+def test_project_verbix_models_scope_is_ignored_in_favor_of_global_or_voice_runtime(
+    tmp_path, monkeypatch
+):
     from verbix.voice.transcribe_stt import find_default_stt_model
 
     home = tmp_path / "home"
@@ -118,7 +120,7 @@ def test_project_verbix_models_scope_wins_over_voice_runtime(tmp_path, monkeypat
     monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setenv("VERBIX_VOICE_DIR", str(voice_root))
     monkeypatch.delenv("VERBIX_STT_MODEL", raising=False)
-    assert find_default_stt_model(workspace=ws).resolve() == proj_model.resolve()
+    assert find_default_stt_model(workspace=ws).resolve() == fallback.resolve()
 
 
 def test_global_verbix_models_scope_used(tmp_path, monkeypatch):
@@ -138,3 +140,38 @@ def test_global_verbix_models_scope_used(tmp_path, monkeypatch):
     monkeypatch.setenv("VERBIX_VOICE_DIR", str(voice_root))
     monkeypatch.delenv("VERBIX_STT_MODEL", raising=False)
     assert find_default_stt_model(workspace=ws).resolve() == global_model.resolve()
+
+
+@pytest.mark.asyncio
+async def test_transcribe_session_drops_pre_speech_noise_outside_vad_spans():
+    from verbix.voice.transcribe_stt import TranscribeSession
+
+    transcribed_buffers = []
+    fake_stt = MagicMock()
+    fake_stt.transcribe = lambda audio, sr: (
+        transcribed_buffers.append(audio) or "hey what's up"
+    )
+
+    speech_span = b"\x10\x00" * 1600  # 100ms span (3200 bytes)
+    fake_seg = MagicMock()
+    fake_seg.pop_segments = MagicMock(side_effect=[[], [], [speech_span]])
+    fake_seg.flush = MagicMock(return_value=[])
+
+    sess = TranscribeSession(stt=fake_stt, segmenter=fake_seg, sample_rate=16000)
+    pre_noise = b"\x01\x00" * 1600
+    sess.feed(pre_noise)
+    sess.feed(pre_noise)
+    sess.feed(speech_span)
+
+    res = await sess.finalize()
+    assert res == "hey what's up"
+    assert transcribed_buffers == [speech_span]
+    assert len(sess._buf) == 0
+    assert len(sess.fed_chunks) == 0
+
+    # TranscribeSession also exposes is_speech_detected delegating to segmenter
+    fake_seg.is_speech_detected = True
+    sess2 = TranscribeSession(stt=fake_stt, segmenter=fake_seg, sample_rate=16000)
+    assert sess2.is_speech_detected is True
+
+

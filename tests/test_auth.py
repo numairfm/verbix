@@ -136,7 +136,7 @@ def test_provider_from_config_file_and_env(tmp_path, monkeypatch):
             }
         ),
     )
-    _write(ws / ".verbix" / "config.yaml", "provider: local\n")
+    _write(home / ".verbix" / "config.yaml", "provider: local\n")
     _patch_home(monkeypatch, home)
     _clean_env(monkeypatch)
     # config file selects entry when no flag/env

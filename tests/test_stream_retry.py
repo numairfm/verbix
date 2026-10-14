@@ -128,3 +128,65 @@ async def test_stream_idle_timeout_override_honored(monkeypatch):
     model = LitellmModel(model_name="test/model", stream_idle_timeout_s=0.5)
     [e async for e in model.query_stream([{"role": "user", "content": "hi"}])]
     assert captured["timeout"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_query_stream_retries_when_stream_dies_after_empty_role_chunk(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    calls = 0
+
+    async def fake_acompletion(**kwargs):
+        nonlocal calls
+        calls += 1
+
+        async def _gen():
+            if calls == 1:
+                # Initial empty role chunk and internal reasoning chunk before any text/tool event
+                yield {"choices": [{"delta": {"role": "assistant"}, "finish_reason": None}]}
+                yield {"choices": [{"delta": {"reasoning_content": "thinking..."}, "finish_reason": None}]}
+                raise _conn_error()
+            yield _text_chunk("Hello there!", "stop")
+
+        return _gen()
+
+    monkeypatch.setattr("litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    model = LitellmModel(model_name="test/model")
+    events = [e async for e in model.query_stream([{"role": "user", "content": "hi"}])]
+    assert calls == 2
+    assert any(isinstance(e, TextDelta) and e.text == "Hello there!" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_query_stream_retries_when_stream_completes_with_thoughts_only(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    calls = 0
+
+    async def fake_acompletion(**kwargs):
+        nonlocal calls
+        calls += 1
+
+        async def _gen():
+            if calls == 1:
+                # Stream finishes cleanly (stop) after emitting only reasoning_content and no content/tool_calls
+                yield {
+                    "choices": [
+                        {"delta": {"reasoning_content": "Thinking about Firefox..."}, "finish_reason": None}
+                    ]
+                }
+                yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+                return
+            yield _text_chunk("Opening it up.", "stop")
+
+        return _gen()
+
+    monkeypatch.setattr("litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    model = LitellmModel(model_name="test/model")
+    events = [e async for e in model.query_stream([{"role": "user", "content": "open firefox"}])]
+    assert calls == 2
+    assert any(isinstance(e, TextDelta) and e.text == "Opening it up." for e in events)
+
+

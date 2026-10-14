@@ -56,9 +56,17 @@ This file covers heavy model and media assets by name.
 
 - **pywebrtc-audio** (BSD-3-Clause) — WebRTC AudioProcessingModule bindings for real-time acoustic echo cancellation (<https://github.com/strands-labs/pywebrtc-audio>).
 
-## Fast Text Search (ripgrep)
+## Gitignore Pattern Matching (pathspec)
 
-- **ripgrep** (MIT / Unlicense) — fast recursive line-oriented regex search engine by Andrew Gallant (<https://github.com/BurntSushi/ripgrep>).
-  - Pinned package: `ripgrep==15.1.0` (native binary wheels for Linux, macOS, and Windows).
-  - License source: `LICENSE-MIT` (MIT License, Copyright 2015 Andrew Gallant).
+- **pathspec** (MPL-2.0) — pure-Python gitignore pattern matching library by Caleb P. Burns (<https://github.com/cpburnz/python-path-specification>).
+  - Pinned package: `pathspec>=0.12.1` (pure-Python `py3-none-any` wheel; unmodified distribution permitted under MPL-2.0).
+
+## Desktop Control Libraries (psutil, pyperclip, dbus-fast, pulsectl, pycaw)
+
+- **psutil** (BSD-3-Clause) — cross-platform process and system utilities by Giampaolo Rodola (<https://github.com/giampaolo/psutil>).
+- **pyperclip** (BSD-3-Clause) — cross-platform clipboard module by Al Sweigart (<https://github.com/asweigart/pyperclip>).
+- **dbus-fast** (MIT) — pure-Python async DBus library used for Linux MPRIS2 media control (<https://github.com/Bluetooth-Devices/dbus-fast>).
+- **pulsectl** (MIT) — ctypes `libpulse.so.0` client used for Linux PipeWire/PulseAudio volume control (<https://github.com/mk-fg/python-pulse-control>).
+- **pycaw** (MIT) — Python Core Audio Windows Library used for Windows volume control (<https://github.com/AndreMiras/pycaw>).
+
 

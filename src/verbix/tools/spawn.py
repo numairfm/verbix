@@ -13,10 +13,19 @@ class SpawnTool:
 
     name: str = "spawn"
     side_effecting: bool = True
-    description: str = "Starts an autonomous background worker to execute a task."
 
     def __init__(self, runtime: Runtime) -> None:
         self.runtime = runtime
+
+    @property
+    def description(self) -> str:
+        names = getattr(self.runtime, "worker_tool_names", None)
+        if names:
+            return (
+                "Starts an autonomous background worker to execute a task. "
+                f"Workers have access to: {', '.join(names)}."
+            )
+        return "Starts an autonomous background worker to execute a task."
 
     @property
     def parameters_schema(self) -> dict[str, Any]:
@@ -28,7 +37,8 @@ class SpawnTool:
                     "description": (
                         "The high-level goal and verification criteria for the background worker to accomplish. "
                         "State what needs to be done. Never guess or insert specific shell commands, package managers, "
-                        "or file paths unless explicitly provided by the user."
+                        "file paths, or speculative log/workspace investigations unless explicitly requested by the user. "
+                        "Never call spawn to figure out what an ambiguous or misheard utterance means."
                     ),
                 },
             },

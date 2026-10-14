@@ -282,7 +282,7 @@ class WorkerAgent:
             except (TypeError, ValueError):
                 call_sig = (name, str(args))
 
-            if call_sig == self._last_tool_call and name != "finish":
+            if call_sig == self._last_tool_call:
                 self._consecutive_tool_repeats += 1
                 if self._consecutive_tool_repeats >= 3:
                     result = ToolResult(

@@ -196,7 +196,6 @@ class LitellmModel:
                     ),
                 )
                 async for chunk in response:
-                    yielded_any = True
                     chunks.append(chunk)
                     if getattr(chunk, "usage", None):
                         saw_usage = True
@@ -237,6 +236,7 @@ class LitellmModel:
                     if content is None and isinstance(delta, dict):
                         content = delta.get("content")
                     if content:
+                        yielded_any = True
                         accumulated_text.append(content)
                         yield TextDelta(text=content)
 
@@ -258,6 +258,7 @@ class LitellmModel:
                             if isinstance(fn, dict):
                                 fn_name = fn.get("name")
                                 args_delta = fn.get("arguments", "")
+                            yielded_any = True
                             yield ToolCallDelta(
                                 index=idx,
                                 call_id=call_id,
@@ -275,6 +276,14 @@ class LitellmModel:
                 logger.warning(
                     f"Transient stream error for model {self.config.model_name} "
                     f"(attempt {attempts + 1}/{_MAX_STREAM_ATTEMPTS}): {e}",
+                )
+                await asyncio.sleep(min(8.0, 2.0 ** (attempts - 1)))
+                continue
+            if not yielded_any and attempts < _MAX_STREAM_ATTEMPTS - 1:
+                attempts += 1
+                logger.warning(
+                    f"Stream finished without text or tool calls for model {self.config.model_name} "
+                    f"(attempt {attempts + 1}/{_MAX_STREAM_ATTEMPTS}); retrying",
                 )
                 await asyncio.sleep(min(8.0, 2.0 ** (attempts - 1)))
                 continue

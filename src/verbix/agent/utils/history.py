@@ -62,20 +62,24 @@ def validate_and_repair_history(
     ]
 
     if turn_assistants:
+        prior_text = "".join((m.get("content") or "") for m in turn_assistants[:-1])
+        if delivered_text and delivered_text.startswith(prior_text):
+            last_delivered = delivered_text[len(prior_text) :]
+        else:
+            last_delivered = delivered_text or ""
+            for m in turn_assistants[:-1]:
+                m["content"] = None if m.get("tool_calls") else ""
         last_asst = turn_assistants[-1]
         if not last_asst.get("tool_calls"):
-            if delivered_text:
-                last_asst["content"] = delivered_text
+            if last_delivered:
+                last_asst["content"] = last_delivered
             else:
                 for idx in range(len(msgs) - 1, -1, -1):
                     if msgs[idx] is last_asst:
                         del msgs[idx]
                         break
         else:
-            if delivered_text:
-                last_asst["content"] = delivered_text
-            else:
-                last_asst["content"] = None
+            last_asst["content"] = last_delivered if last_delivered else None
     elif delivered_text:
         msgs.append({"role": "assistant", "content": delivered_text})
 

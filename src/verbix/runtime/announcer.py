@@ -12,9 +12,6 @@ import yaml
 
 from verbix.agent.announcer import AnnouncerAgent, AnnouncerConfig
 from verbix.core.events import AgentEvent
-from verbix.core.events import (
-    TurnComplete as CoreTurnComplete,
-)
 from verbix.runtime.foreground import adapt_provider
 
 logger = logging.getLogger("verbix.runtime")
@@ -132,19 +129,48 @@ def _snapshot_foreground_history(runtime: Any) -> list:
     return clean
 
 
+def _can_announce(runtime: Any) -> bool:
+    floor = getattr(runtime, "floor", None)
+    if floor is None:
+        return False
+    can_ann = getattr(floor, "can_announce", None)
+    if callable(can_ann):
+        return bool(can_ann())
+    return bool(getattr(floor, "is_idle", False))
+
+
 async def drain_pending_announcements(runtime: Any) -> None:
     """Speaks accumulated background completions via the single foreground companion."""
-    if not runtime.floor.is_idle or not runtime._pending_announcements:
+    if not _can_announce(runtime) or not runtime._pending_announcements:
         return
     async with runtime._drain_lock:
-        if not runtime.floor.is_idle or not runtime._pending_announcements:
+        if not _can_announce(runtime) or not runtime._pending_announcements:
             return
-        batch = list(runtime._pending_announcements)
-        runtime._pending_announcements.clear()
+        ledger = getattr(runtime, "ledger", None)
+        batch: list[tuple[str, str, str]] = []
+        for tid, res in list(runtime._pending_announcements):
+            entry = ledger.get(tid) if ledger is not None else None
+            if entry is not None and entry.delivery != "pending":
+                runtime._pending_announcements[:] = [
+                    (t, r) for t, r in runtime._pending_announcements if t != tid
+                ]
+                continue
+            status = entry.status if entry is not None else "completed"
+            if res.strip():
+                batch.append((tid, res.strip(), status))
+            else:
+                runtime._pending_announcements[:] = [
+                    (t, r) for t, r in runtime._pending_announcements if t != tid
+                ]
+        if not batch:
+            return
 
-        items = [res.strip() for _, res in batch if res.strip()]
-        if not items:
-            return
+        batch_ids = {tid for tid, _, _ in batch}
+        runtime._pending_announcements[:] = [
+            (t, r) for t, r in runtime._pending_announcements if t not in batch_ids
+        ]
+
+        items = [res for _, res, _ in batch]
         runtime.announcer.messages = _snapshot_foreground_history(runtime)
         prompt = (
             f"{runtime._request_grounding()}\n"
@@ -152,54 +178,38 @@ async def drain_pending_announcements(runtime: Any) -> None:
             "State the outcome clearly, and only add a follow-up question if a genuine next step exists:]\n"
             + "\n\n".join(items)
         )
-        final_text = await runtime.submit(prompt, runtime.wake_output, agent=runtime.announcer)
-        if final_text:
-            runtime.foreground.messages.append({"role": "assistant", "content": final_text})
-        if final_text and runtime.on_wake:
+        announced_ok = False
+        final_text = ""
+        try:
+            final_text = await runtime.submit(prompt, runtime.wake_output, agent=runtime.announcer)
+            last_handle = getattr(runtime, "_last_turn_handle", None)
+            turn_completed = (
+                getattr(last_handle, "completed", True) if last_handle is not None else True
+            )
+            was_interrupted = (
+                bool(getattr(runtime.floor, "interrupt_requested", False))
+                or bool(getattr(runtime.floor, "user_speaking", False))
+                or not turn_completed
+            )
+            if final_text and not was_interrupted:
+                announced_ok = True
+                if ledger is not None:
+                    for task_id, _, _ in batch:
+                        ledger.mark_heard(task_id)
+                for task_id, res, status in batch:
+                    runtime.foreground.messages.append(
+                        {"role": "user", "content": f"[Task '{task_id}' {status}]: {res}"}
+                    )
+                runtime.foreground.messages.append({"role": "assistant", "content": final_text})
+        finally:
+            if not announced_ok:
+                existing_ids = {t for t, _ in runtime._pending_announcements}
+                for tid, res, _ in reversed(batch):
+                    entry = ledger.get(tid) if ledger is not None else None
+                    if (entry is None or entry.delivery == "pending") and tid not in existing_ids:
+                        runtime._pending_announcements.insert(0, (tid, res))
+
+        if announced_ok and runtime.on_wake:
             wake_res = runtime.on_wake(final_text)
             if asyncio.iscoroutine(wake_res):
                 await wake_res
-
-
-async def speak_batch(runtime: Any, batch: list[tuple[str, str]]) -> bool:
-    """Synthesizes background worker results via dedicated announcer and delivers to output."""
-    items = [result.strip() for _, result in batch if result.strip()]
-    if not items:
-        return False
-    wake_prompt = (
-        f"{runtime._request_grounding()}\n"
-        "[Present these completed findings directly to the user in spoken conversational prose. "
-        "State the outcome clearly, and only add a follow-up question if a genuine next step exists:]\n"
-        + "\n\n".join(items)
-    )
-    final_text = ""
-    fan_out = WakeOutputFanOut(runtime.wake_output, runtime._broadcast_wake_event)
-    try:
-        runtime.announcer.messages = _snapshot_foreground_history(runtime)
-        runtime.announcer.n_calls = 0
-        runtime.announcer.cost = 0.0
-        runtime.announcer.model = adapt_provider(runtime.provider)
-        async for event in runtime.announcer.step_stream(wake_prompt):
-            if isinstance(event, CoreTurnComplete) and event.final_text in (
-                "LimitsExceeded",
-                "TimeExceeded",
-            ):
-                logger.warning(
-                    "Announcer step aborted with %s", event.final_text
-                )
-                continue
-            await fan_out.emit(event)
-            if isinstance(event, CoreTurnComplete) and event.final_text:
-                final_text = event.final_text
-    except Exception:
-        logger.exception("Failed to synthesize background task completion announcement")
-        return False
-
-    if final_text:
-        runtime.foreground.messages.append({"role": "assistant", "content": final_text})
-        if runtime.on_wake:
-            wake_res = runtime.on_wake(final_text)
-            if asyncio.iscoroutine(wake_res):
-                await wake_res
-        return True
-    return False

@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from verbix.tools.app import AppTool
 from verbix.tools.base import (
     Tool,
     ToolContext,
@@ -12,10 +13,12 @@ from verbix.tools.base import (
 )
 from verbix.tools.bash import BashTool
 from verbix.tools.cancel import CancelTool
+from verbix.tools.clipboard import ClipboardTool
 from verbix.tools.edit import FileEditTool
-from verbix.tools.finish import FinishTool
 from verbix.tools.glob import GlobTool
 from verbix.tools.grep import GrepTool
+from verbix.tools.media import MediaTool
+from verbix.tools.open import OpenTool
 from verbix.tools.read import FileReadTool
 from verbix.tools.sandbox import SandboxConfig, SandboxResult, execute_sandboxed
 from verbix.tools.screenshot import ScreenshotTool
@@ -31,14 +34,17 @@ if TYPE_CHECKING:
 
 __all__ = [
     "TOOL_CATALOG",
+    "AppTool",
     "BashTool",
     "CancelTool",
+    "ClipboardTool",
     "FileEditTool",
     "FileReadTool",
     "FileWriteTool",
-    "FinishTool",
     "GlobTool",
     "GrepTool",
+    "MediaTool",
+    "OpenTool",
     "SandboxConfig",
     "SandboxResult",
     "ScreenshotTool",
@@ -65,10 +71,13 @@ TOOL_CATALOG: dict[str, Callable[[Any], Any]] = {
     "web_search": lambda runtime: WebSearchTool(),
     "web_fetch": lambda runtime: WebFetchTool(),
     "screenshot": lambda runtime: ScreenshotTool(),
+    "clipboard": lambda runtime: ClipboardTool(),
+    "media": lambda runtime: MediaTool(),
+    "app": lambda runtime: AppTool(),
+    "open": lambda runtime: OpenTool(),
     "spawn": SpawnTool,
     "status": StatusTool,
     "cancel": CancelTool,
-    "finish": lambda runtime: FinishTool(),
 }
 
 
@@ -91,7 +100,7 @@ def build_registry(
     max_lines, max_bytes = output_limits
     ws = Path.cwd() if workspace is None else Path(workspace)
     ctx = ToolContext(workspace=ws)
-    spill_dir = ws / ".verbix" / "logs"
+    spill_dir = Path.home() / ".verbix" / "logs"
     registry = ToolRegistry()
 
     def _make_handler(t: Any) -> Callable[..., Any]:

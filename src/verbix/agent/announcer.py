@@ -14,6 +14,7 @@ class AnnouncerConfig(VoiceConfig):
 
     tools: list[str] = Field(default_factory=list)
     tool_choice: str | None = "none"
+    spoken_error_fallback: str = ""
 
 
 class AnnouncerAgent(VoiceAgent):
@@ -40,7 +41,10 @@ class AnnouncerAgent(VoiceAgent):
 
         cfg.tools = []
         cfg.tool_choice = "none"
+        cfg.spoken_error_fallback = ""
         super().__init__(model=model, tools=None, config=cfg, env=env)
 
-    def get_tool_definitions(self) -> list[dict[str, Any]] | None:
+    def get_tool_definitions(
+        self, excluded: set[str] | None = None
+    ) -> list[dict[str, Any]] | None:
         return None

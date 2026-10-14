@@ -13,17 +13,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import queue
 import threading
-from array import array
-from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
-from verbix.voice.sinks import SubprocessAudioSink
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 FADE_SECONDS = 0.01
+_PORTAUDIO_HINT = (
+    "Audio output unavailable (PortAudio missing or no output device). "
+    "On Linux, install 'libportaudio2' (Debian/Ubuntu) or 'portaudio' (Fedora/Arch)."
+)
 
 
 def apply_fade(samples: list[float], sample_rate: int = 24000) -> list[float]:
@@ -49,30 +52,73 @@ class CallbackAudioSink:
         sample_rate: int = 24000,
         channels: int = 1,
         audio_format: str = "f32",
+        on_played: Callable[[bytes], None] | None = None,
     ) -> None:
         assert channels == 1, "CallbackAudioSink is mono-only"
         try:
             import sounddevice as sd
         except (ImportError, OSError) as e:
-            raise RuntimeError(f"sounddevice audio library unavailable: {e}") from e
+            raise RuntimeError(f"{_PORTAUDIO_HINT} ({e})") from e
 
         self.sample_rate = sample_rate
         self.channels = channels
         self.audio_format = audio_format.lower()
         self._lock = threading.Lock()
-        self._pending: deque[float] = deque()
+        self._buf: np.ndarray = np.zeros(0, dtype=np.float32)
         self._played_samples = 0
         self._stopping = False
         self._feeding = False
         self._fade_total = 0
         self._fade_left = 0
-        self._stream = sd.OutputStream(
-            samplerate=sample_rate,
-            channels=channels,
-            dtype="float32",
-            callback=self._callback,
-        )
-        self._stream.start()
+        self._on_played: Callable[[bytes], None] | None = None
+        self._played_queue: queue.SimpleQueue[bytes | None] | None = None
+        self._played_thread: threading.Thread | None = None
+        if on_played is not None:
+            self.on_played = on_played
+        try:
+            self._stream = sd.OutputStream(
+                samplerate=sample_rate,
+                blocksize=sample_rate // 50,
+                channels=channels,
+                dtype="float32",
+                callback=self._callback,
+            )
+            self._stream.start()
+        except Exception as e:
+            self._stop_played_worker()
+            raise RuntimeError(f"{_PORTAUDIO_HINT} ({e})") from e
+
+    @property
+    def on_played(self) -> Callable[[bytes], None] | None:
+        return self._on_played
+
+    @on_played.setter
+    def on_played(self, fn: Callable[[bytes], None] | None) -> None:
+        self._on_played = fn
+        if fn is not None and self._played_queue is None:
+            q: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
+            self._played_queue = q
+            t = threading.Thread(target=self._drain_played, args=(q,), daemon=True)
+            self._played_thread = t
+            t.start()
+
+    def _drain_played(self, q: queue.SimpleQueue[bytes | None]) -> None:
+        while True:
+            chunk = q.get()
+            if chunk is None:
+                return
+            fn = self._on_played
+            if fn is not None:
+                try:
+                    fn(chunk)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("on_played error: %s", e)
+
+    def _stop_played_worker(self) -> None:
+        q = self._played_queue
+        self._played_queue = None
+        if q is not None:
+            q.put_nowait(None)
 
     @property
     def played_samples(self) -> int:
@@ -88,46 +134,57 @@ class CallbackAudioSink:
             return
         if self.audio_format in ("f32", "float", "f32le"):
             n = len(data) // 4
-            vals = [float(v) for v in array("f", data[: n * 4])]
+            if n == 0:
+                return
+            vals = np.frombuffer(data[: n * 4], dtype=np.float32).copy()
         else:
             n = len(data) // 2
-            vals = [v / 32768.0 for v in array("h", data[: n * 2])]
+            if n == 0:
+                return
+            vals = np.frombuffer(data[: n * 2], dtype=np.int16).astype(np.float32) / 32768.0
         with self._lock:
-            self._pending.extend(vals)
+            self._buf = np.concatenate((self._buf, vals)) if len(self._buf) else vals
 
     def _callback(self, outdata: Any, frames: int, _time: Any, _status: Any) -> None:
         need = frames * self.channels
         with self._lock:
             if self._stopping:
-                k = min(need, self._fade_left, len(self._pending))
-                taken = [self._pending.popleft() for _ in range(k)]
-                if self._fade_total > 1:
+                k = min(need, self._fade_left, len(self._buf))
+                taken = self._buf[:k].copy()
+                self._buf = self._buf[k:]
+                if self._fade_total > 1 and k > 0:
                     pos = self._fade_total - self._fade_left
-                    denom = self._fade_total - 1
-                    taken = [v * (1.0 - (pos + j) / denom) for j, v in enumerate(taken)]
-                else:
-                    taken = [0.0] * k
+                    denom = float(self._fade_total - 1)
+                    ramp = 1.0 - (pos + np.arange(k, dtype=np.float32)) / denom
+                    taken *= ramp
+                elif k > 0:
+                    taken.fill(0.0)
                 self._fade_left -= k
                 if self._fade_left == 0:
-                    self._pending.clear()
+                    self._buf = np.zeros(0, dtype=np.float32)
             else:
-                k = min(need, len(self._pending))
-                taken = [self._pending.popleft() for _ in range(k)]
+                k = min(need, len(self._buf))
+                taken = self._buf[:k].copy()
+                self._buf = self._buf[k:]
             self._played_samples += k
         outdata.fill(0)
-        if taken:
+        if k > 0:
             col = outdata[:, 0] if getattr(outdata, "ndim", 1) == 2 else outdata
             col[:k] = taken
+            q = self._played_queue
+            if q is not None:
+                q.put_nowait(taken.tobytes())
 
     def stop(self) -> None:
         """Flag fade-out: callback emits a 10ms fade then silence."""
         with self._lock:
             self._stopping = True
             # ponytail: snapshot at stop so a short tail ramps fully 1->0 instead of jumping
-            self._fade_total = min(self._fade_len(), len(self._pending))
+            self._fade_total = min(self._fade_len(), len(self._buf))
             self._fade_left = self._fade_total
 
     def close(self) -> None:
+        self._stop_played_worker()
         try:
             self._stream.stop()
             self._stream.close()
@@ -151,7 +208,7 @@ class CallbackAudioSink:
                 with self._lock:
                     if self._stopping:
                         return False
-                    if not self._pending:
+                    if len(self._buf) == 0:
                         return True
                 await asyncio.sleep(0.005)
         except asyncio.CancelledError:
@@ -163,30 +220,3 @@ class CallbackAudioSink:
             yield audio_data
 
         return await self.play_stream(_single())
-
-
-def select_sink(kind: str = "auto", **kwargs: Any) -> Any:
-    """Pick an AudioSink: `callback` iff a device opens, else subprocess.
-
-    `auto` falls back to subprocess on any failure (missing/broken
-    sounddevice, no output device); explicit `callback` raises a clean error.
-    """
-    kind = (kind or "auto").lower()
-    if kind == "subprocess":
-        return SubprocessAudioSink(**kwargs)
-    if kind == "callback":
-        try:
-            return CallbackAudioSink(**kwargs)
-        except ImportError:
-            raise
-        except Exception as e:
-            raise RuntimeError(f"callback audio sink unavailable: {e}") from e
-    if kind == "auto":
-        try:
-            return CallbackAudioSink(**kwargs)
-        except Exception as e:  # noqa: BLE001 - auto must fall back on any backend failure
-            logger.debug("callback sink unavailable, using subprocess: %s", e)
-            return SubprocessAudioSink(**kwargs)
-    raise ValueError(
-        f"unknown audio sink: {kind!r} (expected auto|callback|subprocess)"
-    )

@@ -79,22 +79,3 @@ async def test_cancel_tool_execution(dummy_runtime):
     await tool.execute({"task_id": "task-2"}, ctx)
     dummy_runtime.cancel.assert_awaited_once_with(task_id="task-2")
 
-
-@pytest.mark.asyncio
-async def test_finish_tool_execution():
-    from verbix.tools import FinishTool
-
-    tool = FinishTool()
-    assert tool.parameters_schema["required"] == ["summary"]
-    assert "summary" in tool.parameters_schema["properties"]
-
-    # Missing or empty summary
-    err = await tool.execute({})
-    assert err.is_error is True
-    assert "error" in err.observation.lower()
-
-    # Valid information-dense summary
-    res = await tool.execute({"summary": "Ran pytest: 83 passed in 7.2s. Zero regressions."})
-    assert res.is_error is False
-    assert "83 passed in 7.2s" in res.observation
-

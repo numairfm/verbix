@@ -8,10 +8,9 @@ from typing import Any
 
 import yaml
 
-from verbix.agent.environments.local import LocalEnvironment
 from verbix.agent.tools.registry import ToolRegistry
 from verbix.agent.worker import WorkerAgent, WorkerConfig
-from verbix.runtime.announcer import drain_pending_announcements
+from verbix.runtime.announcer import _can_announce, drain_pending_announcements
 from verbix.runtime.foreground import (
     DEFAULT_WORKER_PROMPT,
     adapt_provider,
@@ -19,45 +18,76 @@ from verbix.runtime.foreground import (
 from verbix.runtime.worker import WorkerTask
 from verbix.tools.shared import prune_spills
 
+_DEFAULT_WORKER_TOOLS = (
+    "read",
+    "write",
+    "edit",
+    "grep",
+    "glob",
+    "web_search",
+    "web_fetch",
+    "screenshot",
+    "clipboard",
+    "media",
+    "app",
+    "open",
+    "bash",
+)
+
+
+def _load_worker_yaml_dict() -> dict[str, Any]:
+    config_dir = Path(__file__).resolve().parent.parent / "agent" / "config"
+    worker_path = config_dir / "worker.yaml"
+    if not worker_path.is_file():
+        worker_path = config_dir / "swe_worker.yaml"
+    if worker_path.is_file():
+        return yaml.safe_load(worker_path.read_text(encoding="utf-8")) or {}
+    return {}
+
 
 def build_worker_registry(workspace: Path | None = None) -> ToolRegistry:
-    """Background worker's tools: read, write, edit, grep, glob, web_search, web_fetch, screenshot, bash, finish.
-
-    File work goes through the dedicated tools, identically on every OS;
-    bash is the escape hatch for what has no dedicated tool.
-    """
+    """Builds the background worker's tool registry from worker.yaml (omitting bash if unsandboxed)."""
     from verbix.tools import build_registry
+    from verbix.tools.sandbox import probe_sandbox
+
+    agent_cfg = _load_worker_yaml_dict().get("agent", {})
+    names = list(agent_cfg.get("tools") or _DEFAULT_WORKER_TOOLS)
+    if not probe_sandbox().available:
+        names = [n for n in names if n != "bash"]
 
     return build_registry(
-        [
-            "read",
-            "write",
-            "edit",
-            "grep",
-            "glob",
-            "web_search",
-            "web_fetch",
-            "screenshot",
-            "bash",
-        ],
+        names,
         workspace=workspace,
     )
 
 
+def describe_worker_tools(workspace: Path | None = None) -> tuple[list[str], str]:
+    """Derives worker tool names and a concise summary from the live worker registry."""
+    reg = build_worker_registry(workspace=workspace)
+    names: list[str] = []
+    parts: list[str] = []
+    for d in reg.get_definitions():
+        fn = d.get("function", {})
+        name = fn.get("name", "")
+        desc = (fn.get("description", "") or "").strip()
+        short = desc.split(". ")[0].rstrip(".")
+        if name:
+            names.append(name)
+            parts.append(f"{name} ({short})" if short else name)
+    return names, "; ".join(parts)
+
+
 def finish_runtime_task(runtime: Any, task_id: str, result: str) -> None:
-    """Records task completion into the ledger, context memory, and schedules announcement."""
+    """Records task completion into the ledger and schedules announcement."""
     if hasattr(runtime, "ledger"):
+        if runtime.ledger.get(task_id) is None:
+            runtime.ledger.register_task(task_id, "")
         runtime.ledger.mark_completed(task_id, result)
     if hasattr(runtime, "_broadcast_event"):
         runtime._broadcast_event("task_completed", {"task_id": task_id, "result": result})
-    if hasattr(runtime, "foreground") and hasattr(runtime.foreground, "messages"):
-        runtime.foreground.messages.append({
-            "role": "user",
-            "content": f"[Task '{task_id}' completed]: {result}",
-        })
     if hasattr(runtime, "_pending_announcements"):
         runtime._pending_announcements.append((task_id, result))
-    if getattr(runtime, "floor", None) and getattr(runtime.floor, "is_idle", False):
+    if _can_announce(runtime):
         try:
             loop = asyncio.get_running_loop()
             drain = getattr(runtime, "_drain_pending_announcements", None) or (
@@ -69,19 +99,16 @@ def finish_runtime_task(runtime: Any, task_id: str, result: str) -> None:
 
 
 def fail_runtime_task(runtime: Any, task_id: str, result: str) -> None:
-    """Records task failure into the ledger, context memory, and schedules announcement."""
+    """Records task failure into the ledger and schedules announcement."""
     if hasattr(runtime, "ledger"):
+        if runtime.ledger.get(task_id) is None:
+            runtime.ledger.register_task(task_id, "")
         runtime.ledger.mark_failed(task_id, result)
     if hasattr(runtime, "_broadcast_event"):
         runtime._broadcast_event("task_failed", {"task_id": task_id, "result": result})
-    if hasattr(runtime, "foreground") and hasattr(runtime.foreground, "messages"):
-        runtime.foreground.messages.append({
-            "role": "user",
-            "content": f"[Task '{task_id}' failed]: {result}",
-        })
     if hasattr(runtime, "_pending_announcements"):
         runtime._pending_announcements.append((task_id, result))
-    if getattr(runtime, "floor", None) and getattr(runtime.floor, "is_idle", False):
+    if _can_announce(runtime):
         try:
             loop = asyncio.get_running_loop()
             drain = getattr(runtime, "_drain_pending_announcements", None) or (
@@ -94,50 +121,30 @@ def fail_runtime_task(runtime: Any, task_id: str, result: str) -> None:
 
 async def spawn_worker(runtime: Any, objective: str) -> str:
     """Spawns an independent background worker with full workspace tools."""
-    prune_spills(Path(runtime.workspace) / ".verbix" / "logs")
+    prune_spills(Path.home() / ".verbix" / "logs")
     runtime._task_counter += 1
     task_id = f"task-{runtime._task_counter}"
-    scratch_dir = Path(runtime.workspace) / ".verbix" / "tasks" / task_id
+    scratch_dir = Path.home() / ".verbix" / "tasks" / task_id
     scratch_dir.mkdir(parents=True, exist_ok=True)
 
-    config_dir = Path(__file__).resolve().parent.parent / "agent" / "config"
-    worker_path = config_dir / "worker.yaml"
-    if not worker_path.is_file():
-        worker_path = config_dir / "swe_worker.yaml"
-
-    raw_worker_cfg: dict[str, Any] = {}
-    if worker_path.is_file():
-        raw_worker_cfg = (
-            yaml.safe_load(worker_path.read_text(encoding="utf-8")) or {}
-        )
-
+    raw_worker_cfg = _load_worker_yaml_dict()
     agent_cfg_dict = raw_worker_cfg.get("agent", {})
     if runtime.worker_system_prompt != DEFAULT_WORKER_PROMPT:
         agent_cfg_dict["system_template"] = runtime.worker_system_prompt
         agent_cfg_dict["system_prompt"] = runtime.worker_system_prompt
 
-    worker_config = WorkerConfig(**agent_cfg_dict)
-
-    env_cfg_dict = raw_worker_cfg.get("environment", {})
-    env_extra = env_cfg_dict.get("env", {})
-    timeout = int(env_cfg_dict.get("timeout", 600))
-    env = LocalEnvironment(cwd=str(runtime.workspace), env=env_extra, timeout=timeout)
-
-    model_to_use = adapt_provider(runtime.worker_model or runtime.provider)
     from verbix.tools import build_registry
+    from verbix.tools.sandbox import probe_sandbox
     from verbix.tools.shared import resolve_output_limits
 
-    worker_tool_names = agent_cfg_dict.get("tools") or [
-        "read",
-        "write",
-        "edit",
-        "grep",
-        "glob",
-        "web_search",
-        "web_fetch",
-        "screenshot",
-        "bash",
-    ]
+    worker_tool_names = list(agent_cfg_dict.get("tools") or _DEFAULT_WORKER_TOOLS)
+    if not probe_sandbox().available:
+        worker_tool_names = [n for n in worker_tool_names if n != "bash"]
+    agent_cfg_dict["tools"] = worker_tool_names
+
+    worker_config = WorkerConfig(**agent_cfg_dict)
+
+    model_to_use = adapt_provider(runtime.worker_model or runtime.provider)
     worker_tools = build_registry(
         worker_tool_names,
         workspace=runtime.workspace,
@@ -146,7 +153,7 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
 
     worker_agent = WorkerAgent(
         model=model_to_use,
-        env=env,
+        env=None,
         tools=worker_tools,
         config=worker_config,
     )
@@ -177,7 +184,6 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
 
     worker_task.on_completed(_on_finish)
     runtime.tasks[task_id] = worker_task
-    runtime._environments.append(env)
     runtime.ledger.register_task(task_id, objective)
     runtime._broadcast_event(
         "task_registered", {"task_id": task_id, "objective": objective}

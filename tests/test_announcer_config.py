@@ -55,8 +55,8 @@ def test_announcer_history_isolated_from_foreground(tmp_path):
 
 @pytest.mark.asyncio
 async def test_tool_choice_none_forwarded_when_configured():
-    from verbix.agent.agents.default import AgentConfig, DefaultAgent
     from verbix.agent.tools.registry import ToolRegistry
+    from verbix.agent.voice import VoiceAgent, VoiceConfig
     from verbix.core.events import TurnComplete
 
     seen = {}
@@ -66,8 +66,8 @@ async def test_tool_choice_none_forwarded_when_configured():
             seen.update(kwargs)
             yield TurnComplete(final_text="done")
 
-    agent = DefaultAgent(
-        model=CapModel(), env=None, tools=ToolRegistry(), config=AgentConfig(tool_choice="none"),
+    agent = VoiceAgent(
+        model=CapModel(), env=None, tools=ToolRegistry(), config=VoiceConfig(tool_choice="none"),
     )
     [e async for e in agent.step_stream("hi")]
     assert seen.get("tool_choice") == "none"
@@ -75,8 +75,8 @@ async def test_tool_choice_none_forwarded_when_configured():
 
 @pytest.mark.asyncio
 async def test_tool_choice_absent_by_default():
-    from verbix.agent.agents.default import AgentConfig, DefaultAgent
     from verbix.agent.tools.registry import ToolRegistry
+    from verbix.agent.voice import VoiceAgent, VoiceConfig
     from verbix.core.events import TurnComplete
 
     seen = {}
@@ -86,8 +86,10 @@ async def test_tool_choice_absent_by_default():
             seen.update(kwargs)
             yield TurnComplete(final_text="done")
 
-    agent = DefaultAgent(
-        model=CapModel(), env=None, tools=ToolRegistry(), config=AgentConfig(),
+    reg = ToolRegistry()
+    reg.register("spawn", {"type": "function", "function": {"name": "spawn"}}, lambda a: "ok")
+    agent = VoiceAgent(
+        model=CapModel(), env=None, tools=reg, config=VoiceConfig(tools=["spawn"]),
     )
     [e async for e in agent.step_stream("hi")]
     assert "tool_choice" not in seen
@@ -198,38 +200,6 @@ async def test_drain_blank_result_speaks_nothing():
     runtime.submit.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_speak_batch_shares_snapshot_and_writes_back():
-    from types import SimpleNamespace
-
-    from verbix.core.events import TurnComplete
-    from verbix.runtime.announcer import speak_batch
-
-    async def fake_step_stream(prompt):
-        yield TurnComplete(final_text="spoken answer")
-
-    announcer = SimpleNamespace(
-        messages=[{"role": "user", "content": "stale"}],
-        n_calls=7,
-        cost=1.0,
-        model=None,
-        step_stream=fake_step_stream,
-    )
-    foreground_messages = [{"role": "user", "content": "original question"}]
-    runtime = SimpleNamespace(
-        _request_grounding=lambda: "[grounding]",
-        wake_output=None,
-        _broadcast_wake_event=None,
-        provider=object(),
-        announcer=announcer,
-        foreground=SimpleNamespace(messages=foreground_messages),
-        on_wake=None,
-    )
-    assert await speak_batch(runtime, [("task-9", "result text")]) is True
-    assert [m.get("content") for m in announcer.messages] == ["original question"]
-    assert foreground_messages[-1] == {"role": "assistant", "content": "spoken answer"}
-
-
 def test_announcer_receives_persona_and_flag_beats_file(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 
@@ -250,3 +220,22 @@ def test_announcer_receives_persona_and_flag_beats_file(tmp_path, monkeypatch):
     rt2 = Runtime(workspace=ws, provider=MagicMock(), system_prompt="Flag persona.")
     assert "Flag persona." in rt2.announcer.config.system_template
     assert "Be chill." not in rt2.announcer.config.system_template
+
+
+@pytest.mark.asyncio
+async def test_drain_pending_announcements_marks_ledger_heard(tmp_path):
+    from verbix.runtime.announcer import drain_pending_announcements
+    from verbix.runtime.runtime import Runtime
+
+    rt = Runtime(workspace=tmp_path, provider=MagicMock())
+    rt.ledger.register_task("task-1", "test objective")
+    rt.ledger.mark_completed("task-1", "all good")
+    rt._pending_announcements.append(("task-1", "all good"))
+
+    async def fake_submit(prompt, output, agent=None):
+        return "Task one is done: all good."
+
+    rt.submit = fake_submit
+    await drain_pending_announcements(rt)
+    assert rt.ledger.get("task-1").delivery == "heard"
+

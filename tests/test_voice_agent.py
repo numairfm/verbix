@@ -211,7 +211,13 @@ async def test_voice_agent_limits_exceeded():
     agent.n_calls = 1  # already at limit
 
     events = [e async for e in agent.step_stream("hi")]
-    assert any(isinstance(e, TurnComplete) and "LimitsExceeded" in e.final_text for e in events)
+    assert any(
+        isinstance(e, TurnComplete)
+        and e.exit_reason == "limits_exceeded"
+        and e.is_error is True
+        and "LimitsExceeded" not in e.final_text
+        for e in events
+    )
 
 
 @pytest.mark.asyncio
@@ -274,3 +280,292 @@ async def test_voice_agent_renders_system_and_instance_templates():
 
     assert captured_messages[0] == {"role": "system", "content": "You are VerbixVoice."}
     assert captured_messages[1] == {"role": "user", "content": "Task: weather"}
+
+
+@pytest.mark.asyncio
+async def test_voice_agent_repeat_breaker_never_emits_exit_role_to_api_and_speaks_fallback():
+    from verbix.agent.models.litellm_model import LitellmModel
+
+    mock_model = MagicMock()
+
+    async def repeat_stream(messages, tools=None, **kw):
+        yield ToolCallDelta(index=0, call_id="c1", name="status", arguments_delta="{}")
+
+    mock_model.query_stream = repeat_stream
+    tools = ToolRegistry()
+    tools.register(
+        "status",
+        {"type": "function", "function": {"name": "status"}},
+        lambda a: ToolResult("running", is_error=False),
+    )
+
+    agent = VoiceAgent(
+        model=mock_model,
+        tools=tools,
+        config=VoiceConfig(max_calls_per_tool_per_turn={}),
+    )
+    events = [e async for e in agent.step_stream("what?")]
+
+    tc = [e for e in events if isinstance(e, TurnComplete)][-1]
+    assert tc.exit_reason == "repeated_tool_call"
+    assert tc.is_error is True
+    assert "RepeatedToolCall" not in tc.final_text
+    assert "Sorry" in tc.final_text
+
+    # Assert on the exact payload built by LitellmModel._prepare_messages_for_api
+    litellm_model = LitellmModel(model_name="openrouter/google/gemini-3.5-flash-lite")
+    api_payload = litellm_model._prepare_messages_for_api(agent.messages)
+    roles = {m.get("role") for m in api_payload}
+    assert "exit" not in roles
+    assert roles <= {"system", "user", "assistant", "tool"}
+
+    # Announcer must have empty spoken_error_fallback so it never says "Could you say that again?"
+    announcer = AnnouncerAgent(
+        model=mock_model, config=AnnouncerConfig(step_limit=1, turn_scoped_limits=False)
+    )
+    announcer.n_calls = 1
+    ann_events = [e async for e in announcer.step_stream("debrief")]
+    ann_tc = [e for e in ann_events if isinstance(e, TurnComplete)][-1]
+    assert ann_tc.exit_reason == "limits_exceeded"
+    assert ann_tc.final_text == ""
+    assert not any(
+        "Could you say that again" in str(m.get("content", ""))
+        for m in announcer.messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_voice_agent_preserves_already_delivered_speech_on_limit_exit():
+    mock_model = MagicMock()
+
+    async def partial_then_tool_stream(messages, tools=None, **kw):
+        yield TextDelta(text="I checked your workspace right now. ")
+        yield TextDelta(text="Let me also check status.")
+        yield ToolCallDelta(index=0, call_id="c1", name="status", arguments_delta="{}")
+
+    mock_model.query_stream = partial_then_tool_stream
+    tools = ToolRegistry()
+    tools.register(
+        "status",
+        {"type": "function", "function": {"name": "status"}},
+        lambda a: ToolResult("ok"),
+    )
+
+    # First turn streams speech + tool call; second step in same turn hits step_limit
+    config = VoiceConfig(step_limit=1, turn_scoped_limits=True)
+    agent = VoiceAgent(model=mock_model, tools=tools, config=config)
+    events = [e async for e in agent.step_stream("check")]
+
+    tc = [e for e in events if isinstance(e, TurnComplete)][-1]
+    assert tc.exit_reason == "limits_exceeded"
+    assert tc.is_error is True
+    assert "LimitsExceeded" not in tc.final_text
+    assert "I checked your workspace right now." in tc.final_text
+
+    # Multi-step case: step 1 streams speech + tool call; step 2 emits only a tool call,
+    # then step 3 hits step_limit=2. Step 1's delivered speech must STILL be preserved!
+    step_num = 0
+
+    async def two_step_stream(messages, tools=None, **kw):
+        nonlocal step_num
+        step_num += 1
+        if step_num == 1:
+            yield TextDelta(text="First step spoken sentence. ")
+            yield TextDelta(text="More text.")
+            yield ToolCallDelta(index=0, call_id="c1", name="spawn", arguments_delta='{"objective":"a"}')
+        else:
+            yield ToolCallDelta(index=0, call_id="c2", name="spawn", arguments_delta='{"objective":"b"}')
+
+    mock_model2 = MagicMock()
+    mock_model2.query_stream = two_step_stream
+    tools.register(
+        "spawn",
+        {"type": "function", "function": {"name": "spawn"}},
+        lambda a: ToolResult("started"),
+    )
+    agent2 = VoiceAgent(
+        model=mock_model2,
+        tools=tools,
+        config=VoiceConfig(step_limit=2, turn_scoped_limits=True),
+    )
+    events2 = [e async for e in agent2.step_stream("multi")]
+    tc2 = [e for e in events2 if isinstance(e, TurnComplete)][-1]
+    assert tc2.exit_reason == "limits_exceeded"
+    assert "First step spoken sentence." in tc2.final_text
+    assert "Sorry" not in tc2.final_text
+    assert agent2.messages[1]["role"] == "assistant"
+    assert "First step spoken sentence." in agent2.messages[1]["content"]
+    assert agent2.messages[3]["role"] == "assistant"
+    assert agent2.messages[3]["content"] is None
+
+
+
+@pytest.mark.asyncio
+async def test_voice_agent_prunes_status_after_one_call_in_same_turn():
+    seen_tools_per_call = []
+
+    async def fake_stream(messages, tools=None, **kw):
+        tool_names = [t["function"]["name"] for t in (tools or [])]
+        seen_tools_per_call.append(tool_names)
+        if len(seen_tools_per_call) == 1:
+            yield ToolCallDelta(index=0, call_id="c1", name="status", arguments_delta="{}")
+        else:
+            yield TextDelta(text="Task-1 is currently running pytest.")
+            yield TurnComplete(final_text="Task-1 is currently running pytest.")
+
+    mock_model = MagicMock()
+    mock_model.query_stream = fake_stream
+
+    tools = ToolRegistry()
+    for name in ("spawn", "status", "cancel"):
+        tools.register(
+            name,
+            {"type": "function", "function": {"name": name}},
+            lambda a: ToolResult("task-1 running: Called bash"),
+        )
+
+    agent = VoiceAgent(
+        model=mock_model,
+        tools=tools,
+        config=VoiceConfig(
+            tools=["spawn", "status", "cancel"],
+            max_calls_per_tool_per_turn={"status": 1, "cancel": 1},
+        ),
+    )
+    events = [e async for e in agent.step_stream("what is happening?")]
+
+    assert seen_tools_per_call[0] == ["spawn", "status", "cancel"]
+    assert "status" not in seen_tools_per_call[1]
+    assert "spawn" in seen_tools_per_call[1]
+    tc = [e for e in events if isinstance(e, TurnComplete)][-1]
+    assert tc.exit_reason == "ok"
+    assert "Task-1 is currently running pytest." in tc.final_text
+
+
+@pytest.mark.asyncio
+async def test_voice_agent_canonicalizes_json_args_in_repeat_history():
+    calls = 0
+
+    async def reordered_stream(messages, tools=None, **kw):
+        nonlocal calls
+        calls += 1
+        if calls > 10:
+            yield TurnComplete(final_text="bail")
+            return
+        arg_variants = [
+            '{"a": 1, "b": 2}',
+            '{"b": 2, "a": 1}',
+            '{ "a" : 1 , "b" : 2 }',
+        ]
+        yield ToolCallDelta(
+            index=0,
+            call_id=f"c{calls}",
+            name="spawn",
+            arguments_delta=arg_variants[(calls - 1) % 3],
+        )
+
+    mock_model = MagicMock()
+    mock_model.query_stream = reordered_stream
+    tools = ToolRegistry()
+    tools.register(
+        "spawn",
+        {"type": "function", "function": {"name": "spawn"}},
+        lambda a: ToolResult("started"),
+    )
+
+    agent = VoiceAgent(
+        model=mock_model,
+        tools=tools,
+        config=VoiceConfig(tools=["spawn"], max_calls_per_tool_per_turn={}),
+    )
+    events = [e async for e in agent.step_stream("go")]
+    tc = [e for e in events if isinstance(e, TurnComplete)][-1]
+    assert tc.exit_reason == "repeated_tool_call"
+    assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_voice_agent_executes_parallel_tool_calls_and_maintains_multi_turn_history():
+    from verbix.agent.config import get_config_from_spec
+    from verbix.agent.worker import WorkerConfig
+
+    voice_cfg_dict = get_config_from_spec("voice")
+    assert "spawn" in VoiceConfig(**voice_cfg_dict["agent"]).tools
+    worker_cfg_dict = get_config_from_spec("worker")
+    assert "bash" in WorkerConfig(**worker_cfg_dict["agent"]).tools
+
+    tools = ToolRegistry()
+    tools.register(
+        "spawn",
+        {"type": "function", "function": {"name": "spawn"}},
+        lambda args: f"task-{args.get('task_name')}-started",
+    )
+
+    mock_model = MagicMock()
+    call_count = 0
+
+    async def mock_stream(messages, tools=None, **kw):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield ToolCallDelta(
+                index=0,
+                call_id="call_spawn_1",
+                name="spawn",
+                arguments_delta='{"task_name": "task-a"}',
+            )
+            yield ToolCallDelta(
+                index=1,
+                call_id="call_spawn_2",
+                name="spawn",
+                arguments_delta='{"task_name": "task-b"}',
+            )
+        else:
+            yield TextDelta(text=f"Turn {call_count} done.")
+            yield TurnComplete(final_text=f"Turn {call_count} done.")
+
+    mock_model.query_stream = mock_stream
+    agent = VoiceAgent(
+        model=mock_model,
+        tools=tools,
+        config=VoiceConfig(
+            system_template="You are Verbix.",
+            instance_template="Task: {{task}}",
+            tools=["spawn"],
+        ),
+    )
+    events1 = [e async for e in agent.step_stream("start task-a and task-b")]
+    finished = [e for e in events1 if isinstance(e, ToolCallFinished)]
+    assert [f.observation for f in finished] == ["task-task-a-started", "task-task-b-started"]
+    assert agent.messages[1]["content"] == "Task: start task-a and task-b"
+
+    # Second turn uses raw input directly without re-applying instance_template
+    _ = [e async for e in agent.step_stream("follow up")]
+    assert agent.messages[-2] == {"role": "user", "content": "follow up"}
+
+
+@pytest.mark.asyncio
+async def test_voice_agent_empty_thought_only_stream_aborts_turn_without_blank_assistant_message():
+    from verbix.core.events import ThoughtDelta
+
+    mock_model = MagicMock()
+
+    async def thought_only_stream(messages, tools=None, **kw):
+        yield ThoughtDelta(thought="Thinking about launching Firefox...")
+
+    mock_model.query_stream = thought_only_stream
+    agent = VoiceAgent(model=mock_model, config=VoiceConfig())
+    events = [e async for e in agent.step_stream("open firefox")]
+
+    complete = [e for e in events if isinstance(e, TurnComplete)]
+    assert len(complete) == 1
+    assert complete[0].is_error is True
+    assert complete[0].exit_reason == "empty_response"
+    assert not any(
+        m.get("role") == "assistant" and m.get("content") == "" and not m.get("tool_calls")
+        for m in agent.messages
+    )
+
+
+
+

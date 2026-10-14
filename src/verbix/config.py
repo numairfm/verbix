@@ -15,7 +15,7 @@ _GUIDANCE_BLOCK = re.compile(r"\A\s*<!--.*?-->\s*", re.DOTALL)
 
 _CONFIG_TEMPLATE = """\
 # Verbix global config (~/.verbix/config.yaml).
-# Project .verbix/config.yaml overrides this file; VERBIX_PROVIDER env and CLI flags win over both.
+# VERBIX_PROVIDER env and CLI flags win over this file.
 # Uncomment and edit to set a default speech-to-text model:
 # stt_model: /path/to/model.gguf
 """
@@ -42,17 +42,13 @@ def _read_config_file(path: Path) -> dict:
 
 
 def load_config(
-    workspace: Path | None, args: argparse.Namespace | None = None
+    workspace: Path | None = None, args: argparse.Namespace | None = None
 ) -> dict:
-    """Merge config scopes: builtin < global < project < env < CLI."""
+    """Merge config scopes: builtin < global (~/.verbix/config.yaml) < env < CLI."""
     cfg: dict = {"provider": None, "stt_model": None}
     global_file = Path.home() / ".verbix" / "config.yaml"
     if global_file.is_file():
         cfg.update(_read_config_file(global_file))
-    if workspace is not None:
-        project_file = Path(workspace) / ".verbix" / "config.yaml"
-        if project_file.is_file():
-            cfg.update(_read_config_file(project_file))
     env_provider = os.environ.get("VERBIX_PROVIDER")
     if env_provider:
         cfg["provider"] = env_provider
@@ -64,19 +60,13 @@ def load_config(
     return cfg
 
 
-def read_persona(workspace: Path | None) -> str:
-    """Global + project PERSONA.md concatenated, guidance block stripped."""
-    candidates = [Path.home() / ".verbix" / "PERSONA.md"]
-    if workspace is not None:
-        candidates.append(Path(workspace) / ".verbix" / "PERSONA.md")
-    parts = []
-    for path in candidates:
-        if path.is_file():
-            text = _GUIDANCE_BLOCK.sub("", path.read_text(encoding="utf-8"), count=1)
-            text = text.strip()
-            if text:
-                parts.append(text)
-    return "\n".join(parts)
+def read_persona(workspace: Path | None = None) -> str:
+    """Read global ~/.verbix/PERSONA.md with guidance block stripped."""
+    path = Path.home() / ".verbix" / "PERSONA.md"
+    if not path.is_file():
+        return ""
+    text = _GUIDANCE_BLOCK.sub("", path.read_text(encoding="utf-8"), count=1)
+    return text.strip()
 
 
 def fill_persona_slot(template: str, persona: str) -> str:

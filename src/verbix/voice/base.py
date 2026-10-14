@@ -18,8 +18,8 @@ class SpeechToText(Protocol):
 class STTSessionProtocol(Protocol):
     """Incremental STT session surface required by VoicePipeline.
 
-    Implemented by STTSession (sherpa_stt) and TranscribeSession
-    (transcribe_stt); test doubles must implement the full surface.
+    Implemented by STTSession and TranscribeSession (transcribe_stt);
+    test doubles must implement the full surface.
     """
 
     on_endpoint: Callable[[], None] | None

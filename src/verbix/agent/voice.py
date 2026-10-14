@@ -22,6 +22,7 @@ from verbix.agent.utils.history import (
 )
 from verbix.core.events import (
     AgentEvent,
+    ExitReason,
     TextDelta,
     ThoughtDelta,
     ToolCallDelta,
@@ -66,6 +67,8 @@ class VoiceConfig(BaseModel):
     max_context_tokens: int | None = 16000
     tool_choice: str | None = None
     system_prompt: str = ""
+    spoken_error_fallback: str = "Sorry — I ran into a problem. Could you say that again?"
+    max_calls_per_tool_per_turn: dict[str, int] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -157,15 +160,27 @@ class VoiceAgent:
         self.messages.extend(messages)
         return list(messages)
 
-    def get_tool_definitions(self) -> list[dict[str, Any]] | None:
+    def get_tool_definitions(
+        self, excluded: set[str] | None = None
+    ) -> list[dict[str, Any]] | None:
         """Return tool schemas configured for this agent from the registry."""
         if self.tools is None or self.config.tool_choice == "none":
             return None
+        excl = excluded or set()
         if self.config.tools:
-            defs = self.tools.get_definitions(self.config.tools)
+            allowed = [n for n in self.config.tools if n not in excl]
+            if not allowed:
+                return None
+            defs = self.tools.get_definitions(allowed)
             return defs if defs else None
-        defs = self.tools.get_definitions()
-        return defs if defs else None
+        all_defs = self.tools.get_definitions()
+        if excl and all_defs:
+            all_defs = [
+                d
+                for d in all_defs
+                if d.get("function", {}).get("name") not in excl
+            ]
+        return all_defs if all_defs else None
 
     def _model_stream_cost(self) -> float:
         cost = getattr(self.model, "last_stream_cost", 0.0)
@@ -184,6 +199,19 @@ class VoiceAgent:
                 return ToolResult(str(res), is_error=False, is_terminal=False)
         except Exception as e:  # noqa: BLE001
             return ToolResult(f"Error executing tool '{name}': {e}", is_error=True)
+
+    def _abort_turn(self, exit_reason: ExitReason) -> TurnComplete:
+        """Repairs history without 'exit' role and returns a user-safe TurnComplete."""
+        self.messages[:] = validate_and_repair_history(
+            self.messages, delivered_text=self._delivered_text
+        )
+        if self._delivered_text.strip():
+            final = self._delivered_text
+        else:
+            final = self.config.spoken_error_fallback
+            if final:
+                self.messages.append({"role": "assistant", "content": final})
+        return TurnComplete(final_text=final, exit_reason=exit_reason, is_error=True)
 
     async def step_stream(self, user_input: str | None = None) -> AsyncIterator[AgentEvent]:
         """Stream an agent turn asynchronously, yielding AgentEvents and executing tools."""
@@ -206,27 +234,29 @@ class VoiceAgent:
             self.messages.append({"role": "user", "content": user_content})
 
         repeat_history: list[tuple[str, str]] = []
+        per_turn_counts: dict[str, int] = {}
+        self._delivered_text = ""
 
         try:
             while True:
                 calls = self.turn_calls if self.config.turn_scoped_limits else self.n_calls
                 spent = self.turn_cost if self.config.turn_scoped_limits else self.cost
                 if 0 < self.config.step_limit <= calls or 0 < self.config.cost_limit <= spent:
-                    exc_msg = "LimitsExceeded"
-                    self.messages.append({"role": "exit", "content": exc_msg})
-                    yield TurnComplete(final_text=exc_msg)
+                    yield self._abort_turn("limits_exceeded")
                     return
 
                 if 0 < self.config.wall_time_limit_seconds <= int(time.time() - self._start_time):
-                    time_msg = "TimeExceeded"
-                    self.messages.append({"role": "exit", "content": time_msg})
-                    yield TurnComplete(final_text=time_msg)
+                    yield self._abort_turn("time_exceeded")
                     return
 
                 self.n_calls += 1
                 self.turn_calls += 1
-                tool_defs = self.get_tool_definitions()
-                self._delivered_text = ""
+                exhausted = {
+                    k
+                    for k, v in per_turn_counts.items()
+                    if v >= self.config.max_calls_per_tool_per_turn.get(k, 999999)
+                }
+                tool_defs = self.get_tool_definitions(excluded=exhausted)
                 prev_stream_cost = self._model_stream_cost()
 
                 accumulated_tool_calls: dict[int, dict[str, Any]] = {}
@@ -235,6 +265,7 @@ class VoiceAgent:
                 has_tool_calls = False
                 pending_text = ""
                 released_text = ""
+                step_delivered_text = ""
                 first_chunk_marked = False
 
                 self.messages[:] = compact_messages(
@@ -256,6 +287,7 @@ class VoiceAgent:
                         if len(split_chunks(pending_text)) > 1:
                             for buffered in buffered_text_events:
                                 self._delivered_text += buffered.text
+                                step_delivered_text += buffered.text
                                 yield buffered
                             released_text += pending_text
                             pending_text = ""
@@ -307,6 +339,7 @@ class VoiceAgent:
                 if not has_tool_calls:
                     for buffered in buffered_text_events:
                         self._delivered_text += buffered.text
+                        step_delivered_text += buffered.text
                         yield buffered
                     buffered_text_events.clear()
 
@@ -358,11 +391,18 @@ class VoiceAgent:
 
                         yield ToolCallStarted(call_id=call_id, tool_name=name, arguments=args)
 
-                        if (
+                        cap = self.config.max_calls_per_tool_per_turn.get(name)
+                        if cap is not None and per_turn_counts.get(name, 0) >= cap:
+                            res = ToolResult(
+                                f"Tool '{name}' was already called in this turn. Respond to the user directly using the previous result.",
+                                is_error=True,
+                            )
+                        elif (
                             self.tools is not None
                             and hasattr(self.tools, "is_side_effecting")
                             and self.tools.is_side_effecting(name)
                         ):
+                            per_turn_counts[name] = per_turn_counts.get(name, 0) + 1
                             pending = asyncio.ensure_future(self._execute_tool(name, args))
                             try:
                                 res = await asyncio.shield(pending)
@@ -389,6 +429,7 @@ class VoiceAgent:
                                 )
                                 raise
                         else:
+                            per_turn_counts[name] = per_turn_counts.get(name, 0) + 1
                             res = await self._execute_tool(name, args)
 
                         yield ToolCallFinished(
@@ -406,29 +447,47 @@ class VoiceAgent:
                             }
                         )
 
-                        sig = (name, (tc["args_str"] or "").strip())
+                        try:
+                            sig = (name, json.dumps(args, sort_keys=True))
+                        except (TypeError, ValueError):
+                            sig = (name, (tc["args_str"] or "").strip())
                         repeat_history.append(sig)
                         if (
                             len(repeat_history) >= _REPEAT_LIMIT
                             and len(set(repeat_history[-_REPEAT_LIMIT:])) == 1
                         ):
-                            self.messages.append({"role": "exit", "content": "RepeatedToolCall"})
-                            yield TurnComplete(final_text="RepeatedToolCall")
+                            yield self._abort_turn("repeated_tool_call")
                             return
 
                         if res.is_terminal:
-                            yield TurnComplete(final_text=res.observation)
+                            yield TurnComplete(
+                                final_text=res.observation,
+                                exit_reason="terminal_tool",
+                                is_error=res.is_error,
+                            )
                             return
 
                     continue
 
-                full_text = self._delivered_text
-                self.messages.append({"role": "assistant", "content": full_text})
+                has_final = bool(
+                    step_delivered_text
+                    or self._delivered_text
+                    or (turn_complete_event is not None and turn_complete_event.final_text)
+                )
+                if not has_final and self.turn_calls <= 1:
+                    yield self._abort_turn("empty_response")
+                    return
+
+                content_to_record = step_delivered_text or (
+                    turn_complete_event.final_text if turn_complete_event is not None else ""
+                )
+                if content_to_record:
+                    self.messages.append({"role": "assistant", "content": content_to_record})
 
                 if turn_complete_event is not None:
                     yield turn_complete_event
                 else:
-                    yield TurnComplete(final_text=full_text)
+                    yield TurnComplete(final_text=self._delivered_text)
                 return
 
         except asyncio.CancelledError:
@@ -438,10 +497,5 @@ class VoiceAgent:
             raise
         except Exception as e:  # noqa: BLE001
             self.logger.warning("Voice agent turn failed: %s", e)
-            self.messages[:] = validate_and_repair_history(
-                self.messages, delivered_text=self._delivered_text
-            )
-            note = "Sorry — I ran into a problem. Could you say that again?"
-            self.messages.append({"role": "assistant", "content": note})
-            yield TurnComplete(final_text=note)
+            yield self._abort_turn("exception")
             return

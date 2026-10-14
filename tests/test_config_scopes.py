@@ -36,7 +36,7 @@ def test_unknown_config_key_fails_loudly(tmp_path, monkeypatch):
         raise AssertionError("expected ValueError")
 
 
-def test_project_overrides_global(tmp_path, monkeypatch):
+def test_project_verbix_config_is_ignored_in_favor_of_global(tmp_path, monkeypatch):
     from verbix.config import load_config
 
     home = tmp_path / "home"
@@ -50,7 +50,7 @@ def test_project_overrides_global(tmp_path, monkeypatch):
     _patch_home(monkeypatch, home)
     monkeypatch.delenv("VERBIX_PROVIDER", raising=False)
     cfg = load_config(ws)
-    assert cfg["provider"] == "local"
+    assert cfg["provider"] == "openrouter"
     assert cfg["stt_model"] == "/global/model.gguf"
 
 
@@ -131,7 +131,7 @@ def test_malformed_yaml_fails_naming_file(tmp_path, monkeypatch):
     assert str(cfg) in str(exc.value)
 
 
-def test_persona_concatenates_global_then_project(tmp_path, monkeypatch):
+def test_persona_reads_global_only_and_ignores_project(tmp_path, monkeypatch):
     from verbix.config import read_persona
 
     home = tmp_path / "home"
@@ -141,9 +141,7 @@ def test_persona_concatenates_global_then_project(tmp_path, monkeypatch):
     _write(ws / ".verbix" / "PERSONA.md", "Project voice.\n")
     _patch_home(monkeypatch, home)
     text = read_persona(ws)
-    assert "Global voice." in text
-    assert "Project voice." in text
-    assert text.index("Global voice.") < text.index("Project voice.")
+    assert text == "Global voice."
 
 
 def test_persona_appends_as_section_not_replacement(tmp_path, monkeypatch):
@@ -152,7 +150,7 @@ def test_persona_appends_as_section_not_replacement(tmp_path, monkeypatch):
     home = tmp_path / "home"
     ws = tmp_path / "ws"
     ws.mkdir(parents=True)
-    _write(ws / ".verbix" / "PERSONA.md", "Be chill.\n")
+    _write(home / ".verbix" / "PERSONA.md", "Be chill.\n")
     _patch_home(monkeypatch, home)
     monkeypatch.delenv("VERBIX_PROVIDER", raising=False)
     args = build_parser().parse_args(["--workspace", str(ws)])
@@ -168,7 +166,7 @@ def test_cli_system_prompt_flag_beats_persona_file(tmp_path, monkeypatch):
     home = tmp_path / "home"
     ws = tmp_path / "ws"
     ws.mkdir(parents=True)
-    _write(ws / ".verbix" / "PERSONA.md", "Be chill.\n")
+    _write(home / ".verbix" / "PERSONA.md", "Be chill.\n")
     _patch_home(monkeypatch, home)
     monkeypatch.delenv("VERBIX_PROVIDER", raising=False)
     args = build_parser().parse_args(
@@ -188,7 +186,7 @@ def test_stt_model_from_config_reaches_transcribe_stt(tmp_path, monkeypatch):
     ws.mkdir(parents=True)
     model = tmp_path / "custom-stt.gguf"
     model.write_bytes(b"dummy")
-    _write(ws / ".verbix" / "config.yaml", f"stt_model: {model}\n")
+    _write(home / ".verbix" / "config.yaml", f"stt_model: {model}\n")
     _patch_home(monkeypatch, home)
     monkeypatch.delenv("VERBIX_PROVIDER", raising=False)
     monkeypatch.delenv("VERBIX_STT_MODEL", raising=False)
@@ -200,7 +198,8 @@ def test_stt_model_from_config_reaches_transcribe_stt(tmp_path, monkeypatch):
             captured["model_path"] = model_path
 
     monkeypatch.setattr(stt_mod, "TranscribeSTT", FakeSTT)
-    args = build_parser().parse_args(["--workspace", str(ws), "--audio-sink", "subprocess"])
+    monkeypatch.setattr("verbix.voice.callback_sink.CallbackAudioSink", lambda *a, **k: object())
+    args = build_parser().parse_args(["--workspace", str(ws)])
     runtime = build_runtime(args)
     _build_voice_pipeline(runtime, args)
     assert str(captured["model_path"]) == str(model)
@@ -213,7 +212,7 @@ def test_stt_model_flag_beats_config_file(tmp_path, monkeypatch):
     home = tmp_path / "home"
     ws = tmp_path / "ws"
     ws.mkdir(parents=True)
-    _write(ws / ".verbix" / "config.yaml", "stt_model: /config/model.gguf\n")
+    _write(home / ".verbix" / "config.yaml", "stt_model: /config/model.gguf\n")
     _patch_home(monkeypatch, home)
     monkeypatch.delenv("VERBIX_PROVIDER", raising=False)
     monkeypatch.delenv("VERBIX_STT_MODEL", raising=False)
@@ -225,9 +224,9 @@ def test_stt_model_flag_beats_config_file(tmp_path, monkeypatch):
             captured["model_path"] = model_path
 
     monkeypatch.setattr(stt_mod, "TranscribeSTT", FakeSTT)
+    monkeypatch.setattr("verbix.voice.callback_sink.CallbackAudioSink", lambda *a, **k: object())
     args = build_parser().parse_args(
-        ["--workspace", str(ws), "--stt-model", "/flag/model.gguf",
-         "--audio-sink", "subprocess"]
+        ["--workspace", str(ws), "--stt-model", "/flag/model.gguf"]
     )
     runtime = build_runtime(args)
     _build_voice_pipeline(runtime, args)

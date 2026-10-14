@@ -18,6 +18,7 @@ from verbix.tools.glob import GlobTool
 from verbix.tools.grep import GrepTool
 from verbix.tools.read import FileReadTool
 from verbix.tools.sandbox import SandboxConfig, SandboxResult, execute_sandboxed
+from verbix.tools.screenshot import ScreenshotTool
 from verbix.tools.shared import bind_output, resolve_contained_path
 from verbix.tools.spawn import SpawnTool
 from verbix.tools.status import StatusTool
@@ -40,6 +41,7 @@ __all__ = [
     "GrepTool",
     "SandboxConfig",
     "SandboxResult",
+    "ScreenshotTool",
     "SpawnTool",
     "StatusTool",
     "Tool",
@@ -62,6 +64,7 @@ TOOL_CATALOG: dict[str, Callable[[Any], Any]] = {
     "glob": lambda runtime: GlobTool(),
     "web_search": lambda runtime: WebSearchTool(),
     "web_fetch": lambda runtime: WebFetchTool(),
+    "screenshot": lambda runtime: ScreenshotTool(),
     "spawn": SpawnTool,
     "status": StatusTool,
     "cancel": CancelTool,

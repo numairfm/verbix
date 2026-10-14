@@ -21,7 +21,7 @@ from verbix.tools.shared import prune_spills
 
 
 def build_worker_registry(workspace: Path | None = None) -> ToolRegistry:
-    """Background worker's tools: read, write, edit, grep, glob, web_search, web_fetch, bash, finish.
+    """Background worker's tools: read, write, edit, grep, glob, web_search, web_fetch, screenshot, bash, finish.
 
     File work goes through the dedicated tools, identically on every OS;
     bash is the escape hatch for what has no dedicated tool.
@@ -37,6 +37,7 @@ def build_worker_registry(workspace: Path | None = None) -> ToolRegistry:
             "glob",
             "web_search",
             "web_fetch",
+            "screenshot",
             "bash",
             "finish",
         ],
@@ -135,6 +136,7 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
         "glob",
         "web_search",
         "web_fetch",
+        "screenshot",
         "bash",
         "finish",
     ]

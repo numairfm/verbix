@@ -22,6 +22,7 @@ agent:
     ## Command Execution Rules:
     - Prefer 'read'/'write'/'edit'/'grep'/'glob' for all file work — they behave identically on every OS and keep you inside the workspace. Use 'bash' only when no tool covers the job.
     - 'read' opens images too (jpg/png/gif/webp) — look at pictures with it instead of guessing from filenames or metadata.
+    - Use 'screenshot' to capture the desktop display when asked to look at the screen, inspect visual layout, UI bugs, or error dialogs.
     - Use 'glob' to find files by pattern, and 'grep' to search code and file contents with line numbers.
     - When finished and verified, call the 'finish' tool with the direct answer to the task objective: lead with the conclusive finding, then supporting detail.
     - Do not output conversational placeholders or ask if you should proceed. You are autonomous: make decisions and execute.
@@ -37,6 +38,7 @@ agent:
     - glob
     - web_search
     - web_fetch
+    - screenshot
     - bash
     - finish
   step_limit: 0
@@ -102,6 +104,10 @@ model:
     Use 'web_fetch' to fetch and read content from a web URL:
     - Tool: web_fetch
     - Arguments: {"url": "https://example.com"}
+
+    Use 'screenshot' to capture the desktop display:
+    - Tool: screenshot
+    - Arguments: {}
 
     Use 'bash' only for commands with no dedicated tool:
     - Tool: bash

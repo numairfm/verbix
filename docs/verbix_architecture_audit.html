@@ -1,0 +1,1536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Verbix Architectural Audit &amp; Unified Redesign Plan</title>
+  <style>
+    :root {
+      --bg-base: #0b0f17;
+      --bg-surface: #111827;
+      --bg-elevated: #1a2333;
+      --bg-code: #080c12;
+      --border: #263248;
+      --border-subtle: #1e293b;
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-blue: #38bdf8;
+      --accent-indigo: #818cf8;
+      --accent-green: #34d399;
+      --accent-amber: #fbbf24;
+      --accent-red: #f87171;
+      --accent-purple: #c084fc;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: "JetBrains Mono", "Fira Code", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-base);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      line-height: 1.65;
+      font-size: 15px;
+      padding: 2.5rem 1.5rem 5rem;
+    }
+
+    .container {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 2rem;
+      margin-bottom: 2.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.22rem 0.65rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+    }
+
+    .badge-red { background: rgba(248, 113, 113, 0.14); color: var(--accent-red); border: 1px solid rgba(248, 113, 113, 0.35); }
+    .badge-blue { background: rgba(56, 189, 248, 0.14); color: var(--accent-blue); border: 1px solid rgba(56, 189, 248, 0.35); }
+    .badge-green { background: rgba(52, 211, 153, 0.14); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.35); }
+    .badge-amber { background: rgba(251, 191, 36, 0.14); color: var(--accent-amber); border: 1px solid rgba(251, 191, 36, 0.35); }
+    .badge-purple { background: rgba(192, 132, 252, 0.14); color: var(--accent-purple); border: 1px solid rgba(192, 132, 252, 0.35); }
+
+    h1 {
+      font-size: 2.15rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+    }
+
+    .subtitle {
+      color: var(--text-secondary);
+      font-size: 1.05rem;
+      max-width: 880px;
+    }
+
+    /* Navigation TOC */
+    .toc {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 2.5rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 0.75rem;
+    }
+
+    .toc a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.88rem;
+      font-weight: 500;
+      padding: 0.45rem 0.65rem;
+      border-radius: 6px;
+      background: var(--bg-elevated);
+      border: 1px solid transparent;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .toc a:hover {
+      color: var(--accent-blue);
+      border-color: rgba(56, 189, 248, 0.4);
+    }
+
+    .toc-num {
+      font-family: var(--font-mono);
+      color: var(--accent-blue);
+      font-weight: 700;
+    }
+
+    /* Sections */
+    section {
+      margin-bottom: 3.5rem;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: baseline;
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+      padding-bottom: 0.65rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-num {
+      font-family: var(--font-mono);
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--accent-blue);
+    }
+
+    h2 {
+      font-size: 1.45rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    h3 {
+      font-size: 1.12rem;
+      font-weight: 600;
+      margin: 1.5rem 0 0.75rem;
+      color: var(--text-primary);
+    }
+
+    p {
+      margin-bottom: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    strong {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    /* Cards & Grids */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+      gap: 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.35rem;
+    }
+
+    .card-title {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      color: var(--text-primary);
+    }
+
+    /* Incident Cascade Timeline */
+    .cascade {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin: 1.25rem 0 1.75rem;
+    }
+
+    .cascade-step {
+      display: grid;
+      grid-template-columns: 44px 190px 1fr 220px;
+      align-items: center;
+      gap: 1rem;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent-red);
+      border-radius: 8px;
+      padding: 0.9rem 1.15rem;
+    }
+
+    .cascade-idx {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(248, 113, 113, 0.15);
+      color: var(--accent-red);
+      font-family: var(--font-mono);
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.85rem;
+    }
+
+    .cascade-stage {
+      font-weight: 700;
+      color: var(--text-primary);
+      font-size: 0.92rem;
+    }
+
+    .cascade-desc {
+      color: var(--text-secondary);
+      font-size: 0.88rem;
+    }
+
+    .cascade-pin {
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      color: var(--accent-amber);
+      background: rgba(251, 191, 36, 0.08);
+      border: 1px solid rgba(251, 191, 36, 0.25);
+      padding: 0.3rem 0.55rem;
+      border-radius: 5px;
+      text-align: right;
+      word-break: break-all;
+    }
+
+    /* Architecture Diagram Box */
+    .diagram-box {
+      background: var(--bg-code);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.5rem;
+      margin: 1.25rem 0;
+      overflow-x: auto;
+    }
+
+    .arch-flow {
+      display: grid;
+      grid-template-columns: 1fr 60px 1.25fr 60px 1fr;
+      align-items: stretch;
+      gap: 0.5rem;
+      min-width: 780px;
+    }
+
+    .arch-col {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      justify-content: center;
+    }
+
+    .arch-node {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      font-size: 0.84rem;
+    }
+
+    .arch-node-title {
+      font-family: var(--font-mono);
+      font-weight: 700;
+      font-size: 0.85rem;
+      margin-bottom: 0.3rem;
+      color: var(--accent-blue);
+    }
+
+    .arch-engine {
+      background: linear-gradient(180deg, rgba(56, 189, 248, 0.1), rgba(129, 140, 248, 0.08));
+      border: 2px solid var(--accent-blue);
+      border-radius: 10px;
+      padding: 1.2rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 0.55rem;
+    }
+
+    .arch-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-mono);
+      color: var(--accent-blue);
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0 1.5rem;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      font-size: 0.88rem;
+    }
+
+    th {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      text-align: left;
+      padding: 0.75rem 1rem;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    td {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      vertical-align: top;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* Code blocks */
+    pre {
+      background: var(--bg-code);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.1rem 1.25rem;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      line-height: 1.55;
+      color: #e2e8f0;
+      margin: 0.75rem 0 1.5rem;
+    }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.84em;
+      background: rgba(148, 163, 184, 0.12);
+      color: var(--accent-blue);
+      padding: 0.15rem 0.38rem;
+      border-radius: 4px;
+    }
+
+    pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+      font-size: inherit;
+    }
+
+    .code-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-bottom: none;
+      border-radius: 8px 8px 0 0;
+      padding: 0.5rem 1rem;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      margin-top: 1rem;
+    }
+
+    .code-header + pre {
+      margin-top: 0;
+      border-radius: 0 0 8px 8px;
+    }
+
+    /* Callouts */
+    .callout {
+      border-left: 4px solid var(--accent-blue);
+      background: rgba(56, 189, 248, 0.07);
+      border-radius: 0 8px 8px 0;
+      padding: 0.95rem 1.2rem;
+      margin: 1rem 0;
+      font-size: 0.9rem;
+    }
+
+    .callout-warn {
+      border-left-color: var(--accent-amber);
+      background: rgba(251, 191, 36, 0.07);
+    }
+
+    .callout-danger {
+      border-left-color: var(--accent-red);
+      background: rgba(248, 113, 113, 0.07);
+    }
+
+    .callout-success {
+      border-left-color: var(--accent-green);
+      background: rgba(52, 211, 153, 0.07);
+    }
+
+    ul.clean-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      margin: 0.5rem 0 1rem;
+    }
+
+    ul.clean-list li {
+      position: relative;
+      padding-left: 1.35rem;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+
+    ul.clean-list li::before {
+      content: "→";
+      position: absolute;
+      left: 0;
+      color: var(--accent-blue);
+      font-family: var(--font-mono);
+      font-weight: 700;
+    }
+
+    .checklist-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      padding: 0.65rem 0.9rem;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      margin-bottom: 0.5rem;
+      font-size: 0.88rem;
+    }
+
+    .check-tag {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+      flex-shrink: 0;
+      margin-top: 0.1rem;
+    }
+
+    .tag-delete { background: rgba(248, 113, 113, 0.18); color: var(--accent-red); }
+    .tag-simplify { background: rgba(251, 191, 36, 0.18); color: var(--accent-amber); }
+    .tag-standardize { background: rgba(52, 211, 153, 0.18); color: var(--accent-green); }
+
+    @media (max-width: 860px) {
+      .cascade-step {
+        grid-template-columns: 36px 1fr;
+      }
+      .cascade-pin {
+        grid-column: 1 / -1;
+        text-align: left;
+      }
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge-row">
+        <span class="badge badge-red">Incident Post-Mortem</span>
+        <span class="badge badge-blue">One Engine, Three Flavors</span>
+        <span class="badge badge-green">Stdlib-First Python</span>
+        <span class="badge badge-purple">Voice &amp; Sandbox Hardening</span>
+      </div>
+      <h1>Verbix Architectural Audit &amp; Unified Redesign Plan</h1>
+      <p class="subtitle">
+        Exhaustive root-cause diagnosis of the Gemini 3.5 Flash-Lite live voice failure cascade,
+        critique of the four-way agent loop fragmentation, and concrete migration blueprint to restore
+        <strong>"Three Agents, One Engine"</strong>.
+      </p>
+    </header>
+
+    <nav class="toc">
+      <a href="#sec-1"><span class="toc-num">01</span> Executive Diagnosis</a>
+      <a href="#sec-2"><span class="toc-num">02</span> One Engine, Three Flavors</a>
+      <a href="#sec-3"><span class="toc-num">03</span> Voice &amp; Intent Seam</a>
+      <a href="#sec-4"><span class="toc-num">04</span> Worker Sandboxing</a>
+      <a href="#sec-5"><span class="toc-num">05</span> Code &amp; Migration Plan</a>
+    </nav>
+
+    <!-- ================================================================== -->
+    <!-- SECTION 1: EXECUTIVE SUMMARY & ARCHITECTURAL DIAGNOSIS             -->
+    <!-- ================================================================== -->
+    <section id="sec-1">
+      <div class="section-header">
+        <span class="section-num">01</span>
+        <h2>Executive Summary &amp; Architectural Diagnosis</h2>
+      </div>
+
+      <p>
+        Verbix was designed around a clean invariant: <strong>three roles (Foreground, Announcer, Worker) running on a single engine</strong>, differentiated strictly by YAML configuration. Instead, the implementation drifted into <strong>four overlapping agent classes</strong> totaling ~1,550 lines of duplicated loop logic: <code>VoiceAgent</code> (<code>src/verbix/agent/voice.py</code>), <code>WorkerAgent</code> (<code>src/verbix/agent/worker.py</code>), <code>AnnouncerAgent</code> (<code>src/verbix/agent/announcer.py</code>), and legacy <code>DefaultAgent</code> (<code>src/verbix/agent/agents/default.py</code>).
+      </p>
+      <p>
+        When driven by a frontier reasoning model, prompt instructions masked structural gaps in the loop. When driven by a fast, literal 8B-class model (<strong>Gemini 3.5 Flash-Lite</strong>), every unguarded seam failed simultaneously in a 5-stage cascade.
+      </p>
+
+      <h3>Anatomy of the 5-Stage Live Failure Cascade</h3>
+      <div class="cascade">
+        <div class="cascade-step">
+          <div class="cascade-idx">1</div>
+          <div class="cascade-stage">STT Phonetic Garble</div>
+          <div class="cascade-desc">
+            User said <em>"Hey what's up"</em>; local STT transcribed <code>"He wits up."</code> Without STT-noise grounding or a conversational intent gate, the model treated the phonetic error as a literal workspace/system entity.
+          </div>
+          <div class="cascade-pin">voice/config/voice.yaml:17</div>
+        </div>
+
+        <div class="cascade-step">
+          <div class="cascade-idx">2</div>
+          <div class="cascade-stage">False Delegation &amp; Speculative Injection</div>
+          <div class="cascade-desc">
+            Foreground called <code>spawn(objective="Figure out what 'He wits up.' refers to, or check system logs / workspace for recent clues")</code>—violating objective integrity by inventing investigative instructions never requested by the user.
+          </div>
+          <div class="cascade-pin">tools/spawn.py:38-44</div>
+        </div>
+
+        <div class="cascade-step">
+          <div class="cascade-idx">3</div>
+          <div class="cascade-stage">Unbounded Root Execution</div>
+          <div class="cascade-desc">
+            Because <code>TOOL_CATALOG["bash"]</code> instantiates <code>BashTool(sandboxed=False)</code> by default, the worker executed unsandboxed <code>find / -name '*wits*'</code>, dumping <code>journalctl</code>, shell history, and <code>ps aux</code>.
+          </div>
+          <div class="cascade-pin">tools/__init__.py:62<br/>tools/bash.py:38</div>
+        </div>
+
+        <div class="cascade-step">
+          <div class="cascade-idx">4</div>
+          <div class="cascade-stage">Tight Millisecond Tool Polling</div>
+          <div class="cascade-desc">
+            User asked <em>"What?"</em>. Inside a single <code>step_stream</code> turn, <code>VoiceAgent</code> called <code>status()</code> 3 times consecutively in a tight <code>while True</code> loop without yielding the floor to speak, tripping <code>_REPEAT_LIMIT = 3</code>.
+          </div>
+          <div class="cascade-pin">agent/voice.py:409-417</div>
+        </div>
+
+        <div class="cascade-step">
+          <div class="cascade-idx">5</div>
+          <div class="cascade-stage">Control Signal Leaked to TTS</div>
+          <div class="cascade-desc">
+            <code>VoiceAgent</code> yielded <code>TurnComplete(final_text="RepeatedToolCall")</code>. <code>SpeechOutput.emit()</code> computed <code>_tail("RepeatedToolCall")</code> and fed the internal error token into Kokoro TTS, speaking <em>"RepeatedToolCall"</em> aloud.
+          </div>
+          <div class="cascade-pin">agent/voice.py:416<br/>voice/output.py:135-138</div>
+        </div>
+      </div>
+
+      <h3>Root Cause Breakdown: Prompting vs. Loop Mechanics vs. Dual-Agent Drift</h3>
+      <div class="grid-3">
+        <div class="card">
+          <div class="card-title">
+            <span>1. Prompting Fallacy</span>
+            <span class="badge badge-amber">Soft Guard</span>
+          </div>
+          <p>
+            Security and loop invariants were delegated to prose rules in <code>voice.yaml</code> and <code>worker.yaml</code> (e.g., <em>"status and cancel only on request"</em>, <em>"keep you inside the workspace"</em>).
+          </p>
+          <p>
+            <strong>Why it failed:</strong> 8B/Flash-Lite models under ambiguity optimize for action completion over negative constraints. Prompting guides intent; <strong>code must enforce invariants</strong> (tool call caps, path containment, objective validation).
+          </p>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>2. Loop Mechanics</span>
+            <span class="badge badge-red">In-Band Signaling</span>
+          </div>
+          <p>
+            <code>TurnComplete(final_text: str)</code> in <code>core/events.py:45</code> conflates two orthogonal concepts: <strong>spoken assistant prose</strong> and <strong>machine termination status</strong> (<code>"RepeatedToolCall"</code>, <code>"LimitsExceeded"</code>, <code>"TimeExceeded"</code>).
+          </p>
+          <p>
+            <strong>Why it failed:</strong> <code>runtime/announcer.py:183</code> patched a one-off filter for <code>LimitsExceeded</code>, while <code>SpeechOutput.emit()</code> and <code>Runtime.submit()</code> remained completely exposed to <code>RepeatedToolCall</code>.
+          </p>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>3. Multi-Agent Drift</span>
+            <span class="badge badge-purple">4 Divergent Loops</span>
+          </div>
+          <p>
+            <code>VoiceAgent</code>, <code>WorkerAgent</code>, <code>AnnouncerAgent</code>, and <code>DefaultAgent</code> each re-implement template rendering, compaction, tool dispatch, cost tracking, and repeat detection differently.
+          </p>
+          <p>
+            <strong>Why it failed:</strong> Fixes landed in one class (e.g., side-effect shielding in <code>VoiceAgent</code>, consecutive tool error feedback in <code>WorkerAgent</code>) while sibling classes rotted.
+          </p>
+        </div>
+      </div>
+
+      <h3>Why Streaming vs. Batching Divergence Created Unhandled Edge Cases</h3>
+      <div class="callout callout-warn">
+        <strong>The Double-Adaptation Paradox (<code>runtime/foreground.py:287-331</code> &amp; <code>agent/worker.py:169-175</code>):</strong><br/>
+        <code>ProviderStreamAdapter.query_stream()</code> already streams canonical events from the provider. Yet because <code>WorkerAgent.step()</code> was written as a synchronous-style batch loop calling <code>self.model.query()</code>, <code>ProviderStreamAdapter.query()</code> consumes the entire async stream into memory, discards live <code>TextDelta</code> and <code>ToolCallDelta</code> events, and returns a static dictionary.
+      </div>
+      <ul class="clean-list">
+        <li>
+          <strong>Broken Live Telemetry:</strong> Because <code>WorkerAgent</code> batches model output, <code>WorkerTask</code> (<code>runtime/worker.py:131</code>) had to bolt on a side-channel <code>session.on_event</code> callback that only fires <em>after</em> the model turn finishes—starving <code>--show-worker-turns</code> of real-time token and tool-argument streaming.
+        </li>
+        <li>
+          <strong>Divergent Repeat Circuit Breakers:</strong> When a tool repeats 3 times in <code>VoiceAgent</code>, it immediately aborts the turn with <code>TurnComplete(final_text="RepeatedToolCall")</code> (<code>voice.py:416</code>). When a tool repeats 3 times in <code>WorkerAgent</code>, it injects a synthetic <code>ToolResult("Error: Tool '...' was called 3 times consecutively...")</code> (<code>worker.py:288</code>) and keeps looping.
+        </li>
+        <li>
+          <strong>Dual Runner Harness in <code>WorkerTask._run</code>:</strong> Because the codebase couldn't decide whether a worker session exposes <code>.run()</code>, <code>.step_stream()</code>, or <code>.step()</code>, <code>runtime/worker.py:126-207</code> contains an 80-line reflection maze checking <code>has_run</code>, <code>has_step_stream</code>, and <code>hasattr(session, "step")</code> with three separate termination checks.
+        </li>
+      </ul>
+    </section>
+
+    <!-- ================================================================== -->
+    <!-- SECTION 2: THE "ONE ENGINE, THREE FLAVORS" ARCHITECTURE            -->
+    <!-- ================================================================== -->
+    <section id="sec-2">
+      <div class="section-header">
+        <span class="section-num">02</span>
+        <h2>The "One Engine, Three Flavors" Architecture</h2>
+      </div>
+
+      <p>
+        We replace <code>VoiceAgent</code>, <code>WorkerAgent</code>, <code>AnnouncerAgent</code>, and <code>DefaultAgent</code> with a single ~220-line <strong><code>Agent</code></strong> class in <code>src/verbix/agent/engine.py</code>. Every agent streams events via <code>step_stream()</code>; flavor differences are expressed strictly as declarative fields on <code>AgentConfig</code>.
+      </p>
+
+      <div class="diagram-box">
+        <div class="arch-flow">
+          <div class="arch-col">
+            <div class="arch-node">
+              <div class="arch-node-title">voice.yaml (Foreground)</div>
+              <div><code>tools: [spawn, status, cancel]</code></div>
+              <div><code>speech_chunking: true</code></div>
+              <div><code>turn_scoped_limits: true</code></div>
+              <div><code>tool_call_caps: {status: 1, cancel: 1}</code></div>
+            </div>
+            <div class="arch-node">
+              <div class="arch-node-title">announcer.yaml (Announcer)</div>
+              <div><code>tools: []</code> / <code>tool_choice: "none"</code></div>
+              <div><code>speech_chunking: true</code></div>
+              <div><code>turn_scoped_limits: true</code></div>
+            </div>
+            <div class="arch-node">
+              <div class="arch-node-title">worker.yaml (Worker)</div>
+              <div><code>tools: [read, write, edit, grep, glob, web_search, web_fetch, screenshot, bash]</code></div>
+              <div><code>speech_chunking: false</code></div>
+              <div><code>require_tool_before_finish: true</code></div>
+            </div>
+          </div>
+
+          <div class="arch-arrow">⟹</div>
+
+          <div class="arch-engine">
+            <div style="font-family: var(--font-mono); font-weight: 800; color: var(--accent-blue); font-size: 1rem;">
+              Unified Agent Engine (verbix/agent/engine.py)
+            </div>
+            <div style="font-size: 0.84rem; color: var(--text-secondary);">
+              <strong>Single Async Loop:</strong> <code>async for event in agent.step_stream(task)</code>
+            </div>
+            <ul class="clean-list" style="margin: 0.25rem 0;">
+              <li>Rolling context compaction (<code>compact_messages</code>)</li>
+              <li>Real-time provider streaming (<code>query_stream</code>)</li>
+              <li>Optional speech-boundary release (<code>split_chunks</code>)</li>
+              <li>Per-turn tool gating &amp; repeat circuit breaker</li>
+              <li>Side-effect shielding &amp; history repair on cancel</li>
+              <li>Out-of-band <code>exit_reason</code> on <code>TurnComplete</code></li>
+            </ul>
+          </div>
+
+          <div class="arch-arrow">⟹</div>
+
+          <div class="arch-col">
+            <div class="arch-node">
+              <div class="arch-node-title">SpeechOutput (Voice / Announcer)</div>
+              <div>Consumes <code>TextDelta</code> &amp; clean <code>TurnComplete.final_text</code>.</div>
+              <div>Firewall drops any non-<code>ok</code> <code>exit_reason</code>.</div>
+            </div>
+            <div class="arch-node">
+              <div class="arch-node-title">WorkerTask &amp; CLI Telemetry</div>
+              <div>Consumes live <code>TextDelta</code>, <code>ToolCallStarted</code>, <code>ToolCallFinished</code>, and <code>TurnComplete</code>.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h3>Configuration Layer Matrix Across All Three Flavors</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Capability / Policy</th>
+            <th>Foreground (<code>voice.yaml</code>)</th>
+            <th>Announcer (<code>announcer.yaml</code>)</th>
+            <th>Worker (<code>worker.yaml</code>)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Engine Class</strong></td>
+            <td><code>Agent(config=fg_cfg)</code></td>
+            <td><code>Agent(config=ann_cfg)</code></td>
+            <td><code>Agent(config=wrk_cfg)</code></td>
+          </tr>
+          <tr>
+            <td><strong>Configured Tools</strong></td>
+            <td><code>[spawn, status, cancel]</code></td>
+            <td><code>[]</code></td>
+            <td><code>[read, write, edit, grep, glob, web_search, web_fetch, screenshot, bash]</code></td>
+          </tr>
+          <tr>
+            <td><strong><code>tool_choice</code></strong></td>
+            <td><code>"auto"</code> (dynamically pruned if per-turn cap reached)</td>
+            <td><code>"none"</code></td>
+            <td><code>"auto"</code></td>
+          </tr>
+          <tr>
+            <td><strong><code>speech_chunking</code></strong></td>
+            <td><code>True</code> — buffers pre-tool text; releases on <code>split_chunks &gt; 1</code></td>
+            <td><code>True</code> — immediate clause-level streaming to Kokoro TTS</td>
+            <td><code>False</code> — streams every <code>TextDelta</code> live to CLI/IPC telemetry</td>
+          </tr>
+          <tr>
+            <td><strong><code>turn_scoped_limits</code></strong></td>
+            <td><code>True</code> (resets per user utterance; <code>step_limit: 4</code>)</td>
+            <td><code>True</code> (single-shot synthesis; <code>step_limit: 1</code>)</td>
+            <td><code>False</code> (task-scoped budget; <code>step_limit: 30</code>, <code>wall_time: 600s</code>)</td>
+          </tr>
+          <tr>
+            <td><strong><code>max_calls_per_tool_per_turn</code></strong></td>
+            <td><code>{"status": 1, "cancel": 1, "spawn": 3}</code></td>
+            <td><code>{}</code></td>
+            <td><code>{}</code> (governed by 3-strike identical-signature breaker)</td>
+          </tr>
+          <tr>
+            <td><strong><code>require_tool_before_finish</code></strong></td>
+            <td><code>False</code> (direct conversational answers allowed)</td>
+            <td><code>False</code> (pure spoken debrief)</td>
+            <td><code>True</code> (must execute ≥1 tool before concluding with text)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Standardized Event &amp; Exit Semantics</h3>
+      <p>
+        The root cause of the <em>"RepeatedToolCall"</em> audio leak was stuffing machine exit codes into <code>TurnComplete.final_text</code>. We standardize <code>src/verbix/core/events.py</code> so that <code>final_text</code> <strong>exclusively contains human-facing prose</strong>, while loop termination state rides on explicit typed fields:
+      </p>
+      <div class="callout callout-success">
+        <strong>The Golden Event Rule:</strong> <code>TurnComplete.final_text</code> is strictly spoken/displayable assistant text. If a turn terminates due to a circuit breaker (<code>exit_reason="repeated_tool_call" | "limits_exceeded" | "time_exceeded" | "format_error"</code>), <code>final_text</code> is either <code>""</code> or a fixed, user-safe spoken fallback string—never an CamelCase exception identifier.
+      </div>
+    </section>
+
+    <!-- ================================================================== -->
+    <!-- SECTION 3: BULLETPROOFING THE VOICE / INTENT SEAM                  -->
+    <!-- ================================================================== -->
+    <section id="sec-3">
+      <div class="section-header">
+        <span class="section-num">03</span>
+        <h2>Bulletproofing the Voice / Intent Seam</h2>
+      </div>
+
+      <div class="grid-3">
+        <div class="card">
+          <div class="card-title">
+            <span>A. STT Noise Hardening</span>
+            <span class="badge badge-blue">Intent Gate</span>
+          </div>
+          <p>
+            <strong>Problem:</strong> Whisper/Sherpa STT frequently produces phonetic near-misses on casual speech (<em>"Hey what's up"</em> → <code>"He wits up."</code>). Fast models hallucinate that garbled nouns are files or system processes and call <code>spawn</code>.
+          </p>
+          <p>
+            <strong>Defense (Two-Tier):</strong>
+          </p>
+          <ul class="clean-list">
+            <li>
+              <strong>Prompt Invariant (<code>voice.yaml</code>):</strong> Explicitly instruct the model that input comes from live speech-to-text; short phonetic fragments, greetings, or nonsensical phrases without a clear action verb must be answered conversationally or clarified—never delegated to <code>spawn</code>.
+            </li>
+            <li>
+              <strong>Structural Gate in <code>SpawnTool</code>:</strong> Reject objectives that frame transcription uncertainty as an investigation (e.g., matching <em>"figure out what '...' refers to"</em>, <em>"check system logs for clues"</em>) and return a tool error instructing the Foreground to ask the user for clarification.
+            </li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>B. One-Shot Tool Discipline</span>
+            <span class="badge badge-green">No Polling</span>
+          </div>
+          <p>
+            <strong>Problem:</strong> When the user asked <em>"What?"</em>, the foreground called <code>status()</code>, saw the task was still running, and immediately called <code>status()</code> twice more in the same turn.
+          </p>
+          <p>
+            <strong>Defense (Engine-Level Cap):</strong>
+          </p>
+          <ul class="clean-list">
+            <li>
+              <strong>Per-Turn Tool Call Budget:</strong> Foreground sets <code>max_calls_per_tool_per_turn={"status": 1, "cancel": 1}</code>.
+            </li>
+            <li>
+              <strong>Dynamic Schema Pruning:</strong> Once <code>status</code> has been called once in a foreground turn, the engine removes <code>status</code> from <code>tool_defs</code> on the subsequent follow-up model call in that turn (or blocks re-invocation with a directive observation), forcing the model to speak the status snapshot to the user immediately.
+            </li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>C. Audio Sanitization Firewall</span>
+            <span class="badge badge-red">Zero Leak</span>
+          </div>
+          <p>
+            <strong>Problem:</strong> <code>SpeechOutput.emit(TurnComplete)</code> trusted <code>event.final_text</code> unconditionally and synthesized <code>"RepeatedToolCall"</code>.
+          </p>
+          <p>
+            <strong>Defense (Defense-in-Depth):</strong>
+          </p>
+          <ul class="clean-list">
+            <li>
+              <strong>Source Separation:</strong> Engine sets <code>TurnComplete(final_text="", exit_reason="repeated_tool_call", is_error=True)</code>. If already-delivered text is empty on a foreground error exit, the engine emits a fixed spoken recovery phrase.
+            </li>
+            <li>
+              <strong>Sink Firewall (<code>SpeechOutput</code>):</strong> Drops any <code>TurnComplete</code> where <code>is_error=True</code> or <code>exit_reason != "ok"</code>, and strips any residual internal CamelCase/sentinel tokens before <code>_sentences()</code> queues TTS frames.
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================== -->
+    <!-- SECTION 4: WORKER SANDBOXING & OBJECTIVE INTEGRITY                 -->
+    <!-- ================================================================== -->
+    <section id="sec-4">
+      <div class="section-header">
+        <span class="section-num">04</span>
+        <h2>Worker Sandboxing &amp; Objective Integrity</h2>
+      </div>
+
+      <p>
+        In the current codebase, <code>TOOL_CATALOG["bash"] = lambda runtime: BashTool()</code> (<code>src/verbix/tools/__init__.py:62</code>) initializes <code>BashTool(sandboxed=False)</code>. Even worse, when <code>sandboxed=True</code> is used on Linux, <code>bwrap</code> still mounts <code>/proc</code> and allows reading global process tables unless restricted, and fails on platforms without <code>bwrap</code>.
+      </p>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">
+            <span>1. Workspace-Contained Bash Runner</span>
+            <span class="badge badge-red">Mandatory Sandbox</span>
+          </div>
+          <ul class="clean-list">
+            <li>
+              <strong>Default-On Sandboxing:</strong> Flip <code>BashTool(sandboxed=True)</code> by default in <code>TOOL_CATALOG</code> and <code>BashTool.__init__</code>.
+            </li>
+            <li>
+              <strong>Command &amp; Path Guard (Cross-Platform Seam):</strong> Before spawning a shell on any OS (Linux, macOS, Windows), validate the command string against workspace escape and system-inspection vectors:
+              <ul class="clean-list" style="margin-top: 0.35rem;">
+                <li>Block root/parent traversal outside <code>context.workspace</code> (e.g., absolute paths outside workspace/<code>/tmp</code>, <code>find /</code>, <code>..</code> escapes).</li>
+                <li>Block system log, process, and credential/history harvesting (<code>journalctl</code>, <code>dmesg</code>, <code>/var/log</code>, <code>ps aux</code>, <code>~/.bash_history</code>, <code>~/.zsh_history</code>, <code>~/.ssh</code>, <code>env</code>/<code>printenv</code>).</li>
+              </ul>
+            </li>
+            <li>
+              <strong>Sanitized Subprocess Environment:</strong> Strip host <code>HOME</code> (point <code>HOME</code> and <code>TMPDIR</code> to the worker's <code>.verbix/tasks/&lt;id&gt;</code> scratch directory), set <code>HISTFILE=/dev/null</code>, and redact host API keys from the child environment.
+            </li>
+            <li>
+              <strong>OS Isolation Layer:</strong> Use <code>bwrap</code> (with <code>--unshare-pid</code> so <code>/proc</code> only shows the worker's own PID namespace) on Linux when available, <code>sandbox-exec</code> on macOS when available, and enforce the deterministic Command &amp; Path Guard + isolated <code>HOME</code> across all three platforms.
+            </li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>2. Objective Integrity at the <code>spawn</code> Boundary</span>
+            <span class="badge badge-amber">Zero Speculation</span>
+          </div>
+          <ul class="clean-list">
+            <li>
+              <strong>Why Foreground Speculation Happens:</strong> When the user says something ambiguous, a fast model tries to be "helpful" by synthesizing a detective mission for the worker: <em>"Figure out what X refers to, or check system logs / workspace for recent clues."</em>
+            </li>
+            <li>
+              <strong>Objective Sanitizer in <code>SpawnTool.execute()</code>:</strong>
+              <ul class="clean-list" style="margin-top: 0.35rem;">
+                <li>Rejects speculative meta-objectives (regex guard catching <code>figure out what .* refers to</code>, <code>check system logs</code>, <code>journalctl</code>, <code>bash_history</code>, <code>recent clues</code>).</li>
+                <li>Returns an immediate <code>ToolResult(..., is_error=True)</code> telling the Foreground: <em>"Error: Objective contains speculative system inspection or unresolved user intent. Ask the user to clarify what they meant in one short sentence."</em></li>
+              </ul>
+            </li>
+            <li>
+              <strong>Result:</strong> Even an 8B model cannot launch a fishing expedition on a misheard utterance; the tool error forces a polite 1-sentence voice clarification on the same turn.
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================== -->
+    <!-- SECTION 5: CONCRETE CODE SKETCHES & MIGRATION ROADMAP              -->
+    <!-- ================================================================== -->
+    <section id="sec-5">
+      <div class="section-header">
+        <span class="section-num">05</span>
+        <h2>Concrete Code Sketches &amp; Migration Roadmap</h2>
+      </div>
+
+      <h3>5.1 Standardized Events &amp; Unified Agent Engine (<code>src/verbix/core/events.py</code> &amp; <code>src/verbix/agent/engine.py</code>)</h3>
+      <div class="code-header">
+        <span>src/verbix/core/events.py &amp; src/verbix/agent/engine.py</span>
+        <span>Python 3.12+ • Stdlib + Pydantic</span>
+      </div>
+      <pre><code>from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import platform
+import time
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from jinja2 import StrictUndefined, Template
+from pydantic import BaseModel, Field
+
+from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.utils.compaction import compact_messages
+from verbix.agent.utils.history import CANCELLED_TOOL_CONTENT, validate_and_repair_history
+from verbix.tools.base import ToolResult, parse_lenient_json
+from verbix.voice.segments import split_chunks
+
+ExitReason = Literal[
+    "ok",
+    "terminal_tool",
+    "repeated_tool_call",
+    "limits_exceeded",
+    "time_exceeded",
+    "format_error",
+    "exception",
+]
+
+
+@dataclass(frozen=True)
+class AgentEvent:
+    pass
+
+
+@dataclass(frozen=True)
+class TextDelta(AgentEvent):
+    text: str
+
+
+@dataclass(frozen=True)
+class ThoughtDelta(AgentEvent):
+    thought: str
+
+
+@dataclass(frozen=True)
+class ToolCallDelta(AgentEvent):
+    index: int = 0
+    call_id: str | None = None
+    name: str | None = None
+    arguments_delta: str = ""
+
+
+@dataclass(frozen=True)
+class ToolCallStarted(AgentEvent):
+    call_id: str
+    tool_name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolCallFinished(AgentEvent):
+    call_id: str
+    observation: str
+    is_error: bool = False
+
+
+@dataclass(frozen=True)
+class TurnComplete(AgentEvent):
+    final_text: str
+    exit_reason: ExitReason = "ok"
+    is_error: bool = False
+
+
+class AgentConfig(BaseModel):
+    """Unified configuration driving Foreground, Announcer, and Worker on one engine."""
+
+    system_template: str = ""
+    instance_template: str = "{{task}}"
+    tools: list[str] = Field(default_factory=list)
+    tool_choice: str | None = None
+    step_limit: int = 0
+    cost_limit: float = 3.0
+    wall_time_limit_seconds: int = 0
+    turn_scoped_limits: bool = True
+    max_context_tokens: int = 16000
+    repeat_limit: int = 3
+    max_consecutive_format_errors: int = 3
+    # Flavor toggles:
+    speech_chunking: bool = False
+    require_tool_before_finish: bool = False
+    max_calls_per_tool_per_turn: dict[str, int] = Field(default_factory=dict)
+    spoken_error_fallback: str = "Sorry, I ran into a snag. Could you say that again?"
+
+
+class Agent:
+    """Single unified agent engine for Foreground, Announcer, and Worker."""
+
+    def __init__(
+        self,
+        model: Any,
+        tools: ToolRegistry | None = None,
+        config: AgentConfig | dict[str, Any] | None = None,
+        env: Any = None,
+    ) -> None:
+        self.model = model
+        self.tools = tools
+        self.env = env
+        self.config = config if isinstance(config, AgentConfig) else AgentConfig(**(config or {}))
+        self.messages: list[dict[str, Any]] = []
+        self.cost: float = 0.0
+        self.turn_cost: float = 0.0
+        self.n_calls: int = 0
+        self.turn_calls: int = 0
+        self._tools_executed: int = 0
+        self._start_time: float = time.time()
+        self._delivered_text: str = ""
+        self.extra_template_vars: dict[str, Any] = {}
+        self.logger = logging.getLogger("verbix.agent")
+
+    def _render(self, template_str: str, **kwargs: Any) -> str:
+        if not template_str:
+            return ""
+        ctx = {**platform.uname()._asdict(), **self.config.model_dump(), **self.extra_template_vars, **kwargs}
+        try:
+            return Template(template_str, undefined=StrictUndefined).render(**ctx)
+        except Exception:
+            return Template(template_str).render(**ctx)
+
+    def _active_tool_defs(self, per_turn_counts: dict[str, int]) -> list[dict[str, Any]] | None:
+        if self.tools is None or self.config.tool_choice == "none":
+            return None
+        allowed = [
+            name for name in (self.config.tools or list(self.tools._handlers))
+            if per_turn_counts.get(name, 0) < self.config.max_calls_per_tool_per_turn.get(name, 999999)
+        ]
+        if not allowed:
+            return None
+        defs = self.tools.get_definitions(allowed)
+        return defs or None
+
+    async def _execute_tool(self, name: str, args: dict[str, Any]) -> ToolResult:
+        if self.tools is None:
+            return ToolResult(f"Error: Tool '{name}' is not available.", is_error=True)
+        try:
+            res = await self.tools.aexecute(name, args)
+            self._tools_executed += 1
+            return res if isinstance(res, ToolResult) else ToolResult(str(res))
+        except Exception as e:
+            return ToolResult(f"Error executing '{name}': {e}", is_error=True)
+
+    async def step_stream(self, user_input: str | None = None) -> AsyncIterator[AgentEvent]:
+        if self.config.turn_scoped_limits:
+            self.turn_calls = 0
+            self.turn_cost = 0.0
+
+        is_initial = not any(m.get("role") == "user" for m in self.messages)
+        if not self.messages and self.config.system_template:
+            sys_text = self._render(self.config.system_template)
+            if sys_text:
+                self.messages.append({"role": "system", "content": sys_text})
+
+        if user_input is not None:
+            content = (
+                self._render(self.config.instance_template, task=user_input)
+                if is_initial and self.config.instance_template
+                else user_input
+            )
+            self.messages.append({"role": "user", "content": content})
+
+        repeat_history: list[tuple[str, str]] = []
+        per_turn_counts: dict[str, int] = {}
+        format_errors = 0
+
+        try:
+            while True:
+                calls = self.turn_calls if self.config.turn_scoped_limits else self.n_calls
+                spent = self.turn_cost if self.config.turn_scoped_limits else self.cost
+                if (0 < self.config.step_limit <= calls) or (0 < self.config.cost_limit <= spent):
+                    yield TurnComplete(final_text=self._delivered_text, exit_reason="limits_exceeded", is_error=True)
+                    return
+                if 0 < self.config.wall_time_limit_seconds <= int(time.time() - self._start_time):
+                    yield TurnComplete(final_text=self._delivered_text, exit_reason="time_exceeded", is_error=True)
+                    return
+
+                self.n_calls += 1
+                self.turn_calls += 1
+                self._delivered_text = ""
+                self.messages[:] = compact_messages(self.messages, max_tokens=self.config.max_context_tokens)
+
+                tool_defs = self._active_tool_defs(per_turn_counts)
+                stream_kwargs: dict[str, Any] = {}
+                if self.config.tool_choice == "none" or tool_defs is None:
+                    stream_kwargs["tool_choice"] = "none"
+                elif self.config.tool_choice:
+                    stream_kwargs["tool_choice"] = self.config.tool_choice
+
+                accumulated_tcs: dict[int, dict[str, Any]] = {}
+                buffered_deltas: list[TextDelta] = []
+                pending_text = ""
+                released_text = ""
+                has_tool_calls = False
+
+                async for event in self.model.query_stream(self.messages, tools=tool_defs, **stream_kwargs):
+                    if isinstance(event, TextDelta):
+                        if has_tool_calls:
+                            continue
+                        if not self.config.speech_chunking:
+                            self._delivered_text += event.text
+                            released_text += event.text
+                            yield event
+                        else:
+                            buffered_deltas.append(event)
+                            pending_text += event.text
+                            if len(split_chunks(pending_text)) > 1:
+                                for d in buffered_deltas:
+                                    self._delivered_text += d.text
+                                    yield d
+                                released_text += pending_text
+                                pending_text = ""
+                                buffered_deltas.clear()
+                    elif isinstance(event, ThoughtDelta):
+                        yield event
+                    elif isinstance(event, ToolCallDelta):
+                        has_tool_calls = True
+                        buffered_deltas.clear()
+                        pending_text = ""
+                        tc = accumulated_tcs.setdefault(
+                            event.index,
+                            {"call_id": event.call_id or f"call_{event.index}", "name": "", "arguments": ""},
+                        )
+                        if event.call_id:
+                            tc["call_id"] = event.call_id
+                        if event.name:
+                            tc["name"] = event.name
+                        if event.arguments_delta:
+                            tc["arguments"] += event.arguments_delta
+
+                if not has_tool_calls:
+                    for d in buffered_deltas:
+                        self._delivered_text += d.text
+                        yield d
+                    buffered_deltas.clear()
+
+                    # Worker guard: require at least one tool call before concluding
+                    if self.config.require_tool_before_finish and self._tools_executed == 0:
+                        format_errors += 1
+                        if format_errors >= self.config.max_consecutive_format_errors:
+                            yield TurnComplete(final_text="", exit_reason="format_error", is_error=True)
+                            return
+                        self.messages.append({"role": "assistant", "content": self._delivered_text})
+                        self.messages.append({
+                            "role": "user",
+                            "content": "You have not executed any tools yet. Execute a tool to perform the task.",
+                        })
+                        continue
+
+                    self.messages.append({"role": "assistant", "content": self._delivered_text})
+                    yield TurnComplete(final_text=self._delivered_text, exit_reason="ok", is_error=False)
+                    return
+
+                # Prepare and record assistant tool-call message
+                calls_to_run: list[dict[str, Any]] = []
+                for idx in sorted(accumulated_tcs):
+                    raw = accumulated_tcs[idx]
+                    raw_str = raw["arguments"]
+                    try:
+                        parsed = json.loads(raw_str) if raw_str.strip() else {}
+                    except json.JSONDecodeError:
+                        parsed = parse_lenient_json(raw_str)
+                    calls_to_run.append({
+                        "call_id": raw["call_id"],
+                        "name": raw["name"],
+                        "args": parsed if isinstance(parsed, dict) else {},
+                        "args_str": raw_str,
+                    })
+
+                self.messages.append({
+                    "role": "assistant",
+                    "content": released_text or None,
+                    "tool_calls": [
+                        {
+                            "id": c["call_id"],
+                            "type": "function",
+                            "function": {"name": c["name"], "arguments": c["args_str"]},
+                        }
+                        for c in calls_to_run
+                    ],
+                })
+
+                # Execute tools with per-turn cap and repeat circuit breaker
+                for c in calls_to_run:
+                    name, call_id, args = c["name"], c["call_id"], c["args"]
+                    cap = self.config.max_calls_per_tool_per_turn.get(name)
+                    if cap is not None and per_turn_counts.get(name, 0) >= cap:
+                        res = ToolResult(
+                            f"Tool '{name}' already called in this turn. Answer the user directly using the previous result.",
+                            is_error=True,
+                        )
+                    else:
+                        per_turn_counts[name] = per_turn_counts.get(name, 0) + 1
+                        yield ToolCallStarted(call_id=call_id, tool_name=name, arguments=args)
+                        if self.tools and self.tools.is_side_effecting(name):
+                            pending = asyncio.ensure_future(self._execute_tool(name, args))
+                            try:
+                                res = await asyncio.shield(pending)
+                            except asyncio.CancelledError:
+                                res = await pending
+                                self.messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": call_id,
+                                    "name": name,
+                                    "content": res.observation,
+                                })
+                                raise
+                        else:
+                            res = await self._execute_tool(name, args)
+
+                    yield ToolCallFinished(call_id=call_id, observation=res.observation, is_error=res.is_error)
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": name,
+                        "content": res.observation,
+                    })
+
+                    sig = (name, json.dumps(args, sort_keys=True))
+                    repeat_history.append(sig)
+                    if (
+                        len(repeat_history) >= self.config.repeat_limit
+                        and len(set(repeat_history[-self.config.repeat_limit:])) == 1
+                    ):
+                        yield TurnComplete(
+                            final_text=self._delivered_text,
+                            exit_reason="repeated_tool_call",
+                            is_error=True,
+                        )
+                        return
+
+                    if res.is_terminal:
+                        yield TurnComplete(
+                            final_text=res.observation,
+                            exit_reason="terminal_tool",
+                            is_error=res.is_error,
+                        )
+                        return
+
+        except asyncio.CancelledError:
+            self.messages[:] = validate_and_repair_history(self.messages, delivered_text="")
+            raise
+        except Exception as e:
+            self.logger.warning("Agent turn failed: %s", e)
+            self.messages[:] = validate_and_repair_history(self.messages, delivered_text=self._delivered_text)
+            note = self.config.spoken_error_fallback
+            self.messages.append({"role": "assistant", "content": note})
+            yield TurnComplete(final_text=note, exit_reason="exception", is_error=True)</code></pre>
+
+      <h3>5.2 Voice Output Sanitization Firewall &amp; Spawn Objective Gate</h3>
+      <div class="code-header">
+        <span>src/verbix/voice/output.py (Firewall excerpt) &amp; src/verbix/tools/spawn.py</span>
+        <span>Python 3.12+ • Zero Control-Token Leaks</span>
+      </div>
+      <pre><code>import re
+from verbix.core.events import AgentEvent, TextDelta, TurnComplete
+from verbix.tools.base import ToolContext, ToolResult
+
+# 1. Audio Sanitization Firewall in SpeechOutput (src/verbix/voice/output.py)
+_INTERNAL_TOKENS = frozenset({
+    "RepeatedToolCall",
+    "LimitsExceeded",
+    "TimeExceeded",
+    "RepeatedFormatError",
+    "FormatError",
+})
+_CAMEL_CONTROL_RE = re.compile(r"\b(?:RepeatedToolCall|LimitsExceeded|TimeExceeded|RepeatedFormatError)\b")
+
+
+def sanitize_spoken_text(text: str) -> str:
+    """Strips internal control identifiers so they can never reach Kokoro TTS."""
+    cleaned = (text or "").strip()
+    if not cleaned or cleaned in _INTERNAL_TOKENS:
+        return ""
+    return _CAMEL_CONTROL_RE.sub("", cleaned).strip()
+
+
+# Inside SpeechOutput.emit(self, event: AgentEvent):
+# elif isinstance(event, TurnComplete):
+#     buf, self._buf = self._buf, ""
+#     if buf.strip():
+#         for s in _sentences(sanitize_spoken_text(buf)):
+#             self._frames.put_nowait((self._epoch, "text", s))
+#     if getattr(event, "exit_reason", "ok") == "ok" and not getattr(event, "is_error", False):
+#         safe_final = sanitize_spoken_text(event.final_text)
+#         rest = self._tail(safe_final)
+#         if rest:
+#             for s in _sentences(rest) or [rest]:
+#                 self._frames.put_nowait((self._epoch, "text", s))
+#     self._frames.put_nowait((self._epoch, "end", ""))
+
+
+# 2. Objective Integrity & STT-Noise Gate in SpawnTool (src/verbix/tools/spawn.py)
+_SPECULATIVE_OBJECTIVE_RE = re.compile(
+    r"(?i)\b("
+    r"figure\s+out\s+what\s+['\"].+?['\"]\s+refers\s+to|"
+    r"check\s+system\s+logs|"
+    r"recent\s+clues|"
+    r"journalctl|"
+    r"bash_history|"
+    r"what\s+the\s+user\s+meant\s+by"
+    r")\b"
+)
+
+
+class SpawnTool:
+    name: str = "spawn"
+    side_effecting: bool = True
+    description: str = (
+        "Starts an autonomous background worker for a concrete user-requested task. "
+        "Never call spawn on ambiguous speech, greetings, or suspected transcription errors."
+    )
+
+    def __init__(self, runtime: object) -> None:
+        self.runtime = runtime
+
+    async def execute(self, args: dict[str, object], context: ToolContext) -> ToolResult:
+        objective = str(args.get("objective", "")).strip()
+        if len(objective) < 8:
+            return ToolResult("error: objective is too vague to spawn background work.", is_error=True)
+
+        if _SPECULATIVE_OBJECTIVE_RE.search(objective):
+            return ToolResult(
+                "error: objective contains speculative system inspection or unresolved speech ambiguity. "
+                "Do not spawn a worker to guess what a phrase means; ask the user to clarify in one short sentence.",
+                is_error=True,
+            )
+
+        task_id = await self.runtime.spawn(objective)
+        return ToolResult(f"{task_id} started in background.")</code></pre>
+
+      <h3>5.3 Workspace-Sandboxed Bash Tool (<code>src/verbix/tools/sandbox.py</code> &amp; <code>src/verbix/tools/bash.py</code>)</h3>
+      <div class="code-header">
+        <span>src/verbix/tools/sandbox.py &amp; src/verbix/tools/bash.py</span>
+        <span>Python 3.12+ • Default-Deny Workspace Containment</span>
+      </div>
+      <pre><code>import asyncio
+import os
+import re
+import shlex
+import shutil
+import signal
+from pathlib import Path
+from verbix.tools.base import ToolContext, ToolResult
+
+# Deterministic cross-platform guard blocking root traversal & system/history harvesting
+_FORBIDDEN_CMD_RE = re.compile(
+    r"(?i)(?:^|[;&|()\s])("
+    r"journalctl|dmesg|lastlog|ausearch|"
+    r"ps\s+(?:aux|-ef|-e)|"
+    r"find\s+/(?:\s|$)|"
+    r"cat\s+.*(?:\.bash_history|\.zsh_history|/etc/shadow|/etc/passwd|/var/log)"
+    r")(?:\s|$)"
+)
+
+_SENSITIVE_PATHS = (
+    "/var/log",
+    "/proc",
+    "/sys",
+    "/etc/shadow",
+    ".bash_history",
+    ".zsh_history",
+    ".ssh",
+    ".gnupg",
+)
+
+
+def validate_workspace_command(command: str, workspace: Path) -> str | None:
+    """Returns a rejection reason if `command` escapes workspace or inspects host logs/state."""
+    if _FORBIDDEN_CMD_RE.search(command):
+        return "blocked: system log, process table, or root filesystem inspection is prohibited."
+
+    ws_resolved = workspace.resolve()
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        tokens = command.split()
+
+    for tok in tokens:
+        cleaned = tok.strip("\"'`;|&()")
+        if any(s in cleaned for s in _SENSITIVE_PATHS):
+            return f"blocked: access to sensitive host path '{cleaned}' is prohibited."
+        if cleaned.startswith("/") and not cleaned.startswith(("/dev/null", "/tmp")):
+            try:
+                target = Path(cleaned).resolve()
+                if not (target == ws_resolved or ws_resolved in target.parents):
+                    return f"blocked: absolute path '{cleaned}' is outside workspace '{ws_resolved}'."
+            except OSError:
+                return f"blocked: invalid path '{cleaned}'."
+        if ".." in Path(cleaned).parts:
+            candidate = (ws_resolved / cleaned).resolve()
+            if not (candidate == ws_resolved or ws_resolved in candidate.parents):
+                return f"blocked: path '{cleaned}' escapes workspace '{ws_resolved}'."
+    return None
+
+
+def build_isolated_env(workspace: Path) -> dict[str, str]:
+    """Builds a minimal, secret-free environment rooted inside the workspace."""
+    scratch_home = workspace / ".verbix" / "home"
+    scratch_tmp = workspace / ".verbix" / "tmp"
+    scratch_home.mkdir(parents=True, exist_ok=True)
+    scratch_tmp.mkdir(parents=True, exist_ok=True)
+    return {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(scratch_home),
+        "TMPDIR": str(scratch_tmp),
+        "HISTFILE": "/dev/null",
+        "PAGER": "cat",
+        "MANPAGER": "cat",
+        "PIP_PROGRESS_BAR": "off",
+        "TQDM_DISABLE": "1",
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+    }
+
+
+class BashTool:
+    name: str = "bash"
+    side_effecting: bool = False
+    description: str = "Executes a workspace-confined bash command."
+
+    def __init__(self, sandboxed: bool = True, allow_network: bool = False) -> None:
+        self.sandboxed = sandboxed
+        self.allow_network = allow_network
+
+    async def execute(self, args: dict[str, object], context: ToolContext) -> ToolResult:
+        command = str(args.get("command", "")).strip()
+        if not command:
+            return ToolResult("error: empty command", is_error=True)
+
+        violation = validate_workspace_command(command, context.workspace)
+        if violation is not None:
+            return ToolResult(f"error: {violation}", is_error=True)
+
+        # Executes with isolated HOME/TMPDIR and bwrap (--unshare-pid) when available
+        ...</code></pre>
+
+      <h3>5.4 Migration Roadmap: What to Delete, Simplify, and Standardize</h3>
+      <div>
+        <div class="checklist-item">
+          <span class="check-tag tag-delete">Delete</span>
+          <div>
+            <strong><code>src/verbix/agent/agents/default.py</code> (688 lines):</strong> Delete legacy Mini-SWE-Agent port (`DefaultAgent`, synchronous `step()`, `query()`, `execute_actions()`, `serialize()`). Re-export `Agent` and `AgentConfig` from `src/verbix/agent/engine.py` for backwards-compatible imports.
+          </div>
+        </div>
+
+        <div class="checklist-item">
+          <span class="check-tag tag-delete">Delete</span>
+          <div>
+            <strong><code>src/verbix/agent/worker.py</code> (375 lines) &amp; <code>src/verbix/agent/announcer.py</code> (46 lines):</strong> Delete both standalone loop implementations. Replace with thin factory helpers (`build_worker_config`, `build_announcer_config`) that instantiate the unified `Agent` class.
+          </div>
+        </div>
+
+        <div class="checklist-item">
+          <span class="check-tag tag-delete">Delete</span>
+          <div>
+            <strong><code>ProviderStreamAdapter.query()</code> in <code>src/verbix/runtime/foreground.py:287-331</code>:</strong> Delete the batch-accumulation wrapper that consumed streams into static dicts for `WorkerAgent`. All agents now call `query_stream()` exclusively.
+          </div>
+        </div>
+
+        <div class="checklist-item">
+          <span class="check-tag tag-simplify">Simplify</span>
+          <div>
+            <strong><code>WorkerTask._run()</code> in <code>src/verbix/runtime/worker.py:123-208</code>:</strong> Collapse the 85-line 3-branch reflection harness (`has_run` / `has_step_stream` / `hasattr(step)`) into a single 15-line `async for event in self.session.step_stream(self.description):` consumer that emits live `TextDelta`/`ToolCallStarted` telemetry and reads `TurnComplete(final_text, exit_reason, is_error)`.
+          </div>
+        </div>
+
+        <div class="checklist-item">
+          <span class="check-tag tag-standardize">Standardize</span>
+          <div>
+            <strong><code>TurnComplete</code> in <code>src/verbix/core/events.py:45</code> &amp; <code>SpeechOutput.emit()</code> in <code>src/verbix/voice/output.py:130-141</code>:</strong> Add `exit_reason: ExitReason = "ok"` and `is_error: bool = False` to `TurnComplete`. Enforce the `sanitize_spoken_text()` firewall in `SpeechOutput.emit()` so internal circuit-breaker codes never enter TTS synthesis.
+          </div>
+        </div>
+
+        <div class="checklist-item">
+          <span class="check-tag tag-standardize">Standardize</span>
+          <div>
+            <strong><code>TOOL_CATALOG["bash"]</code> in <code>src/verbix/tools/__init__.py:62</code> &amp; <code>SpawnTool</code> in <code>src/verbix/tools/spawn.py</code>:</strong> Enable `BashTool(sandboxed=True)` by default with `validate_workspace_command()` + isolated `HOME`/`HISTFILE`, add the STT-noise/speculation gate in `SpawnTool.execute()`, and set `max_calls_per_tool_per_turn: {"status": 1, "cancel": 1}` in `voice.yaml`.
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

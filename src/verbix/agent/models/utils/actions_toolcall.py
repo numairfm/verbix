@@ -49,7 +49,7 @@ def parse_toolcall_actions(
         user_msg = {
             "role": "user",
             "content": Template(format_error_template, undefined=StrictUndefined).render(
-                error="No tool calls found in the response. Every response MUST include at least one tool call.",
+                error="No tool calls found. Execute a tool if you need to take an action, or output your direct factual conclusion in text if you are done.",
                 actions=[],
                 has_tool_calls=False,
                 **template_kwargs,

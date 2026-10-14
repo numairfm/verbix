@@ -27,16 +27,16 @@ def test_worker_prompt_contains_zero_examples_and_has_invariants():
     for ex in forbidden_examples:
         assert ex not in prompt, f"Forbidden example found in worker prompt: {ex}"
 
-    # Assert tools include bash and finish
+    # Assert tools include bash and not finish
     tools = worker_data["agent"].get("tools", [])
     assert "bash" in tools, "worker must have bash tool"
-    assert "finish" in tools, "worker must have finish tool"
+    assert "finish" not in tools, "worker must not have finish tool"
 
     # Assert execution invariants
     assert "Discover" in prompt
     assert "Execute" in prompt
     assert "Verify" in prompt
-    assert "finish" in prompt
+    assert "Complete" in prompt
 
     # Assert zero benchmark submission token references anywhere in worker.yaml
     assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in raw_text, (

@@ -40,17 +40,20 @@ async def test_runtime_spawn_and_completion_loop(tmp_path):
     stream_calls = 0
 
     async def finishing_stream(messages, tools=None, **kwargs):
-        """First call (worker turn) finishes via the finish tool; later calls answer normally."""
+        """Worker executes bash then finishes with text; later calls answer normally."""
         nonlocal stream_calls
         stream_calls += 1
         if stream_calls == 1:
             yield ProviderToolCallDelta(
                 index=0,
                 call_id="c1",
-                name="finish",
-                arguments_delta=json.dumps({"summary": "2, 3, 5, 7, 11 are primes."}),
+                name="bash",
+                arguments_delta=json.dumps({"command": "echo 'primes'"}),
             )
             yield ProviderFinish(reason="tool_calls")
+        elif stream_calls == 2:
+            yield ProviderTextDelta(text="2, 3, 5, 7, 11 are primes.")
+            yield ProviderFinish(reason="stop")
         else:
             yield ProviderTextDelta(text="The prime calculation finished: 2, 3, 5, 7, 11.")
             yield ProviderFinish(reason="stop")

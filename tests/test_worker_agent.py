@@ -35,7 +35,7 @@ async def test_worker_rejects_chatter_without_tool_call():
     assert result["status"] == "completed"
     assert result["summary"] == "done"
     # Verify format error was fed back after the first response
-    assert any("MUST execute a tool" in m.get("content", "") for m in agent.messages if m.get("role") == "user")
+    assert any("You have not executed any tools yet" in m.get("content", "") for m in agent.messages if m.get("role") == "user")
 
 
 @pytest.mark.asyncio
@@ -503,7 +503,7 @@ async def test_worker_circuit_breaker_intercepts_repeated_calls():
         "Error: Tool 'bash' was called 3 times consecutively with identical arguments without progress"
         in tool_msgs[2]["content"]
     )
-    assert "You must try a different approach or call 'finish'." in tool_msgs[2]["content"]
+    assert "You must try a different approach or output your direct conclusion." in tool_msgs[2]["content"]
     assert tool_msgs[3]["content"] == "recovered"
 
     cb_events = [e for e in events if isinstance(e, ToolCallFinished) and e.is_error]

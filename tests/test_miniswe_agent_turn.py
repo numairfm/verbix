@@ -349,7 +349,7 @@ def test_agent_yaml_configs():
     assert "agent" in worker_cfg_dict
     worker_agent = AgentConfig(**worker_cfg_dict["agent"])
     assert "bash" in worker_agent.tools
-    assert "finish" in worker_agent.tools
+    assert "finish" not in worker_agent.tools
     assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in worker_agent.instance_template
 
     # Legacy swe_worker alias
@@ -357,7 +357,7 @@ def test_agent_yaml_configs():
     assert "agent" in legacy_cfg_dict
     legacy_agent = AgentConfig(**legacy_cfg_dict["agent"])
     assert "bash" in legacy_agent.tools
-    assert "finish" in legacy_agent.tools
+    assert "finish" not in legacy_agent.tools
 
 
 @pytest.mark.asyncio

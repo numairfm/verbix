@@ -39,7 +39,6 @@ def build_worker_registry(workspace: Path | None = None) -> ToolRegistry:
             "web_fetch",
             "screenshot",
             "bash",
-            "finish",
         ],
         workspace=workspace,
     )
@@ -138,7 +137,6 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
         "web_fetch",
         "screenshot",
         "bash",
-        "finish",
     ]
     worker_tools = build_registry(
         worker_tool_names,

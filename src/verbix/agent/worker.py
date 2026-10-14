@@ -190,7 +190,10 @@ class WorkerAgent:
             if 0 < self.config.cost_limit <= self.cost:
                 return ToolResult("LimitsExceeded: cost limit reached", is_error=True, is_terminal=True)
             self.n_consecutive_format_errors += 1
-            err_content = "Error: No tool call found. Every step MUST execute a tool."
+            if self._tools_executed == 0:
+                err_content = "No tool calls found. You have not executed any tools yet. Execute a tool to perform work."
+            else:
+                err_content = "No tool calls or response found. Execute a tool if you need to take an action, or output your direct factual conclusion in text if you are done."
             if e.messages:
                 self.messages.extend(e.messages)
                 err_content = e.messages[-1].get("content", err_content)
@@ -230,7 +233,10 @@ class WorkerAgent:
                 return ToolResult(content, is_error=False, is_terminal=True)
 
             self.n_consecutive_format_errors += 1
-            err_msg = "Error: No tool call found. Every step MUST execute a tool."
+            if self._tools_executed == 0:
+                err_msg = "No tool calls found. You have not executed any tools yet. Execute a tool to perform work."
+            else:
+                err_msg = "No tool calls or response found. Execute a tool if you need to take an action, or output your direct factual conclusion in text if you are done."
             self.messages.append({"role": "user", "content": err_msg})
             if self.on_event is not None:
                 try:
@@ -281,7 +287,7 @@ class WorkerAgent:
                 if self._consecutive_tool_repeats >= 3:
                     result = ToolResult(
                         f"Error: Tool '{name}' was called 3 times consecutively with identical arguments without progress. "
-                        "You must try a different approach or call 'finish'.",
+                        "You must try a different approach or output your direct conclusion.",
                         is_error=True,
                     )
                 else:

@@ -16,7 +16,6 @@ def test_worker_registry_has_main_tools():
         "web_fetch",
         "screenshot",
         "bash",
-        "finish",
     }
     for name in names:
         assert name in registry._handlers

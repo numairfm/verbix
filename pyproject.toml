@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Numair Mazloum", email = "numairfmazloum@gmail.com" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.15"
 dependencies = [
     "jinja2>=3.1.0",
     "litellm>=1.75.5,!=1.82.7,!=1.82.8",

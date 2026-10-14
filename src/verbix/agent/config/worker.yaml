@@ -107,7 +107,7 @@ model:
 
     Use 'screenshot' to capture the desktop display:
     - Tool: screenshot
-    - Arguments: {}
+    - Arguments: {} or {"path": "bug.png"}
 
     Use 'bash' only for commands with no dedicated tool:
     - Tool: bash

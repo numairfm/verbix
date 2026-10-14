@@ -129,12 +129,22 @@ def _snapshot_foreground_history(runtime: Any) -> list:
     return clean
 
 
+def _can_announce(runtime: Any) -> bool:
+    floor = getattr(runtime, "floor", None)
+    if floor is None:
+        return False
+    can_ann = getattr(floor, "can_announce", None)
+    if callable(can_ann):
+        return bool(can_ann())
+    return bool(getattr(floor, "is_idle", False))
+
+
 async def drain_pending_announcements(runtime: Any) -> None:
     """Speaks accumulated background completions via the single foreground companion."""
-    if not runtime.floor.is_idle or not runtime._pending_announcements:
+    if not _can_announce(runtime) or not runtime._pending_announcements:
         return
     async with runtime._drain_lock:
-        if not runtime.floor.is_idle or not runtime._pending_announcements:
+        if not _can_announce(runtime) or not runtime._pending_announcements:
             return
         ledger = getattr(runtime, "ledger", None)
         batch: list[tuple[str, str]] = []
@@ -156,8 +166,21 @@ async def drain_pending_announcements(runtime: Any) -> None:
             "State the outcome clearly, and only add a follow-up question if a genuine next step exists:]\n"
             + "\n\n".join(items)
         )
-        final_text = await runtime.submit(prompt, runtime.wake_output, agent=runtime.announcer)
-        was_interrupted = bool(getattr(runtime.floor, "interrupt_requested", False))
+        try:
+            final_text = await runtime.submit(prompt, runtime.wake_output, agent=runtime.announcer)
+        except asyncio.CancelledError:
+            for item in reversed(batch):
+                if item not in runtime._pending_announcements:
+                    runtime._pending_announcements.insert(0, item)
+            raise
+
+        last_handle = getattr(runtime, "_last_turn_handle", None)
+        turn_completed = getattr(last_handle, "completed", True) if last_handle is not None else True
+        was_interrupted = (
+            bool(getattr(runtime.floor, "interrupt_requested", False))
+            or bool(getattr(runtime.floor, "user_speaking", False))
+            or not turn_completed
+        )
         if final_text and not was_interrupted:
             if ledger is not None:
                 for task_id, _ in batch:
@@ -167,8 +190,7 @@ async def drain_pending_announcements(runtime: Any) -> None:
                     {"role": "user", "content": f"[Task '{task_id}' completed]: {res}"}
                 )
             runtime.foreground.messages.append({"role": "assistant", "content": final_text})
-        else:
-            # Re-queue unvoiced items so they stay pending
+        elif was_interrupted:
             for item in reversed(batch):
                 if item not in runtime._pending_announcements:
                     runtime._pending_announcements.insert(0, item)

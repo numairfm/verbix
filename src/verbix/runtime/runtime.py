@@ -404,7 +404,7 @@ class Runtime:
         return await spawn_worker(self, task)
 
     def _on_floor_state_changed(self, prev_state: FloorState, new_state: FloorState) -> None:
-        if new_state == FloorState.IDLE and self._pending_announcements:
+        if self.floor.can_announce() and self._pending_announcements:
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(self._drain_pending_announcements())

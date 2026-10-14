@@ -74,7 +74,10 @@ def finish_runtime_task(runtime: Any, task_id: str, result: str) -> None:
         runtime._broadcast_event("task_completed", {"task_id": task_id, "result": result})
     if hasattr(runtime, "_pending_announcements"):
         runtime._pending_announcements.append((task_id, result))
-    if getattr(runtime, "floor", None) and getattr(runtime.floor, "is_idle", False):
+    if getattr(runtime, "floor", None) and (
+        getattr(runtime.floor, "can_announce", lambda: False)()
+        or getattr(runtime.floor, "is_idle", False)
+    ):
         try:
             loop = asyncio.get_running_loop()
             drain = getattr(runtime, "_drain_pending_announcements", None) or (
@@ -95,7 +98,10 @@ def fail_runtime_task(runtime: Any, task_id: str, result: str) -> None:
         runtime._broadcast_event("task_failed", {"task_id": task_id, "result": result})
     if hasattr(runtime, "_pending_announcements"):
         runtime._pending_announcements.append((task_id, result))
-    if getattr(runtime, "floor", None) and getattr(runtime.floor, "is_idle", False):
+    if getattr(runtime, "floor", None) and (
+        getattr(runtime.floor, "can_announce", lambda: False)()
+        or getattr(runtime.floor, "is_idle", False)
+    ):
         try:
             loop = asyncio.get_running_loop()
             drain = getattr(runtime, "_drain_pending_announcements", None) or (

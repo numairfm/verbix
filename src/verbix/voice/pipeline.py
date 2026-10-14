@@ -202,6 +202,8 @@ class VoicePipeline:
         if hasattr(self.runtime, "floor"):
             from verbix.runtime.floor import FloorState
 
+            if hasattr(self.runtime.floor, "set_user_speaking"):
+                self.runtime.floor.set_user_speaking(False)
             self.runtime.floor.set_state(FloorState.IDLE)
 
         return {"action": "continuous_stopped"}
@@ -226,6 +228,8 @@ class VoicePipeline:
 
             if hasattr(self.runtime.floor, "request_interrupt"):
                 self.runtime.floor.request_interrupt()
+            if hasattr(self.runtime.floor, "set_user_speaking"):
+                self.runtime.floor.set_user_speaking(True)
             self.runtime.floor.set_state(FloorState.LISTENING)
 
         old = self._live_stt
@@ -345,6 +349,12 @@ class VoicePipeline:
             if not self._gate_stt_feed and self._live_stt is not None:
                 try:
                     self._live_stt.feed(chunk)
+                    if (
+                        getattr(self._live_stt, "is_speech_detected", False)
+                        and hasattr(self.runtime, "floor")
+                        and hasattr(self.runtime.floor, "set_user_speaking")
+                    ):
+                        self.runtime.floor.set_user_speaking(True)
                     if self._dump_mic_dir is not None:
                         self._dump_buf.extend(chunk)
                 except (OSError, RuntimeError) as e:
@@ -381,6 +391,10 @@ class VoicePipeline:
 
                 transcribed_text = transcribed_text.strip()
                 if not transcribed_text:
+                    if hasattr(self.runtime, "floor") and hasattr(
+                        self.runtime.floor, "set_user_speaking"
+                    ):
+                        self.runtime.floor.set_user_speaking(False)
                     if self._is_continuous_active:
                         await self._setup_turn_listening()
                     continue
@@ -549,6 +563,8 @@ class VoicePipeline:
         self._speech_output.reset()
         if self.runtime is not None and hasattr(self.runtime, "floor"):
             self.runtime.floor.set_state(FloorState.SPEAKING)
+            if hasattr(self.runtime.floor, "set_user_speaking"):
+                self.runtime.floor.set_user_speaking(False)
         try:
             try:
                 sig = inspect.signature(self.runtime.submit)

@@ -19,11 +19,13 @@ from collections import deque
 from collections.abc import AsyncIterator
 from typing import Any
 
-from verbix.voice.sinks import SubprocessAudioSink
-
 logger = logging.getLogger(__name__)
 
 FADE_SECONDS = 0.01
+_PORTAUDIO_HINT = (
+    "Audio output unavailable (PortAudio missing or no output device). "
+    "On Linux, install 'libportaudio2' (Debian/Ubuntu) or 'portaudio' (Fedora/Arch)."
+)
 
 
 def apply_fade(samples: list[float], sample_rate: int = 24000) -> list[float]:
@@ -54,7 +56,7 @@ class CallbackAudioSink:
         try:
             import sounddevice as sd
         except (ImportError, OSError) as e:
-            raise RuntimeError(f"sounddevice audio library unavailable: {e}") from e
+            raise RuntimeError(f"{_PORTAUDIO_HINT} ({e})") from e
 
         self.sample_rate = sample_rate
         self.channels = channels
@@ -66,13 +68,17 @@ class CallbackAudioSink:
         self._feeding = False
         self._fade_total = 0
         self._fade_left = 0
-        self._stream = sd.OutputStream(
-            samplerate=sample_rate,
-            channels=channels,
-            dtype="float32",
-            callback=self._callback,
-        )
-        self._stream.start()
+        try:
+            self._stream = sd.OutputStream(
+                samplerate=sample_rate,
+                blocksize=sample_rate // 50,
+                channels=channels,
+                dtype="float32",
+                callback=self._callback,
+            )
+            self._stream.start()
+        except Exception as e:
+            raise RuntimeError(f"{_PORTAUDIO_HINT} ({e})") from e
 
     @property
     def played_samples(self) -> int:
@@ -163,30 +169,3 @@ class CallbackAudioSink:
             yield audio_data
 
         return await self.play_stream(_single())
-
-
-def select_sink(kind: str = "auto", **kwargs: Any) -> Any:
-    """Pick an AudioSink: `callback` iff a device opens, else subprocess.
-
-    `auto` falls back to subprocess on any failure (missing/broken
-    sounddevice, no output device); explicit `callback` raises a clean error.
-    """
-    kind = (kind or "auto").lower()
-    if kind == "subprocess":
-        return SubprocessAudioSink(**kwargs)
-    if kind == "callback":
-        try:
-            return CallbackAudioSink(**kwargs)
-        except ImportError:
-            raise
-        except Exception as e:
-            raise RuntimeError(f"callback audio sink unavailable: {e}") from e
-    if kind == "auto":
-        try:
-            return CallbackAudioSink(**kwargs)
-        except Exception as e:  # noqa: BLE001 - auto must fall back on any backend failure
-            logger.debug("callback sink unavailable, using subprocess: %s", e)
-            return SubprocessAudioSink(**kwargs)
-    raise ValueError(
-        f"unknown audio sink: {kind!r} (expected auto|callback|subprocess)"
-    )

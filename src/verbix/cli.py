@@ -142,12 +142,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Voice interaction mode (default: continuous — hands-free conversation; ptt — push-to-talk).",
     )
     parser.add_argument(
-        "--audio-sink",
-        choices=("auto", "callback", "subprocess"),
-        default="auto",
-        help="Audio playback backend (default: auto — callback if sounddevice is installed, else subprocess).",
-    )
-    parser.add_argument(
         "--stt-model",
         type=str,
         default=None,
@@ -369,7 +363,7 @@ def _build_voice_pipeline(
     args: argparse.Namespace,
     printer: CliPrinter | None = None,
 ) -> tuple[Any, Any, Any]:
-    from verbix.voice.callback_sink import select_sink
+    from verbix.voice.callback_sink import CallbackAudioSink
     from verbix.voice.capture import PTTCapture
     from verbix.voice.pipeline import VoicePipeline
     from verbix.voice.player import AudioPlayer
@@ -379,8 +373,7 @@ def _build_voice_pipeline(
     stt_model = load_config(runtime.workspace, args).get("stt_model")
     stt = TranscribeSTT(model_path=stt_model, workspace=runtime.workspace)
     tts = SherpaTTS()
-    sink = select_sink(
-        getattr(args, "audio_sink", "auto"),
+    sink = CallbackAudioSink(
         sample_rate=24000,
         audio_format="f32",
     )

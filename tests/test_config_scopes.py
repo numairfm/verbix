@@ -200,7 +200,8 @@ def test_stt_model_from_config_reaches_transcribe_stt(tmp_path, monkeypatch):
             captured["model_path"] = model_path
 
     monkeypatch.setattr(stt_mod, "TranscribeSTT", FakeSTT)
-    args = build_parser().parse_args(["--workspace", str(ws), "--audio-sink", "subprocess"])
+    monkeypatch.setattr("verbix.voice.callback_sink.CallbackAudioSink", lambda *a, **k: object())
+    args = build_parser().parse_args(["--workspace", str(ws)])
     runtime = build_runtime(args)
     _build_voice_pipeline(runtime, args)
     assert str(captured["model_path"]) == str(model)
@@ -225,9 +226,9 @@ def test_stt_model_flag_beats_config_file(tmp_path, monkeypatch):
             captured["model_path"] = model_path
 
     monkeypatch.setattr(stt_mod, "TranscribeSTT", FakeSTT)
+    monkeypatch.setattr("verbix.voice.callback_sink.CallbackAudioSink", lambda *a, **k: object())
     args = build_parser().parse_args(
-        ["--workspace", str(ws), "--stt-model", "/flag/model.gguf",
-         "--audio-sink", "subprocess"]
+        ["--workspace", str(ws), "--stt-model", "/flag/model.gguf"]
     )
     runtime = build_runtime(args)
     _build_voice_pipeline(runtime, args)

@@ -3,18 +3,12 @@ from itertools import pairwise
 
 import pytest
 
-from verbix.voice.callback_sink import apply_fade, select_sink
+from verbix.voice.callback_sink import CallbackAudioSink, apply_fade
 
 
 def test_fade_ramps_to_silence_in_10ms():
     faded = apply_fade([1.0] * 240, sample_rate=24000)
     assert faded[-1] == 0.0 and all(b <= a for a, b in zip([1.0] + faded, faded))
-
-
-def test_auto_falls_back_without_sounddevice(monkeypatch):
-    import sys
-    monkeypatch.setitem(sys.modules, "sounddevice", None)
-    assert select_sink("auto").__class__.__name__ == "SubprocessAudioSink"
 
 
 def test_import_does_not_require_sounddevice(monkeypatch):
@@ -28,12 +22,7 @@ def test_import_does_not_require_sounddevice(monkeypatch):
     assert "sounddevice" not in sys.modules
 
 
-def test_select_sink_rejects_unknown_kind():
-    with pytest.raises(ValueError):
-        select_sink("bogus")
-
-
-def test_auto_falls_back_when_device_open_fails(monkeypatch):
+def test_callback_sink_fails_fast_when_device_open_fails(monkeypatch):
     import sys
     import types
 
@@ -48,9 +37,8 @@ def test_auto_falls_back_when_device_open_fails(monkeypatch):
     fake_sd.OutputStream = ExplodingStream
     monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
 
-    assert select_sink("auto").__class__.__name__ == "SubprocessAudioSink"
-    with pytest.raises(RuntimeError, match="callback audio sink unavailable"):
-        select_sink("callback")
+    with pytest.raises(RuntimeError, match="libportaudio2|portaudio"):
+        CallbackAudioSink()
 
 
 def test_stop_applies_fade_then_silence(monkeypatch):
@@ -149,3 +137,38 @@ def test_short_tail_fades_fully_to_zero_without_jump(monkeypatch):
     sink._callback(out2, 240, None, None)
     assert float(out2.max()) == 0.0
     assert sink.played_samples == 100
+
+
+def test_callback_sink_sets_20ms_blocksize_and_fails_fast_with_portaudio_hint(monkeypatch):
+    import sys
+    import types
+
+    recorded_kwargs = {}
+
+    class FakeStream:
+        def __init__(self, *a, **k):
+            recorded_kwargs.update(k)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    fake_sd = types.ModuleType("sounddevice")
+    fake_sd.OutputStream = FakeStream
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+
+    from verbix.voice.callback_sink import CallbackAudioSink
+
+    sink = CallbackAudioSink(sample_rate=24000)
+    assert recorded_kwargs.get("blocksize") == 480
+    sink.close()
+
+    monkeypatch.setitem(sys.modules, "sounddevice", None)
+    with pytest.raises(RuntimeError, match="libportaudio2|portaudio"):
+        CallbackAudioSink(sample_rate=24000)
+

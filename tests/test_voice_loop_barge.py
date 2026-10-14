@@ -76,7 +76,7 @@ def voice_harness(monkeypatch, tmp_path):
     tts = MockTextToSpeech()
     tts.aclose = AsyncMock(return_value=None)  # type: ignore[attr-defined]
     monkeypatch.setattr("verbix.voice.sherpa_tts.SherpaTTS", lambda *a, **k: tts)
-    monkeypatch.setattr("verbix.voice.callback_sink.select_sink", lambda *a, **k: gate_sink)
+    monkeypatch.setattr("verbix.voice.callback_sink.CallbackAudioSink", lambda *a, **k: gate_sink)
 
     def fake_capture_cls(*a, **k):
         return capture

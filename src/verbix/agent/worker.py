@@ -94,6 +94,7 @@ class WorkerAgent:
         self.on_event: Any = None
         self._last_tool_call: tuple[str, str] = ("", "")
         self._consecutive_tool_repeats: int = 0
+        self._tools_executed: int = 0
 
     def get_template_vars(self, **kwargs: Any) -> dict[str, Any]:
         env_vars = (
@@ -130,6 +131,7 @@ class WorkerAgent:
         return self.tools.get_definitions()
 
     async def _execute_tool(self, name: str, args: dict[str, Any]) -> ToolResult:
+        self._tools_executed += 1
         if self.tools is None:
             return ToolResult(f"Error: Tool '{name}' is not registered or supported.", is_error=True)
         try:
@@ -176,6 +178,16 @@ class WorkerAgent:
                 for m in e.messages:
                     if isinstance(m, dict):
                         self.cost += m.get("extra", {}).get("cost", 0.0)
+            if self._tools_executed > 0 and e.messages:
+                first_msg = e.messages[0]
+                if isinstance(first_msg, dict) and first_msg.get("role") == "assistant":
+                    content = (first_msg.get("content") or "").strip()
+                    if content:
+                        self.messages.append(first_msg)
+                        self.n_consecutive_format_errors = 0
+                        return ToolResult(content, is_error=False, is_terminal=True)
+            if 0 < self.config.cost_limit <= self.cost:
+                return ToolResult("LimitsExceeded: cost limit reached", is_error=True, is_terminal=True)
             self.n_consecutive_format_errors += 1
             err_content = "Error: No tool call found. Every step MUST execute a tool."
             if e.messages:
@@ -188,8 +200,6 @@ class WorkerAgent:
                     self.on_event(TextDelta(text=f"! format error: {err_content}"))
                 except Exception:  # noqa: BLE001, S110
                     pass
-            if 0 < self.config.cost_limit <= self.cost:
-                return ToolResult("LimitsExceeded: cost limit reached", is_error=True, is_terminal=True)
             if 0 < self.config.max_consecutive_format_errors <= self.n_consecutive_format_errors:
                 return ToolResult("RepeatedFormatError: maximum format errors reached", is_error=True, is_terminal=True)
             return ToolResult(err_content, is_error=True, is_terminal=False)
@@ -212,6 +222,11 @@ class WorkerAgent:
 
         # 4. Strict tool-calling guard
         if not tool_calls:
+            content = (assistant_msg.get("content") or "").strip()
+            if self._tools_executed > 0 and content:
+                self.n_consecutive_format_errors = 0
+                return ToolResult(content, is_error=False, is_terminal=True)
+
             self.n_consecutive_format_errors += 1
             err_msg = "Error: No tool call found. Every step MUST execute a tool."
             self.messages.append({"role": "user", "content": err_msg})
@@ -311,6 +326,7 @@ class WorkerAgent:
         self.n_consecutive_format_errors = 0
         self._last_tool_call = ("", "")
         self._consecutive_tool_repeats = 0
+        self._tools_executed = 0
         self._start_time = time.time()
 
         if self.config.system_template:

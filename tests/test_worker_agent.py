@@ -580,3 +580,56 @@ def test_worker_config_step_limit_default():
     assert config_path.is_file()
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert data["agent"]["step_limit"] == 30
+
+
+@pytest.mark.asyncio
+async def test_worker_completes_on_speech_after_tool_execution():
+    mock_model = MagicMock()
+    mock_model.query.side_effect = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "function": {"name": "bash", "arguments": '{"command": "echo 42"}'}}],
+        },
+        {
+            "role": "assistant",
+            "content": "The calculation result is 42.",
+            "tool_calls": None,
+        },
+    ]
+
+    tools = ToolRegistry()
+    tools.register("bash", {"type": "function", "function": {"name": "bash"}}, lambda a: "42\n")
+
+    agent = WorkerAgent(model=mock_model, tools=tools)
+    result = await agent.run("calculate something")
+
+    assert result["status"] == "completed"
+    assert result["summary"] == "The calculation result is 42."
+    assert agent.n_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_worker_completes_on_speech_in_format_error_path():
+    mock_model = MagicMock()
+    assistant_speech = {"role": "assistant", "content": "Here is the stock summary.", "extra": {}}
+    user_err = {"role": "user", "content": "No tool calls found in the response.", "extra": {}}
+
+    mock_model.query.side_effect = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "function": {"name": "bash", "arguments": '{"command": "echo ok"}'}}],
+        },
+        FormatError(assistant_speech, user_err),
+    ]
+
+    tools = ToolRegistry()
+    tools.register("bash", {"type": "function", "function": {"name": "bash"}}, lambda a: "ok\n")
+
+    agent = WorkerAgent(model=mock_model, tools=tools)
+    result = await agent.run("check stock")
+
+    assert result["status"] == "completed"
+    assert result["summary"] == "Here is the stock summary."
+    assert agent.n_calls == 2

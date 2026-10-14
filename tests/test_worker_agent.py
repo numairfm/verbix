@@ -443,4 +443,144 @@ async def test_worker_preserves_assistant_text_on_format_error():
     assert result["cost"] == pytest.approx(0.02)
 
 
+@pytest.mark.asyncio
+async def test_worker_circuit_breaker_intercepts_repeated_calls():
+    from verbix.core.events import ToolCallFinished
+
+    mock_model = MagicMock()
+    mock_model.query.side_effect = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "function": {"name": "bash", "arguments": '{"command": "echo test"}'}}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c2", "function": {"name": "bash", "arguments": '{"command": "echo test"}'}}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c3", "function": {"name": "bash", "arguments": '{"command": "echo test"}'}}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c4", "function": {"name": "finish", "arguments": '{"summary": "recovered"}'}}],
+        },
+    ]
+
+    tools = ToolRegistry()
+    bash_calls = []
+
+    def fake_bash(args):
+        bash_calls.append(args)
+        return "test\n"
+
+    tools.register("bash", {"type": "function", "function": {"name": "bash"}}, fake_bash)
+    tools.register(
+        "finish",
+        {"type": "function", "function": {"name": "finish"}},
+        lambda a: ToolResult("recovered", is_terminal=True),
+    )
+
+    agent = WorkerAgent(model=mock_model, tools=tools)
+    events = []
+    agent.on_event = events.append
+    result = await agent.run("run bash command")
+
+    assert result["status"] == "completed"
+    assert result["summary"] == "recovered"
+    # Tool execution should have been called only twice (the 3rd call was intercepted by circuit breaker)
+    assert len(bash_calls) == 2
+    # Verify the 3rd tool message has the circuit breaker error observation
+    tool_msgs = [m for m in agent.messages if m.get("role") == "tool"]
+    assert len(tool_msgs) == 4
+    assert tool_msgs[0]["content"] == "test\n"
+    assert tool_msgs[1]["content"] == "test\n"
+    assert (
+        "Error: Tool 'bash' was called 3 times consecutively with identical arguments without progress"
+        in tool_msgs[2]["content"]
+    )
+    assert "You must try a different approach or call 'finish'." in tool_msgs[2]["content"]
+    assert tool_msgs[3]["content"] == "recovered"
+
+    cb_events = [e for e in events if isinstance(e, ToolCallFinished) and e.is_error]
+    assert len(cb_events) == 1
+    assert "Tool 'bash' was called 3 times consecutively" in cb_events[0].observation
+
+
+@pytest.mark.asyncio
+async def test_worker_circuit_breaker_resets_on_different_arguments():
+    mock_model = MagicMock()
+    mock_model.query.side_effect = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "function": {"name": "bash", "arguments": '{"command": "echo 1"}'}}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c2", "function": {"name": "bash", "arguments": '{"command": "echo 1"}'}}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c3", "function": {"name": "bash", "arguments": '{"command": "echo 2"}'}}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c4", "function": {"name": "bash", "arguments": '{"command": "echo 2"}'}}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c5", "function": {"name": "finish", "arguments": '{"summary": "done"}'}}],
+        },
+    ]
+
+    tools = ToolRegistry()
+    bash_calls = []
+
+    def fake_bash(args):
+        bash_calls.append(args)
+        return "out\n"
+
+    tools.register("bash", {"type": "function", "function": {"name": "bash"}}, fake_bash)
+    tools.register(
+        "finish",
+        {"type": "function", "function": {"name": "finish"}},
+        lambda a: ToolResult("done", is_terminal=True),
+    )
+
+    agent = WorkerAgent(model=mock_model, tools=tools)
+    result = await agent.run("execute multiple commands")
+
+    assert result["status"] == "completed"
+    assert result["summary"] == "done"
+    # All 4 bash calls should have executed because no call hit 3 consecutive identical invocations
+    assert len(bash_calls) == 4
+    assert bash_calls == [
+        {"command": "echo 1"},
+        {"command": "echo 1"},
+        {"command": "echo 2"},
+        {"command": "echo 2"},
+    ]
+
+
+def test_worker_config_step_limit_default():
+    from pathlib import Path
+
+    import yaml
+
+    config_path = Path("src/verbix/agent/config/worker.yaml")
+    assert config_path.is_file()
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert data["agent"]["step_limit"] == 30
+
+
+
 

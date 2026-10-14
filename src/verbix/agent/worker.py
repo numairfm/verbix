@@ -92,6 +92,8 @@ class WorkerAgent:
         self._start_time: float = time.time()
         self.extra_template_vars: dict[str, Any] = {}
         self.on_event: Any = None
+        self._last_tool_call: tuple[str, str] = ("", "")
+        self._consecutive_tool_repeats: int = 0
 
     def get_template_vars(self, **kwargs: Any) -> dict[str, Any]:
         env_vars = (
@@ -252,7 +254,26 @@ class WorkerAgent:
                 except Exception:  # noqa: BLE001, S110
                     pass
 
-            result = await self._execute_tool(name, args)
+            try:
+                call_sig = (name, json.dumps(args, sort_keys=True))
+            except (TypeError, ValueError):
+                call_sig = (name, str(args))
+
+            if call_sig == self._last_tool_call and name != "finish":
+                self._consecutive_tool_repeats += 1
+                if self._consecutive_tool_repeats >= 3:
+                    result = ToolResult(
+                        f"Error: Tool '{name}' was called 3 times consecutively with identical arguments without progress. "
+                        "You must try a different approach or call 'finish'.",
+                        is_error=True,
+                    )
+                else:
+                    result = await self._execute_tool(name, args)
+            else:
+                self._last_tool_call = call_sig
+                self._consecutive_tool_repeats = 1
+                result = await self._execute_tool(name, args)
+
             last_result = result
 
             if self.on_event is not None:
@@ -288,6 +309,8 @@ class WorkerAgent:
         self.cost = 0.0
         self.n_calls = 0
         self.n_consecutive_format_errors = 0
+        self._last_tool_call = ("", "")
+        self._consecutive_tool_repeats = 0
         self._start_time = time.time()
 
         if self.config.system_template:

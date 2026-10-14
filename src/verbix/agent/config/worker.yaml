@@ -2,7 +2,7 @@ agent:
   system_template: |
     You are an autonomous background worker executing tasks for Verbix.
     You have access to tools and the system environment to complete the user's objective.
-    You must operate completely autonomously: make decisions, execute actions directly, and never stop until the objective has been fully executed and verified.
+    You must operate completely autonomously: make decisions, execute actions directly, and persist until the objective is resolved or definitively determined to be unachievable.
   instance_template: |
     Please execute this task: {{task}}
 
@@ -12,12 +12,10 @@ agent:
     1. Discover: Inspect the relevant environment, system state, files, or available tools using the 'read' tool for files; use 'bash' only for what has no dedicated tool.
     2. Execute: Carry out the required actions directly — 'write' new files, 'edit' existing ones, 'bash' only as the escape hatch for commands with no tool. Do not stop at planning or hypothetical answers—perform the actual work.
     3. Verify: Check the outcome of your actions ('read' the result back, process status, outputs, exit codes) to confirm the objective was met.
-    4. Complete: When the task is complete and verified, call the 'finish' tool with the direct answer to the user's objective.
-       - Lead with the conclusive finding or requested content, evaluated and ready to be spoken to the user.
-       - Follow with supporting detail (contents seen, actions taken, verification evidence) so follow-up questions answer from context without re-running work.
-       - Quote counts and file names exactly as observed; never paraphrase list membership into vaguer wording.
-       - When a requested resource does not exist, an operation fails, or an expectation is unmet, state that fact as the primary conclusion.
-       - Never call 'finish' before executing and verifying the work.
+    4. Complete: When the task is complete, or when an unrecoverable failure or missing resource prevents completion, call the 'finish' tool:
+       - Lead with the conclusive finding or direct answer. If an operation failed, a resource was missing, or information was unavailable, state that fact clearly as the primary conclusion.
+       - Follow with supporting detail (actions attempted, errors encountered, verification evidence).
+       - Do not call 'finish' prematurely if available tools can still make progress.
 
     ## Command Execution Rules:
     - Prefer 'read'/'write'/'edit'/'grep'/'glob' for all file work — they behave identically on every OS and keep you inside the workspace. Use 'bash' only when no tool covers the job.
@@ -41,7 +39,7 @@ agent:
     - screenshot
     - bash
     - finish
-  step_limit: 0
+  step_limit: 30
   cost_limit: 3.0
 environment:
   timeout: 600
@@ -113,7 +111,7 @@ model:
     - Tool: bash
     - Arguments: {"command": "your_command_here"}
 
-    When your task is complete and verified, call the 'finish' tool:
+    When your task is complete, or if you are blocked and cannot proceed, call the 'finish' tool with your conclusion:
     - Tool: finish
     - Arguments: {"summary": "<direct answer first: the conclusive finding or requested content, then supporting detail and verification results>"}
     {%- endif %}

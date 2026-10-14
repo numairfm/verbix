@@ -237,7 +237,7 @@ class Runtime:
                         pending_lines.append(f"[Task '{tid}' completed]: {res.strip()}")
         if pending_lines:
             envelope.append(
-                "[Newly completed background tasks (report briefly before answering):]\n"
+                "[Newly completed background tasks (briefly report every item below before answering):]\n"
                 + "\n".join(pending_lines)
             )
         return "\n".join(envelope), folded_ids

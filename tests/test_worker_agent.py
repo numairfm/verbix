@@ -580,7 +580,3 @@ def test_worker_config_step_limit_default():
     assert config_path.is_file()
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert data["agent"]["step_limit"] == 30
-
-
-
-

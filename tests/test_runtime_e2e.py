@@ -527,3 +527,39 @@ def test_runtime_status_without_task_id_includes_recent_actions_and_honors_full(
     full = runtime.status(full=True)
     assert 'read({"path": "README.md"})' in full
 
+
+def test_foreground_grounding_and_spawn_tool_derive_worker_capabilities_once_per_runtime(
+    tmp_path, monkeypatch
+):
+    from verbix.tools.sandbox import SandboxStatus
+    from verbix.tools.spawn import SpawnTool
+
+    # 1. When sandbox is available, worker capabilities include screenshot, web_search, and bash
+    monkeypatch.setattr(
+        "verbix.tools.sandbox.probe_sandbox",
+        lambda allow_network=False: SandboxStatus(
+            available=True, backend="bwrap", reason="ok", capabilities="sandboxed bash"
+        ),
+    )
+    rt_with_bash = Runtime(workspace=tmp_path, provider=MagicMock())
+    assert "screenshot" in rt_with_bash.system_prompt
+    assert "web_search" in rt_with_bash.system_prompt
+    assert "web_fetch" in rt_with_bash.system_prompt
+    assert "bash" in rt_with_bash.system_prompt
+    assert "screenshot" in SpawnTool(rt_with_bash).description
+    assert hasattr(rt_with_bash, "worker_capabilities")
+    assert hasattr(rt_with_bash, "worker_tool_names")
+
+    # 2. When sandbox is unavailable, bash is automatically omitted from worker capabilities
+    monkeypatch.setattr(
+        "verbix.tools.sandbox.probe_sandbox",
+        lambda allow_network=False: SandboxStatus(
+            available=False, backend=None, reason="no bwrap", capabilities=""
+        ),
+    )
+    rt_no_bash = Runtime(workspace=tmp_path, provider=MagicMock())
+    assert "screenshot" in rt_no_bash.system_prompt
+    assert "bash" not in rt_no_bash.system_prompt
+    assert "bash" not in SpawnTool(rt_no_bash).description
+
+

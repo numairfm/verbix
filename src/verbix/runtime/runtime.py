@@ -157,10 +157,17 @@ class Runtime:
             from verbix.tools.sandbox import probe_sandbox
 
             shell_part = " Shell: bash." if probe_sandbox().available else ""
+            caps = getattr(self, "worker_capabilities", "")
+            caps_line = (
+                f"\n- Background worker capabilities (available via spawn): {caps}."
+                if caps
+                else ""
+            )
             grounding = (
                 "\n\n# ENVIRONMENT & GROUNDING"
                 f"\n- Host operating system: {platform.system()}.{shell_part}"
                 f"\n- The working directory is {self.workspace}."
+                f"{caps_line}"
             )
             base = prompt_to_use.rstrip() + grounding
 

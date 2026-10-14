@@ -48,6 +48,22 @@ def build_worker_registry(workspace: Path | None = None) -> ToolRegistry:
     )
 
 
+def describe_worker_tools(workspace: Path | None = None) -> tuple[list[str], str]:
+    """Derives worker tool names and a concise summary from the live worker registry."""
+    reg = build_worker_registry(workspace=workspace)
+    names: list[str] = []
+    parts: list[str] = []
+    for d in reg.get_definitions():
+        fn = d.get("function", {})
+        name = fn.get("name", "")
+        desc = (fn.get("description", "") or "").strip()
+        short = desc.split(". ")[0].rstrip(".")
+        if name:
+            names.append(name)
+            parts.append(f"{name} ({short})" if short else name)
+    return names, "; ".join(parts)
+
+
 def finish_runtime_task(runtime: Any, task_id: str, result: str) -> None:
     """Records task completion into the ledger, context memory, and schedules announcement."""
     if hasattr(runtime, "ledger"):

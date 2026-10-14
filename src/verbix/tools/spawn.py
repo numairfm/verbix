@@ -13,10 +13,19 @@ class SpawnTool:
 
     name: str = "spawn"
     side_effecting: bool = True
-    description: str = "Starts an autonomous background worker to execute a task."
 
     def __init__(self, runtime: Runtime) -> None:
         self.runtime = runtime
+
+    @property
+    def description(self) -> str:
+        names = getattr(self.runtime, "worker_tool_names", None)
+        if names:
+            return (
+                "Starts an autonomous background worker to execute a task. "
+                f"Workers have access to: {', '.join(names)}."
+            )
+        return "Starts an autonomous background worker to execute a task."
 
     @property
     def parameters_schema(self) -> dict[str, Any]:

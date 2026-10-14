@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from verbix.cli import build_parser
-from verbix.core.events import TextDelta, ToolCallFinished
+from verbix.core.events import TextDelta
 from verbix.ipc.server import VerbixServer
 from verbix.provider.models import Finish as ProviderFinish
 from verbix.provider.models import TextDelta as ProviderTextDelta
@@ -91,8 +91,8 @@ async def test_spawn_broadcasts_ledger_transitions(tmp_path):
             yield ProviderToolCallDelta(
                 index=0,
                 call_id="c1",
-                name="finish",
-                arguments_delta=json.dumps({"summary": "done fast"}),
+                name="read",
+                arguments_delta=json.dumps({"path": "."}),
             )
             yield ProviderFinish(reason="tool_calls")
         else:
@@ -122,63 +122,6 @@ async def test_spawn_broadcasts_ledger_transitions(tmp_path):
     finally:
         await rt.aclose()
         rt.unsubscribe(q)
-
-
-@pytest.mark.asyncio
-async def test_finish_tool_returns_task_completed_observation():
-    from verbix.tools import FinishTool
-
-    res = await FinishTool().execute({"summary": "All 83 tests passed."}, None)
-    assert res.observation == "Task completed: All 83 tests passed."
-
-
-@pytest.mark.asyncio
-async def test_finish_tool_observation_has_no_repr_leakage():
-    from verbix.agent.agents.default import DefaultAgent
-    from verbix.agent.tools.registry import ToolRegistry
-    from verbix.core.events import ToolCallDelta
-    from verbix.tools import FinishTool
-
-    registry = ToolRegistry()
-    finish_tool = FinishTool()
-    registry.register(
-        finish_tool.name,
-        {
-            "type": "function",
-            "function": {
-                "name": finish_tool.name,
-                "description": finish_tool.description,
-                "parameters": finish_tool.parameters_schema,
-            },
-        },
-        finish_tool.execute,
-    )
-
-    mock_model = MagicMock()
-
-    async def mock_stream(messages, tools=None):
-        yield ToolCallDelta(
-            index=0,
-            call_id="call_finish_1",
-            name="finish",
-            arguments_delta='{"summary": "All 83 tests passed."}',
-        )
-
-    mock_model.query_stream = mock_stream
-
-    agent = DefaultAgent(
-        model=mock_model,
-        tools=registry,
-        tools_list=["finish"],
-        system_prompt="Execute tests.",
-    )
-    events = [e async for e in agent.step_stream("run tests")]
-    finished = [e for e in events if isinstance(e, ToolCallFinished)]
-    assert len(finished) == 1
-    assert finished[0].observation == "Task completed: All 83 tests passed."
-    tool_msgs = [m for m in agent.messages if m.get("role") == "tool"]
-    assert tool_msgs
-    assert "ToolResult(" not in tool_msgs[0]["content"]
 
 
 def test_cli_dead_flags_removed():

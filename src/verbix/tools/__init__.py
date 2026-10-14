@@ -13,7 +13,6 @@ from verbix.tools.base import (
 from verbix.tools.bash import BashTool
 from verbix.tools.cancel import CancelTool
 from verbix.tools.edit import FileEditTool
-from verbix.tools.finish import FinishTool
 from verbix.tools.glob import GlobTool
 from verbix.tools.grep import GrepTool
 from verbix.tools.read import FileReadTool
@@ -36,7 +35,6 @@ __all__ = [
     "FileEditTool",
     "FileReadTool",
     "FileWriteTool",
-    "FinishTool",
     "GlobTool",
     "GrepTool",
     "SandboxConfig",
@@ -68,7 +66,6 @@ TOOL_CATALOG: dict[str, Callable[[Any], Any]] = {
     "spawn": SpawnTool,
     "status": StatusTool,
     "cancel": CancelTool,
-    "finish": lambda runtime: FinishTool(),
 }
 
 

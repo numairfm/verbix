@@ -40,8 +40,8 @@ def test_registry_spills_long_output_and_rereads(tmp_path):
 
 
 def test_agent_config_carries_tool_output():
-    from verbix.agent.agents.default import AgentConfig
-    assert AgentConfig(tool_output={"max_lines": 10}).tool_output == {"max_lines": 10}
+    from verbix.agent.worker import WorkerConfig
+    assert WorkerConfig(tool_output={"max_lines": 10}).tool_output == {"max_lines": 10}
 
 
 def test_yaml_limits_drive_registry(tmp_path):
@@ -115,7 +115,7 @@ def test_rgba_flattens_onto_white(tmp_path):
 
 
 def test_tool_message_carries_image_parts():
-    from verbix.agent.agents.default import tool_message_content
+    from verbix.agent.voice import tool_message_content
     from verbix.tools.base import FileAttachment
     content = tool_message_content("hi", (FileAttachment(data=b"x", mime="image/jpeg", name="a.jpg"),))
     assert content[0] == {"type": "text", "text": "hi"}
@@ -126,18 +126,18 @@ def test_tool_message_carries_image_parts():
 def test_over_limit_text_plus_image_keeps_image(tmp_path):
     import asyncio
 
-    from verbix.agent.agents.default import (
-        AgentConfig,
-        DefaultAgent,
+    from verbix.agent.voice import (
+        VoiceAgent,
+        VoiceConfig,
         tool_message_content,
     )
     from verbix.tools import build_registry
     from verbix.tools.base import FileAttachment, ToolResult
     big = ToolResult("line\n" * 3000,
         attachments=(FileAttachment(data=b"x", mime="image/jpeg", name="a.jpg"),))
-    agent = DefaultAgent(model=None, env=None,
+    agent = VoiceAgent(model=None, env=None,
         tools=build_registry(["bash"], runtime=None, workspace=tmp_path),
-        config=AgentConfig(tools=["bash"]))
+        config=VoiceConfig(tools=["bash"]))
     res = asyncio.run(agent._execute_tool("bash", {"command": "seq 1 3000"}))
     content = tool_message_content(res.observation, big.attachments)
     assert any(p.get("type") == "image_url" for p in content)
@@ -149,12 +149,12 @@ def test_photo_attachments_survive_execute_tool(tmp_path):
 
     from PIL import Image
 
-    from verbix.agent.agents.default import AgentConfig, DefaultAgent
+    from verbix.agent.voice import VoiceAgent, VoiceConfig
     from verbix.tools import build_registry
     Image.new("RGB", (3000, 2000), "blue").save(tmp_path / "big.jpg")
-    agent = DefaultAgent(model=None, env=None,
+    agent = VoiceAgent(model=None, env=None,
         tools=build_registry(["read"], runtime=None, workspace=tmp_path),
-        config=AgentConfig(tools=["read"]))
+        config=VoiceConfig(tools=["read"]))
     res = asyncio.run(agent._execute_tool("read", {"path": "big.jpg"}))
     assert len(res.attachments) == 1
 

@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from verbix.agent.agents.default import AgentConfig, DefaultAgent
 from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.voice import VoiceAgent, VoiceConfig
 from verbix.core.events import TextDelta, ToolCallDelta, TurnComplete
 
 
@@ -14,7 +14,7 @@ class _CostStreamModel:
         self.last_stream_cost = 0.0
         self.calls = 0
 
-    async def query_stream(self, messages, tools=None):
+    async def query_stream(self, messages, tools=None, **kw):
         self.calls += 1
         self.last_stream_cost += 0.05 if self.calls == 1 else 0.07
         yield TextDelta(text="done")
@@ -23,9 +23,9 @@ class _CostStreamModel:
 
 @pytest.mark.asyncio
 async def test_foreground_limits_reset_per_turn():
-    agent = DefaultAgent(
+    agent = VoiceAgent(
         model=_CostStreamModel(),
-        config=AgentConfig(turn_scoped_limits=True, system_template="sys"),
+        config=VoiceConfig(turn_scoped_limits=True, system_template="sys"),
     )
     await _consume(agent, "one")
     assert agent.turn_calls == 1
@@ -48,14 +48,17 @@ async def test_foreground_limits_reset_per_turn():
 
 @pytest.mark.asyncio
 async def test_global_limits_without_turn_scope():
-    agent = DefaultAgent(
+    agent = VoiceAgent(
         model=_CostStreamModel(),
-        config=AgentConfig(step_limit=1, system_template="sys"),
+        config=VoiceConfig(step_limit=1, turn_scoped_limits=False, system_template="sys"),
     )
     await _consume(agent, "one")
     assert agent.turn_calls == 1
     events = await _consume(agent, "two")
-    assert any(isinstance(e, TurnComplete) and e.final_text == "LimitsExceeded" for e in events)
+    assert any(
+        isinstance(e, TurnComplete) and e.exit_reason == "limits_exceeded"
+        for e in events
+    )
 
 
 async def _consume(agent, text):
@@ -63,18 +66,13 @@ async def _consume(agent, text):
 
 
 class _RepeatToolModel:
-    """Stub model repeating one identical tool call, then giving up.
-
-    Yields the same call 10 times (then speech) so a missing repeat guard
-    fails fast by execution count instead of hanging the loop.
-    Reports zero cost so the cost guard cannot intervene.
-    """
+    """Stub model repeating one identical tool call, then giving up."""
 
     def __init__(self) -> None:
         self.last_stream_cost = 0.0
         self.calls = 0
 
-    async def query_stream(self, messages, tools=None):
+    async def query_stream(self, messages, tools=None, **kw):
         self.calls += 1
         if self.calls > 10:
             yield TextDelta(text="done")
@@ -103,15 +101,15 @@ def _counting_registry(counter: list) -> ToolRegistry:
 @pytest.mark.asyncio
 async def test_repeated_identical_tool_call_stops_turn():
     executed: list = []
-    agent = DefaultAgent(
+    agent = VoiceAgent(
         model=_RepeatToolModel(),
         tools=_counting_registry(executed),
-        config=AgentConfig(system_template="sys"),
+        config=VoiceConfig(system_template="sys", max_calls_per_tool_per_turn={}),
     )
     events = await asyncio.wait_for(_consume(agent, "hi"), timeout=30)
     assert len(executed) == 3
     assert any(
-        isinstance(e, TurnComplete) and e.final_text == "RepeatedToolCall"
+        isinstance(e, TurnComplete) and e.exit_reason == "repeated_tool_call"
         for e in events
     )
 
@@ -124,7 +122,7 @@ async def test_varying_tool_calls_do_not_trip_repeat_guard():
         def __init__(self) -> None:
             self.calls = 0
 
-        async def query_stream(self, messages, tools=None):
+        async def query_stream(self, messages, tools=None, **kw):
             self.calls += 1
             if self.calls > 3:
                 yield TextDelta(text="done")
@@ -138,14 +136,14 @@ async def test_varying_tool_calls_do_not_trip_repeat_guard():
             )
 
     executed: list = []
-    agent = DefaultAgent(
+    agent = VoiceAgent(
         model=_VaryingModel(),
         tools=_counting_registry(executed),
-        config=AgentConfig(system_template="sys"),
+        config=VoiceConfig(system_template="sys", max_calls_per_tool_per_turn={}),
     )
     events = await asyncio.wait_for(_consume(agent, "hi"), timeout=30)
     assert len(executed) == 3
     assert not any(
-        isinstance(e, TurnComplete) and e.final_text == "RepeatedToolCall"
+        isinstance(e, TurnComplete) and e.exit_reason == "repeated_tool_call"
         for e in events
     )

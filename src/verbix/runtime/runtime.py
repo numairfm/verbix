@@ -443,9 +443,3 @@ class Runtime:
         from verbix.tools.sandbox import kill_active_processes
 
         kill_active_processes()
-        for env in self._environments:
-            try:
-                env.kill_all()
-            except Exception:
-                logger.exception("Failed to kill worker process groups on shutdown")
-        self._environments.clear()

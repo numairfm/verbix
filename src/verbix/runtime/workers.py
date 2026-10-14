@@ -8,7 +8,6 @@ from typing import Any
 
 import yaml
 
-from verbix.agent.environments.local import LocalEnvironment
 from verbix.agent.tools.registry import ToolRegistry
 from verbix.agent.worker import WorkerAgent, WorkerConfig
 from verbix.runtime.announcer import drain_pending_announcements
@@ -145,11 +144,6 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
 
     worker_config = WorkerConfig(**agent_cfg_dict)
 
-    env_cfg_dict = raw_worker_cfg.get("environment", {})
-    env_extra = env_cfg_dict.get("env", {})
-    timeout = int(env_cfg_dict.get("timeout", 600))
-    env = LocalEnvironment(cwd=str(runtime.workspace), env=env_extra, timeout=timeout)
-
     model_to_use = adapt_provider(runtime.worker_model or runtime.provider)
     worker_tools = build_registry(
         worker_tool_names,
@@ -159,7 +153,7 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
 
     worker_agent = WorkerAgent(
         model=model_to_use,
-        env=env,
+        env=None,
         tools=worker_tools,
         config=worker_config,
     )
@@ -190,7 +184,6 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
 
     worker_task.on_completed(_on_finish)
     runtime.tasks[task_id] = worker_task
-    runtime._environments.append(env)
     runtime.ledger.register_task(task_id, objective)
     runtime._broadcast_event(
         "task_registered", {"task_id": task_id, "objective": objective}

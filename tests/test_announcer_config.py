@@ -55,8 +55,8 @@ def test_announcer_history_isolated_from_foreground(tmp_path):
 
 @pytest.mark.asyncio
 async def test_tool_choice_none_forwarded_when_configured():
-    from verbix.agent.agents.default import AgentConfig, DefaultAgent
     from verbix.agent.tools.registry import ToolRegistry
+    from verbix.agent.voice import VoiceAgent, VoiceConfig
     from verbix.core.events import TurnComplete
 
     seen = {}
@@ -66,8 +66,8 @@ async def test_tool_choice_none_forwarded_when_configured():
             seen.update(kwargs)
             yield TurnComplete(final_text="done")
 
-    agent = DefaultAgent(
-        model=CapModel(), env=None, tools=ToolRegistry(), config=AgentConfig(tool_choice="none"),
+    agent = VoiceAgent(
+        model=CapModel(), env=None, tools=ToolRegistry(), config=VoiceConfig(tool_choice="none"),
     )
     [e async for e in agent.step_stream("hi")]
     assert seen.get("tool_choice") == "none"
@@ -75,8 +75,8 @@ async def test_tool_choice_none_forwarded_when_configured():
 
 @pytest.mark.asyncio
 async def test_tool_choice_absent_by_default():
-    from verbix.agent.agents.default import AgentConfig, DefaultAgent
     from verbix.agent.tools.registry import ToolRegistry
+    from verbix.agent.voice import VoiceAgent, VoiceConfig
     from verbix.core.events import TurnComplete
 
     seen = {}
@@ -86,8 +86,10 @@ async def test_tool_choice_absent_by_default():
             seen.update(kwargs)
             yield TurnComplete(final_text="done")
 
-    agent = DefaultAgent(
-        model=CapModel(), env=None, tools=ToolRegistry(), config=AgentConfig(),
+    reg = ToolRegistry()
+    reg.register("spawn", {"type": "function", "function": {"name": "spawn"}}, lambda a: "ok")
+    agent = VoiceAgent(
+        model=CapModel(), env=None, tools=reg, config=VoiceConfig(tools=["spawn"]),
     )
     [e async for e in agent.step_stream("hi")]
     assert "tool_choice" not in seen

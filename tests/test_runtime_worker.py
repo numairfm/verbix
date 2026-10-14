@@ -3,62 +3,59 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from verbix.core.events import TextDelta, TurnComplete
 from verbix.runtime.worker import WorkerTask
 
 
 @pytest.mark.asyncio
-async def test_worker_without_finish_call_does_not_complete_on_chatter():
-    """A turn that only talks (no finish tool call) must never complete on chatter."""
-    session = MagicMock()
-    calls = 0
+async def test_worker_without_tool_call_does_not_complete_on_chatter():
+    """A worker that only talks without executing any tools must fail on RepeatedFormatError."""
+    from verbix.agent.tools.registry import ToolRegistry
+    from verbix.agent.worker import WorkerAgent, WorkerConfig
 
-    async def chatty_step_stream(desc):
-        nonlocal calls
-        calls += 1
-        yield TextDelta(text="I built the game, all done!")
-        yield TurnComplete(final_text="I built the game, all done!")
-
-    session.step_stream = chatty_step_stream
-    session.messages = [
-        {"role": "user", "content": "build a flappy game"},
-        {"role": "assistant", "content": "I built the game, all done!"},
-    ]
+    mock_model = MagicMock()
+    mock_model.query.return_value = {
+        "role": "assistant",
+        "content": "I built the game, all done!",
+        "tool_calls": [],
+    }
+    session = WorkerAgent(
+        model=mock_model,
+        tools=ToolRegistry(),
+        config=WorkerConfig(max_consecutive_format_errors=2),
+    )
 
     task = WorkerTask(id="task-9", description="build a flappy game", session=session)
     task.start()
     await task.wait()
 
     assert task.status == "failed"
-    assert "finish" in (task.result or "").lower()
+    assert "RepeatedFormatError" in (task.result or "")
     assert "I built the game" not in (task.result or "")
-    assert calls > 1  # loop re-drove instead of stopping at narration
+    assert mock_model.query.call_count == 2
 
 
 @pytest.mark.asyncio
-async def test_worker_with_finish_call_completes_with_result():
-    """A turn ending in a finish tool call completes with its result."""
-    session = MagicMock()
+async def test_worker_with_tool_then_speech_completes_with_result():
+    """A worker executing a tool and concluding in plain text completes with its summary."""
+    from verbix.agent.tools.registry import ToolRegistry
+    from verbix.agent.worker import WorkerAgent
 
-    async def finishing_step_stream(desc):
-        yield TextDelta(text="Working...")
-        yield TurnComplete(final_text="Task completed: wrote index.html (412 bytes, verified).")
-
-    session.step_stream = finishing_step_stream
-    session.messages = [
-        {"role": "user", "content": "write index.html"},
+    mock_model = MagicMock()
+    mock_model.query.side_effect = [
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{"id": "c1", "function": {"name": "finish", "arguments": "{}"}}],
+            "tool_calls": [{"id": "c1", "function": {"name": "write", "arguments": '{"path": "index.html"}'}}],
         },
         {
-            "role": "tool",
-            "tool_call_id": "c1",
-            "name": "finish",
+            "role": "assistant",
             "content": "wrote index.html (412 bytes, verified).",
+            "tool_calls": None,
         },
     ]
+    reg = ToolRegistry()
+    reg.register("write", {"type": "function", "function": {"name": "write"}}, lambda a: "ok")
+    session = WorkerAgent(model=mock_model, tools=reg)
 
     task = WorkerTask(id="task-10", description="write index.html", session=session)
     task.start()
@@ -72,26 +69,11 @@ async def test_worker_with_finish_call_completes_with_result():
 async def test_worker_task_lifecycle_success():
     session = MagicMock()
 
-    async def fake_step(prompt):
-        yield TextDelta(text="Working...")
-        yield TurnComplete(final_text="All tests passed successfully.")
+    async def fake_run(prompt):
+        return {"status": "completed", "summary": "All tests passed successfully."}
 
-    session.step = fake_step
-    session.history.messages = []
-    session.messages = [
-        {"role": "user", "content": "run tests"},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{"id": "c1", "function": {"name": "finish", "arguments": "{}"}}],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "c1",
-            "name": "finish",
-            "content": "All tests passed successfully.",
-        },
-    ]
+    session.run = fake_run
+    session.messages = []
 
     task = WorkerTask(id="task-1", description="run tests", session=session)
     assert task.status == "pending"
@@ -112,13 +94,12 @@ async def test_worker_task_lifecycle_success():
 async def test_worker_task_cancellation():
     session = MagicMock()
 
-    async def hanging_step(prompt):
-        while True:
-            yield TextDelta(text="still running...")
-            await asyncio.sleep(0.01)
+    async def hanging_run(prompt):
+        await asyncio.sleep(10.0)
+        return {"status": "completed", "summary": "done"}
 
-    session.step = hanging_step
-    session.history.messages = []
+    session.run = hanging_run
+    session.messages = []
 
     task = WorkerTask(id="task-2", description="long task", session=session)
     task.start()
@@ -161,24 +142,25 @@ async def test_worker_task_get_status_reading_history():
 
 @pytest.mark.asyncio
 async def test_worker_task_extracts_final_result_not_intermediate_scratchpad():
-    session = MagicMock()
-    async def fake_step_stream(desc):
-        yield TextDelta(text="I will start by analyzing the codebase...")
-        yield TurnComplete(final_text="")
+    from verbix.agent.tools.registry import ToolRegistry
+    from verbix.agent.worker import WorkerAgent
 
-    session.step_stream = fake_step_stream
-    session.messages = [
-        {"role": "user", "content": "list dependencies"},
-        {"role": "assistant", "content": "I will start by analyzing the codebase...", "tool_calls": [{"id": "c1"}]},
-        {"role": "tool", "content": "pyproject.toml found"},
+    mock_model = MagicMock()
+    mock_model.query.side_effect = [
         {
             "role": "assistant",
-            "content": None,
-            "tool_calls": [{"id": "c2", "function": {"name": "finish", "arguments": "{}"}}],
+            "content": "I will start by analyzing the codebase...",
+            "tool_calls": [{"id": "c1", "function": {"name": "read", "arguments": '{"path": "pyproject.toml"}'}}],
         },
-        {"role": "tool", "tool_call_id": "c2", "name": "finish", "content": "The dependencies are pytest, litellm."},
-        {"role": "assistant", "content": "The dependencies are pytest, litellm."},
+        {
+            "role": "assistant",
+            "content": "The dependencies are pytest, litellm.",
+            "tool_calls": None,
+        },
     ]
+    reg = ToolRegistry()
+    reg.register("read", {"type": "function", "function": {"name": "read"}}, lambda a: "pyproject.toml found")
+    session = WorkerAgent(model=mock_model, tools=reg)
 
     task = WorkerTask(id="task-4", description="list dependencies", session=session)
     task.start()
@@ -275,7 +257,7 @@ async def test_spawn_creates_private_scratch_dir(tmp_path, monkeypatch):
 def test_worker_instance_template_renders_scratch_dir(tmp_path):
     import yaml
 
-    from verbix.agent.agents.default import AgentConfig, DefaultAgent
+    from verbix.agent.worker import WorkerAgent, WorkerConfig
 
     cfg_path = (
         __import__("pathlib").Path(__file__).resolve().parent.parent
@@ -286,8 +268,8 @@ def test_worker_instance_template_renders_scratch_dir(tmp_path):
         / "worker.yaml"
     )
     agent_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["agent"]
-    agent = DefaultAgent(
-        model=None, env=None, tools=None, config=AgentConfig(**agent_cfg)
+    agent = WorkerAgent(
+        model=None, env=None, tools=None, config=WorkerConfig(**agent_cfg)
     )
     agent.extra_template_vars["scratch_dir"] = str(tmp_path)
     out = agent._render_template(agent_cfg["instance_template"], task="do stuff")

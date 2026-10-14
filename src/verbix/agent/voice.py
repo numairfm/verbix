@@ -68,9 +68,7 @@ class VoiceConfig(BaseModel):
     tool_choice: str | None = None
     system_prompt: str = ""
     spoken_error_fallback: str = "Sorry — I ran into a problem. Could you say that again?"
-    max_calls_per_tool_per_turn: dict[str, int] = Field(
-        default_factory=lambda: {"status": 1, "cancel": 1}
-    )
+    max_calls_per_tool_per_turn: dict[str, int] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod

@@ -10,7 +10,6 @@ from unittest.mock import Mock, NonCallableMock
 
 import yaml
 
-from verbix.agent.environments.local import LocalEnvironment
 from verbix.agent.models.litellm_model import LitellmModel
 from verbix.agent.voice import VoiceAgent, VoiceConfig
 from verbix.config import fill_persona_slot, read_persona
@@ -384,7 +383,6 @@ def build_foreground_agent(
 
     runtime.tasks: dict[str, WorkerTask] = {}
     runtime._task_counter: int = 0
-    runtime._environments: list[LocalEnvironment] = []
     runtime._pending_announcements: list[tuple[str, str]] = []
     # Stashed unplayed text from the latest interruption; consumed/cleared
     # by an explicit continue, overwritten by newer interrupts.

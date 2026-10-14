@@ -26,8 +26,8 @@ import asyncio
 
 import pytest
 
-from verbix.agent.agents.default import AgentConfig, DefaultAgent
 from verbix.agent.tools.registry import ToolRegistry
+from verbix.agent.voice import VoiceAgent, VoiceConfig
 from verbix.core.events import ToolCallDelta
 
 
@@ -53,7 +53,7 @@ async def test_shielded_cancel_records_single_tool_response():
         async def query_stream(self, messages, tools=None, **kw):
             yield ToolCallDelta(index=0, call_id="c1", name="spawn", arguments_delta="{}")
 
-    agent = DefaultAgent(model=SlowSpawnModel(), tools=reg, config=AgentConfig(system_template="sys"))
+    agent = VoiceAgent(model=SlowSpawnModel(), tools=reg, config=VoiceConfig(system_template="sys"))
 
     async def run():
         async for _ in agent.step_stream("hi"):

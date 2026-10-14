@@ -279,8 +279,8 @@ async def test_runtime_direct_worker_completion_is_silent(tmp_path):
             yield ProviderToolCallDelta(
                 index=0,
                 call_id="c1",
-                name="finish",
-                arguments_delta=json.dumps({"summary": "Calculation finished: 42."}),
+                name="read",
+                arguments_delta=json.dumps({"path": "."}),
             )
             yield ProviderFinish(reason="tool_calls")
         else:
@@ -371,8 +371,8 @@ async def test_runtime_worker_markdown_result_is_silent(tmp_path):
             yield ProviderToolCallDelta(
                 index=0,
                 call_id="c1",
-                name="finish",
-                arguments_delta=json.dumps({"summary": "# Markdown Result\n- Item 1\n- Item 2"}),
+                name="read",
+                arguments_delta=json.dumps({"path": "."}),
             )
             yield ProviderFinish(reason="tool_calls")
         else:

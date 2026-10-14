@@ -183,37 +183,22 @@ Every bug-fix step begins by writing a failing test that reproduces the issue ag
 - **Verification**: `uv run pytest tests/test_conversational_voice_loop.py tests/test_audio_loop_states.py tests/test_transcribe_stt.py tests/test_stt_session_contract.py -q`.
 
 ### Go/No-Go Gate Before Step 7: Reassess Engine Unification vs. Direct Legacy Deletion
-- **Gate Criteria**: After Steps 1–6 are complete and green, measure the remaining duplication between `VoiceAgent` (`src/verbix/agent/voice.py`) and `WorkerAgent` (`src/verbix/agent/worker.py`) once `DefaultAgent` (Step 8) is slated for removal:
-  - If merging `VoiceAgent` and `WorkerAgent` into `src/verbix/agent/engine.py` reduces net complexity without risking regressions in worker tool enforcement or voice pre-tool buffering, proceed with **Step 7** followed by **Step 8**.
-  - If `VoiceAgent` and `WorkerAgent` are cleaner kept separate after Step 5's bug fixes, **skip Step 7** and go straight to **Step 8** (deleting `DefaultAgent`, `LocalEnvironment`, `FinishTool`, and `tests/test_miniswe_*.py`).
-  - Pause at this gate to report the diff/line metrics and confirm Go/No-Go with the engineer before executing Step 7.
+- **Gate Outcome — NO-GO on Step 7 (Decided 2026-10-14)**:
+  - After completing Steps 1–6b, `VoiceAgent` (`src/verbix/agent/voice.py`, 498 lines) and `WorkerAgent` (`src/verbix/agent/worker.py`, 375 lines) share only ~95 lines of small helper methods (`tool_message_content`, template rendering, tool definition lookup), while the remaining ~350 lines of `VoiceAgent` (interactive streaming generator, `split_chunks` pre-tool buffering, `asyncio.shield` barge-in cancellation, per-turn tool caps) and ~260 lines of `WorkerAgent` (non-streaming `LitellmModel.query()`, turn-1 tool enforcement, 3-strike error injection) are genuinely distinct.
+  - **Deliberate Retention**: `WorkerAgent`'s non-streaming `LitellmModel.query()` / `_parse_actions()` path (including `src/verbix/agent/models/utils/actions_toolcall.py`, `src/verbix/agent/models/utils/retry.py`, and the `FormatError` plain-text completion path when `_tools_executed > 0`) is deliberately left as-is. It avoids SSE streaming stalls during large worker code generations and works reliably under existing test coverage without the risk of merging two different execution models into one conditional-heavy loop.
 
-### Step 7 (Conditional on Go/No-Go Gate): Engine Unification ("One Engine, Three Flavors")
-- **Files**: `src/verbix/agent/engine.py`, `src/verbix/agent/config/voice.yaml`, `src/verbix/agent/config/worker.yaml`, `src/verbix/agent/config/announcer.yaml`, `src/verbix/runtime/foreground.py`, `src/verbix/runtime/announcer.py`, `src/verbix/runtime/workers.py`, `src/verbix/runtime/worker.py`.
-- **Tests**: Failing tests reproducing: (a) Worker not streaming live `TextDelta` events during `step_stream()`; (b) Worker requiring `FormatError` exception-as-control-flow to complete on plain text after tool execution.
-- **Changes**:
-  - Implement unified `Agent` and `AgentConfig` in `src/verbix/agent/engine.py` driving Foreground, Announcer, and Worker via `model.query_stream()`.
-  - Flavor configuration knobs:
-    - `speech_chunking: bool` (`True` for Foreground/Announcer; `False` for Worker).
-    - `turn_scoped_limits: bool` (`True` for Foreground/Announcer; `False` for Worker).
-    - `require_tool_before_finish: bool` (`True` for Worker; `False` for Foreground/Announcer).
-    - `max_calls_per_tool_per_turn: dict[str, int]` (`{"status": 1, "cancel": 1}` in `voice.yaml`; `{}` for Worker/Announcer).
-    - Canonicalized `repeat_limit: int = 3` (`json.dumps(args, sort_keys=True)`), preserving the 3-strike worker error observation injection (`bae14b1`) before hard abort on the 4th strike.
-  - Collapse `WorkerTask._run()` (`src/verbix/runtime/worker.py:123-208`) to stream directly from `self.session.step_stream(self.description)`.
-  - Keep compatibility re-exports (`VoiceAgent`, `WorkerAgent`, `AnnouncerAgent`, `DefaultAgent`) in place during Step 7 so all existing test files remain green prior to Step 8.
-- **Verification**: `uv run pytest -q` and `uv run ruff check src tests`.
+### Step 7: Skipped per Go/No-Go Gate Decision
 
-### Step 8: Dedicated Commit — Delete Legacy Mini-SWE-Agent Surface
+### Step 8: Dedicated Commit — Delete Unreferenced Legacy Mini-SWE-Agent Surface
 - **Files**: `src/verbix/agent/`, `src/verbix/tools/`, `src/verbix/runtime/`, `tests/`.
 - **Changes**:
-  - Audit `tests/test_miniswe_agent_turn.py`, `tests/test_miniswe_environment.py`, `tests/test_miniswe_tools_and_model.py`, and `tests/test_local_environment.py`. Port any behavior that `VoiceAgent` / `WorkerAgent` (or unified `Agent`) and `sandbox.py` must retain (e.g., multimodal observation expansion, cost tracking, turn-boundary recovery, and the `bae14b1` worker circuit-breaker tests) into `tests/test_worker_agent.py`, `tests/test_voice_agent.py`, or `tests/test_tools.py`.
-  - Delete:
-    - `src/verbix/agent/agents/default.py` and `src/verbix/agent/agents/`
-    - `src/verbix/agent/environments/local.py` and `src/verbix/agent/environments/`
-    - `src/verbix/tools/finish.py` (and `"finish"` from `TOOL_CATALOG` in `src/verbix/tools/__init__.py`)
-    - Dead `else:` branch in `WorkerTask._run()` (`src/verbix/runtime/worker.py:144-207`) polling `_is_finish_tool_message`
-    - Obsolete `tests/test_miniswe_*.py` and `tests/test_local_environment.py`
-    - *(If Step 7 was executed, also delete `voice.py`, `worker.py`, `announcer.py`, `actions_toolcall.py`, `retry.py`, `LitellmModel.query()`, and `ProviderStreamAdapter.query()`).*
+  - Grep for all references before every deletion and delete **only** what nothing live references:
+    - `src/verbix/agent/agents/default.py` and `src/verbix/agent/agents/` (`DefaultAgent`)
+    - `src/verbix/agent/environments/local.py` and `src/verbix/agent/environments/` (`LocalEnvironment`)
+    - `src/verbix/tools/finish.py` (`FinishTool`, and `"finish"` from `TOOL_CATALOG` in `src/verbix/tools/__init__.py`)
+    - Dead `_is_finish_tool_message` / `_MAX_TURNS_WITHOUT_FINISH` polling branch in `WorkerTask._run()` (`src/verbix/runtime/worker.py`)
+    - Legacy tests that only cover those deleted classes (`tests/test_miniswe_agent_turn.py`, `tests/test_miniswe_environment.py`, `tests/test_local_environment.py`), after porting any remaining coverage (`tests/test_turn_boundary.py`, `tests/test_agent_limits_and_caps.py`, `tests/test_announcer_config.py`, `tests/test_ipc_and_cli.py`, `tests/test_runtime_worker.py`, `tests/test_runtime_e2e.py`) to `VoiceAgent` / `WorkerAgent`.
+  - **Keep**: `src/verbix/agent/voice.py`, `src/verbix/agent/worker.py`, `src/verbix/agent/announcer.py`, `src/verbix/agent/models/utils/actions_toolcall.py`, `src/verbix/agent/models/utils/retry.py`, `LitellmModel.query()` / `_parse_actions()`, and `tests/test_miniswe_tools_and_model.py` (updating any `DefaultAgent` import inside it if present).
 - **Verification**: `uv run pytest -q` and `uv run ruff check src tests`.
 
 ### Step 9: Dedicated Commit — Retire `src/verbix/voice/sherpa_stt.py` (Canary 180M Flash)

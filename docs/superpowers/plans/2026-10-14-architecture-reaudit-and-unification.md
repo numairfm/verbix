@@ -1205,16 +1205,16 @@ git commit -m "refactor(agent): unify Voice, Worker, and Announcer on one stream
 
 ---
 
-### Task 8: Dedicated Commit — Port Required Tests & Delete Legacy Mini-SWE-Agent Surface
+### Task 8: Dedicated Commit — Port Required Tests & Delete Unreferenced Legacy Mini-SWE-Agent Surface
 
 **Files:**
 - Delete: `src/verbix/agent/agents/default.py`, `src/verbix/agent/agents/__init__.py`
 - Delete: `src/verbix/agent/environments/local.py`, `src/verbix/agent/environments/__init__.py`
 - Delete: `src/verbix/tools/finish.py`
-- Delete: `src/verbix/agent/models/utils/actions_toolcall.py`, `src/verbix/agent/models/utils/retry.py`
-- Delete: `tests/test_miniswe_agent_turn.py`, `tests/test_miniswe_environment.py`, `tests/test_miniswe_tools_and_model.py`, `tests/test_local_environment.py`
-- Modify: `src/verbix/agent/__init__.py`, `src/verbix/tools/__init__.py`, `src/verbix/runtime/foreground.py`, `src/verbix/runtime/workers.py`, `src/verbix/runtime/worker.py`, `src/verbix/agent/models/litellm_model.py`
-- Modify: `tests/test_turn_boundary.py`, `tests/test_agent_limits_and_caps.py`, `tests/test_announcer_config.py`, `tests/test_ipc_and_cli.py`, `tests/test_tools.py`, `tests/test_runtime_worker.py`
+- Delete: `tests/test_miniswe_agent_turn.py`, `tests/test_miniswe_environment.py`, `tests/test_local_environment.py`
+- Keep: `src/verbix/agent/models/utils/actions_toolcall.py`, `src/verbix/agent/models/utils/retry.py`, `LitellmModel.query()` / `_parse_actions()`, and `tests/test_miniswe_tools_and_model.py` (ported away from `DefaultAgent` / `FinishTool`)
+- Modify: `src/verbix/agent/__init__.py`, `src/verbix/tools/__init__.py`, `src/verbix/runtime/foreground.py`, `src/verbix/runtime/workers.py`, `src/verbix/runtime/worker.py`, `src/verbix/runtime/runtime.py`
+- Modify: `tests/test_miniswe_tools_and_model.py`, `tests/test_turn_boundary.py`, `tests/test_agent_limits_and_caps.py`, `tests/test_announcer_config.py`, `tests/test_ipc_and_cli.py`, `tests/test_runtime_worker.py`, `tests/test_runtime_e2e.py`, `tests/test_runtime_tools.py`, `tests/test_runtime_races.py`, `tests/test_worker_agent.py`
 
 **Interfaces:**
 - Consumes: `VoiceAgent` / `WorkerAgent` / `AnnouncerAgent` (or unified `Agent`).

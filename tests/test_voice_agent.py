@@ -427,7 +427,10 @@ async def test_voice_agent_prunes_status_after_one_call_in_same_turn():
     agent = VoiceAgent(
         model=mock_model,
         tools=tools,
-        config=VoiceConfig(tools=["spawn", "status", "cancel"]),
+        config=VoiceConfig(
+            tools=["spawn", "status", "cancel"],
+            max_calls_per_tool_per_turn={"status": 1, "cancel": 1},
+        ),
     )
     events = [e async for e in agent.step_stream("what is happening?")]
 
@@ -479,5 +482,66 @@ async def test_voice_agent_canonicalizes_json_args_in_repeat_history():
     tc = [e for e in events if isinstance(e, TurnComplete)][-1]
     assert tc.exit_reason == "repeated_tool_call"
     assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_voice_agent_executes_parallel_tool_calls_and_maintains_multi_turn_history():
+    from verbix.agent.config import get_config_from_spec
+    from verbix.agent.worker import WorkerConfig
+
+    voice_cfg_dict = get_config_from_spec("voice")
+    assert "spawn" in VoiceConfig(**voice_cfg_dict["agent"]).tools
+    worker_cfg_dict = get_config_from_spec("worker")
+    assert "bash" in WorkerConfig(**worker_cfg_dict["agent"]).tools
+
+    tools = ToolRegistry()
+    tools.register(
+        "spawn",
+        {"type": "function", "function": {"name": "spawn"}},
+        lambda args: f"task-{args.get('task_name')}-started",
+    )
+
+    mock_model = MagicMock()
+    call_count = 0
+
+    async def mock_stream(messages, tools=None, **kw):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield ToolCallDelta(
+                index=0,
+                call_id="call_spawn_1",
+                name="spawn",
+                arguments_delta='{"task_name": "task-a"}',
+            )
+            yield ToolCallDelta(
+                index=1,
+                call_id="call_spawn_2",
+                name="spawn",
+                arguments_delta='{"task_name": "task-b"}',
+            )
+        else:
+            yield TextDelta(text=f"Turn {call_count} done.")
+            yield TurnComplete(final_text=f"Turn {call_count} done.")
+
+    mock_model.query_stream = mock_stream
+    agent = VoiceAgent(
+        model=mock_model,
+        tools=tools,
+        config=VoiceConfig(
+            system_template="You are Verbix.",
+            instance_template="Task: {{task}}",
+            tools=["spawn"],
+        ),
+    )
+    events1 = [e async for e in agent.step_stream("start task-a and task-b")]
+    finished = [e for e in events1 if isinstance(e, ToolCallFinished)]
+    assert [f.observation for f in finished] == ["task-task-a-started", "task-task-b-started"]
+    assert agent.messages[1]["content"] == "Task: start task-a and task-b"
+
+    # Second turn uses raw input directly without re-applying instance_template
+    _ = [e async for e in agent.step_stream("follow up")]
+    assert agent.messages[-2] == {"role": "user", "content": "follow up"}
+
 
 

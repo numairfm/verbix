@@ -12,9 +12,6 @@ import yaml
 
 from verbix.agent.announcer import AnnouncerAgent, AnnouncerConfig
 from verbix.core.events import AgentEvent
-from verbix.core.events import (
-    TurnComplete as CoreTurnComplete,
-)
 from verbix.runtime.foreground import adapt_provider
 
 logger = logging.getLogger("verbix.runtime")
@@ -154,52 +151,11 @@ async def drain_pending_announcements(runtime: Any) -> None:
         )
         final_text = await runtime.submit(prompt, runtime.wake_output, agent=runtime.announcer)
         if final_text:
+            if hasattr(runtime, "ledger"):
+                for task_id, _ in batch:
+                    runtime.ledger.mark_heard(task_id)
             runtime.foreground.messages.append({"role": "assistant", "content": final_text})
         if final_text and runtime.on_wake:
             wake_res = runtime.on_wake(final_text)
             if asyncio.iscoroutine(wake_res):
                 await wake_res
-
-
-async def speak_batch(runtime: Any, batch: list[tuple[str, str]]) -> bool:
-    """Synthesizes background worker results via dedicated announcer and delivers to output."""
-    items = [result.strip() for _, result in batch if result.strip()]
-    if not items:
-        return False
-    wake_prompt = (
-        f"{runtime._request_grounding()}\n"
-        "[Present these completed findings directly to the user in spoken conversational prose. "
-        "State the outcome clearly, and only add a follow-up question if a genuine next step exists:]\n"
-        + "\n\n".join(items)
-    )
-    final_text = ""
-    fan_out = WakeOutputFanOut(runtime.wake_output, runtime._broadcast_wake_event)
-    try:
-        runtime.announcer.messages = _snapshot_foreground_history(runtime)
-        runtime.announcer.n_calls = 0
-        runtime.announcer.cost = 0.0
-        runtime.announcer.model = adapt_provider(runtime.provider)
-        async for event in runtime.announcer.step_stream(wake_prompt):
-            if isinstance(event, CoreTurnComplete) and event.final_text in (
-                "LimitsExceeded",
-                "TimeExceeded",
-            ):
-                logger.warning(
-                    "Announcer step aborted with %s", event.final_text
-                )
-                continue
-            await fan_out.emit(event)
-            if isinstance(event, CoreTurnComplete) and event.final_text:
-                final_text = event.final_text
-    except Exception:
-        logger.exception("Failed to synthesize background task completion announcement")
-        return False
-
-    if final_text:
-        runtime.foreground.messages.append({"role": "assistant", "content": final_text})
-        if runtime.on_wake:
-            wake_res = runtime.on_wake(final_text)
-            if asyncio.iscoroutine(wake_res):
-                await wake_res
-        return True
-    return False

@@ -28,7 +28,8 @@ class SpawnTool:
                     "description": (
                         "The high-level goal and verification criteria for the background worker to accomplish. "
                         "State what needs to be done. Never guess or insert specific shell commands, package managers, "
-                        "or file paths unless explicitly provided by the user."
+                        "file paths, or speculative log/workspace investigations unless explicitly requested by the user. "
+                        "Never call spawn to figure out what an ambiguous or misheard utterance means."
                     ),
                 },
             },

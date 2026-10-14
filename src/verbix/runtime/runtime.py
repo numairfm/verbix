@@ -34,7 +34,6 @@ from verbix.runtime.announcer import (
     build_announcer,
     build_announcer_agent,
     drain_pending_announcements,
-    speak_batch,
 )
 from verbix.runtime.floor import FloorState
 from verbix.runtime.foreground import (
@@ -64,7 +63,6 @@ __all__ = [
     "build_foreground_agent",
     "drain_pending_announcements",
     "spawn_worker",
-    "speak_batch",
 ]
 
 
@@ -431,14 +429,6 @@ class Runtime:
             f"{task_lines}"
         )
 
-    async def _announce_ids(self, batch: list[str]) -> bool:
-        """AnnouncerLoop speak_fn: floor already held, resolve results via ledger."""
-        tuples = []
-        for task_id in batch:
-            entry = self.ledger.get(task_id)
-            tuples.append((task_id, entry.result_summary if entry else ""))
-        return await self._speak_batch(tuples)
-
     def _broadcast_wake_event(self, event: AgentEvent) -> None:
         """Broadcasts a wake-turn event to IPC subscribers as plain data."""
         payload: dict[str, Any] = {}
@@ -447,10 +437,6 @@ class Runtime:
             if isinstance(val, str) and val:
                 payload[attr] = val
         self._broadcast_event("wake_event", {"event": type(event).__name__, **payload})
-
-    async def _speak_batch(self, batch: list[tuple[str, str]]) -> bool:
-        """Synthesizes background worker results via dedicated announcer and delivers to output."""
-        return await speak_batch(self, batch)
 
     async def aclose(self) -> None:
         """Teardown: SIGKILL tracked in-flight process groups."""

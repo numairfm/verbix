@@ -86,7 +86,7 @@ You are Verbix, a voice-operated desktop assistant and calm, capable peer. You s
 - Never recite floor context tags, brackets, or system annotations aloud."""
 
 DEFAULT_WORKER_PROMPT = """You are an autonomous background worker executing tasks for Verbix.
-Discover the necessary environment and tools, execute actions directly, verify outcomes, and call the finish tool with an information-dense factual summary of results upon completion."""
+Discover the necessary environment and tools, execute actions directly, verify outcomes, and conclude with an information-dense factual summary of results upon completion."""
 
 
 class DefaultAgentHistoryProxy:

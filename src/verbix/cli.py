@@ -226,6 +226,15 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
     flag_prompt = getattr(args, "system_prompt", None)
     system_prompt = flag_prompt.strip() if flag_prompt and flag_prompt.strip() else None
 
+    from verbix.tools.sandbox import probe_sandbox
+
+    sandbox_status = probe_sandbox()
+    if not sandbox_status.available:
+        sys.stderr.write(
+            f"[verbix] Note: 'bash' tool disabled ({sandbox_status.reason}).\n"
+        )
+        sys.stderr.flush()
+
     return Runtime(
         workspace=workspace,
         provider=foreground_model,

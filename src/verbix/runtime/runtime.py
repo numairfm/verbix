@@ -156,9 +156,12 @@ class Runtime:
         if "Host operating system:" in prompt_to_use:
             base = prompt_to_use
         else:
+            from verbix.tools.sandbox import probe_sandbox
+
+            shell_part = " Shell: bash." if probe_sandbox().available else ""
             grounding = (
                 "\n\n# ENVIRONMENT & GROUNDING"
-                f"\n- Host operating system: {platform.system()}. Shell: bash."
+                f"\n- Host operating system: {platform.system()}.{shell_part}"
                 f"\n- The working directory is {self.workspace}."
             )
             base = prompt_to_use.rstrip() + grounding
@@ -453,6 +456,9 @@ class Runtime:
 
     async def aclose(self) -> None:
         """Teardown: SIGKILL tracked in-flight process groups."""
+        from verbix.tools.sandbox import kill_active_processes
+
+        kill_active_processes()
         for env in self._environments:
             try:
                 env.kill_all()

@@ -221,15 +221,6 @@ async def test_read_states_its_own_completeness(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_unsandboxed_bash_execution(tmp_path: Path):
-    ctx = ToolContext(workspace=tmp_path)
-    tool = BashTool(sandboxed=False)
-    res = await tool.execute({"command": "pwd"}, ctx)
-    assert res.is_error is False
-    assert Path(res.observation.strip()).resolve() == tmp_path.resolve()
-
-
-@pytest.mark.asyncio
 async def test_edit_empty_old_str(tmp_path: Path):
     f = tmp_path / "hello.txt"
     f.write_text("content")
@@ -306,4 +297,63 @@ async def test_legitimate_verbix_paths_still_allowed(tmp_path: Path):
     res = await FileReadTool().execute({"path": ".verbix/logs/app.log"}, ctx)
     assert res.is_error is False
     assert "hello" in res.observation
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_is_always_sandboxed_allowlists_env_and_masks_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from verbix.tools.sandbox import probe_sandbox
+
+    status = probe_sandbox()
+    if not status.available:
+        pytest.skip(f"Sandbox unavailable: {status.reason}")
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / ".env").write_text("OPENROUTER_API_KEY=sk-dotenv-secret\n", encoding="utf-8")
+    (workspace / ".verbix").mkdir()
+    (workspace / ".verbix" / "auth.json").write_text(
+        '{"openrouter":{"key":"sk-auth-secret"}}', encoding="utf-8"
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env-secret")
+    monkeypatch.setenv("VERBIX_API_KEY", "sk-verbix-secret")
+    monkeypatch.setenv("CUSTOM_UNLISTED_VAR", "should-not-appear")
+
+    tool = BashTool()
+    assert "bubblewrap" in tool.description.lower()
+    ctx = ToolContext(workspace=workspace)
+
+    # 1. Host env vars outside the allowlist (PATH, LANG, TERM) must not leak into child env
+    env_res = await tool.execute({"command": "env"}, ctx)
+    assert "sk-env-secret" not in env_res.observation
+    assert "sk-verbix-secret" not in env_res.observation
+    assert "should-not-appear" not in env_res.observation
+
+    # 2. Workspace .env and .verbix/auth.json must be masked as /dev/null inside bwrap
+    secret_res = await tool.execute({"command": "cat .env .verbix/auth.json"}, ctx)
+    assert secret_res.observation.strip() == ""
+
+    # 3. Cannot write outside workspace
+    esc_res = await tool.execute({"command": "touch /usr/escape_test"}, ctx)
+    assert esc_res.is_error is True
+
+
+def test_worker_registry_omits_bash_when_sandbox_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    from verbix.runtime.workers import build_worker_registry
+    from verbix.tools.sandbox import SandboxStatus
+
+    monkeypatch.setattr(
+        "verbix.tools.sandbox.probe_sandbox",
+        lambda allow_network=False: SandboxStatus(
+            available=False, backend=None, reason="no sandbox on host", capabilities=""
+        ),
+    )
+    reg = build_worker_registry(workspace=tmp_path)
+    names = {d["function"]["name"] for d in reg.get_definitions()}
+    assert "bash" not in names
+    assert "read" in names
+
 

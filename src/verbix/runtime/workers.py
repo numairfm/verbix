@@ -27,19 +27,24 @@ def build_worker_registry(workspace: Path | None = None) -> ToolRegistry:
     bash is the escape hatch for what has no dedicated tool.
     """
     from verbix.tools import build_registry
+    from verbix.tools.sandbox import probe_sandbox
+
+    names = [
+        "read",
+        "write",
+        "edit",
+        "grep",
+        "glob",
+        "web_search",
+        "web_fetch",
+        "screenshot",
+        "bash",
+    ]
+    if not probe_sandbox().available:
+        names = [n for n in names if n != "bash"]
 
     return build_registry(
-        [
-            "read",
-            "write",
-            "edit",
-            "grep",
-            "glob",
-            "web_search",
-            "web_fetch",
-            "screenshot",
-            "bash",
-        ],
+        names,
         workspace=workspace,
     )
 
@@ -125,19 +130,26 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
 
     model_to_use = adapt_provider(runtime.worker_model or runtime.provider)
     from verbix.tools import build_registry
+    from verbix.tools.sandbox import probe_sandbox
     from verbix.tools.shared import resolve_output_limits
 
-    worker_tool_names = agent_cfg_dict.get("tools") or [
-        "read",
-        "write",
-        "edit",
-        "grep",
-        "glob",
-        "web_search",
-        "web_fetch",
-        "screenshot",
-        "bash",
-    ]
+    worker_tool_names = list(
+        agent_cfg_dict.get("tools")
+        or [
+            "read",
+            "write",
+            "edit",
+            "grep",
+            "glob",
+            "web_search",
+            "web_fetch",
+            "screenshot",
+            "bash",
+        ]
+    )
+    if not probe_sandbox().available:
+        worker_tool_names = [n for n in worker_tool_names if n != "bash"]
+        agent_cfg_dict["tools"] = worker_tool_names
     worker_tools = build_registry(
         worker_tool_names,
         workspace=runtime.workspace,

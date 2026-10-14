@@ -65,16 +65,13 @@ def describe_worker_tools(workspace: Path | None = None) -> tuple[list[str], str
 
 
 def finish_runtime_task(runtime: Any, task_id: str, result: str) -> None:
-    """Records task completion into the ledger, context memory, and schedules announcement."""
+    """Records task completion into the ledger and schedules announcement."""
     if hasattr(runtime, "ledger"):
+        if runtime.ledger.get(task_id) is None:
+            runtime.ledger.register_task(task_id, "")
         runtime.ledger.mark_completed(task_id, result)
     if hasattr(runtime, "_broadcast_event"):
         runtime._broadcast_event("task_completed", {"task_id": task_id, "result": result})
-    if hasattr(runtime, "foreground") and hasattr(runtime.foreground, "messages"):
-        runtime.foreground.messages.append({
-            "role": "user",
-            "content": f"[Task '{task_id}' completed]: {result}",
-        })
     if hasattr(runtime, "_pending_announcements"):
         runtime._pending_announcements.append((task_id, result))
     if getattr(runtime, "floor", None) and getattr(runtime.floor, "is_idle", False):
@@ -89,16 +86,13 @@ def finish_runtime_task(runtime: Any, task_id: str, result: str) -> None:
 
 
 def fail_runtime_task(runtime: Any, task_id: str, result: str) -> None:
-    """Records task failure into the ledger, context memory, and schedules announcement."""
+    """Records task failure into the ledger and schedules announcement."""
     if hasattr(runtime, "ledger"):
+        if runtime.ledger.get(task_id) is None:
+            runtime.ledger.register_task(task_id, "")
         runtime.ledger.mark_failed(task_id, result)
     if hasattr(runtime, "_broadcast_event"):
         runtime._broadcast_event("task_failed", {"task_id": task_id, "result": result})
-    if hasattr(runtime, "foreground") and hasattr(runtime.foreground, "messages"):
-        runtime.foreground.messages.append({
-            "role": "user",
-            "content": f"[Task '{task_id}' failed]: {result}",
-        })
     if hasattr(runtime, "_pending_announcements"):
         runtime._pending_announcements.append((task_id, result))
     if getattr(runtime, "floor", None) and getattr(runtime.floor, "is_idle", False):

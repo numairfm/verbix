@@ -200,6 +200,47 @@ class Runtime:
             )
         return "\n".join(envelope)
 
+    def _mark_task_heard(self, task_id: str) -> None:
+        if hasattr(self, "ledger"):
+            self.ledger.mark_heard(task_id)
+        if hasattr(self, "_pending_announcements"):
+            self._pending_announcements[:] = [
+                (tid, r) for tid, r in self._pending_announcements if tid != task_id
+            ]
+
+    def _foreground_grounding(self, interruption: Any = None) -> tuple[str, list[str]]:
+        """Builds per-turn foreground grounding including active and newly completed tasks."""
+        envelope = [self._request_grounding(interruption)]
+        active = self.list_active_tasks()
+        if active:
+            active_parts = [
+                f"{t.id} ('{t.description}', running for {max(0, int(time.time() - t._created_at))}s)"
+                for t in active
+            ]
+            envelope.append(f"[Active background tasks: {'; '.join(active_parts)}]")
+
+        folded_ids: list[str] = []
+        pending_lines: list[str] = []
+        if hasattr(self, "ledger"):
+            for entry in self.ledger.pending_deliveries():
+                folded_ids.append(entry.id)
+                pending_lines.append(
+                    f"[Task '{entry.id}' {entry.status}]: {entry.result_summary}"
+                )
+        if hasattr(self, "_pending_announcements"):
+            for tid, res in self._pending_announcements:
+                if tid not in folded_ids and res.strip():
+                    entry = self.ledger.get(tid) if hasattr(self, "ledger") else None
+                    if entry is None or entry.delivery == "pending":
+                        folded_ids.append(tid)
+                        pending_lines.append(f"[Task '{tid}' completed]: {res.strip()}")
+        if pending_lines:
+            envelope.append(
+                "[Newly completed background tasks (report briefly before answering):]\n"
+                + "\n".join(pending_lines)
+            )
+        return "\n".join(envelope), folded_ids
+
     async def step(
         self, user_text: str | None = None, *, interruption: Any = None
     ) -> AsyncIterator[AgentEvent]:
@@ -214,12 +255,23 @@ class Runtime:
             )
             self._turn_handle = handle
             self._last_turn_handle = handle
+            folded_ids: list[str] = []
+            turn_ok = False
             try:
-                async for event in self._step_inner(user_text, interruption=interruption):
+                async for event in self._step_inner(
+                    user_text, interruption=interruption, folded_ids_out=folded_ids
+                ):
+                    if isinstance(event, CoreTurnComplete) and not getattr(
+                        event, "is_error", False
+                    ):
+                        turn_ok = True
                     yield event
             finally:
                 if not self.floor.interrupt_requested:
                     handle.completed = True
+                    if turn_ok:
+                        for tid in folded_ids:
+                            self._mark_task_heard(tid)
                 handle.task = None
 
     async def _step_inner(
@@ -228,13 +280,20 @@ class Runtime:
         *,
         agent: Any = None,
         interruption: Any = None,
+        folded_ids_out: list[str] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         # System prompt stays static (provider cache prefix); volatile
         # grounding rides on the user message at request time only.
         session = agent or self.foreground
         session.model = adapt_provider(self.provider)
         if user_text is not None:
-            user_text = f"{self._request_grounding(interruption)}\n{user_text}"
+            if session is self.foreground:
+                grounding, folded = self._foreground_grounding(interruption)
+                if folded_ids_out is not None:
+                    folded_ids_out.extend(folded)
+                user_text = f"{grounding}\n{user_text}"
+            else:
+                user_text = f"{self._request_grounding(interruption)}\n{user_text}"
         async for event in session.step_stream(user_text):
             yield event
 
@@ -259,16 +318,24 @@ class Runtime:
             )
             self._turn_handle = handle
             self._last_turn_handle = handle
+            folded_ids: list[str] = []
+            turn_ok = False
             try:
                 async for event in self._step_inner(
-                    user_text, agent=session, interruption=interruption
+                    user_text,
+                    agent=session,
+                    interruption=interruption,
+                    folded_ids_out=folded_ids,
                 ):
                     if output and hasattr(output, "emit"):
                         res = output.emit(event)
                         if asyncio.iscoroutine(res):
                             await res
-                    if isinstance(event, CoreTurnComplete) and event.final_text:
-                        final_text = event.final_text
+                    if isinstance(event, CoreTurnComplete):
+                        if not getattr(event, "is_error", False):
+                            turn_ok = True
+                        if event.final_text:
+                            final_text = event.final_text
                 if output and getattr(output, "is_playing", False):
                     while output.is_playing:
                         await asyncio.sleep(0.02)
@@ -280,6 +347,9 @@ class Runtime:
                 )
                 if not was_interrupted:
                     handle.completed = True
+                    if turn_ok:
+                        for tid in folded_ids:
+                            self._mark_task_heard(tid)
                 handle.task = None
         return final_text
 
@@ -378,6 +448,8 @@ class Runtime:
             task = self.tasks.get(task_id)
             if not task:
                 return f"No task found with ID '{task_id}'."
+            if task.status in ("completed", "failed"):
+                self._mark_task_heard(task.id)
             return task.get_status(full=full)
 
         active = self.list_active_tasks()
@@ -394,6 +466,8 @@ class Runtime:
         if recent_done:
             lines.append("Recently completed:")
             for t in recent_done:
+                if t.status in ("completed", "failed"):
+                    self._mark_task_heard(t.id)
                 finish_time = t._finished_at or time.time()
                 duration = int(finish_time - t._created_at)
                 finish_str = datetime.fromtimestamp(finish_time).astimezone().strftime("%H:%M:%S")

@@ -136,12 +136,19 @@ async def drain_pending_announcements(runtime: Any) -> None:
     async with runtime._drain_lock:
         if not runtime.floor.is_idle or not runtime._pending_announcements:
             return
-        batch = list(runtime._pending_announcements)
+        ledger = getattr(runtime, "ledger", None)
+        batch: list[tuple[str, str]] = []
+        for tid, res in list(runtime._pending_announcements):
+            entry = ledger.get(tid) if ledger is not None else None
+            if entry is not None and entry.delivery != "pending":
+                continue
+            if res.strip():
+                batch.append((tid, res.strip()))
         runtime._pending_announcements.clear()
-
-        items = [res.strip() for _, res in batch if res.strip()]
-        if not items:
+        if not batch:
             return
+
+        items = [res for _, res in batch]
         runtime.announcer.messages = _snapshot_foreground_history(runtime)
         prompt = (
             f"{runtime._request_grounding()}\n"
@@ -150,12 +157,22 @@ async def drain_pending_announcements(runtime: Any) -> None:
             + "\n\n".join(items)
         )
         final_text = await runtime.submit(prompt, runtime.wake_output, agent=runtime.announcer)
-        if final_text:
-            if hasattr(runtime, "ledger"):
+        was_interrupted = bool(getattr(runtime.floor, "interrupt_requested", False))
+        if final_text and not was_interrupted:
+            if ledger is not None:
                 for task_id, _ in batch:
-                    runtime.ledger.mark_heard(task_id)
+                    ledger.mark_heard(task_id)
+            for task_id, res in batch:
+                runtime.foreground.messages.append(
+                    {"role": "user", "content": f"[Task '{task_id}' completed]: {res}"}
+                )
             runtime.foreground.messages.append({"role": "assistant", "content": final_text})
-        if final_text and runtime.on_wake:
+        else:
+            # Re-queue unvoiced items so they stay pending
+            for item in reversed(batch):
+                if item not in runtime._pending_announcements:
+                    runtime._pending_announcements.insert(0, item)
+        if final_text and not was_interrupted and runtime.on_wake:
             wake_res = runtime.on_wake(final_text)
             if asyncio.iscoroutine(wake_res):
                 await wake_res

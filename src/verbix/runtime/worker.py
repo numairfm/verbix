@@ -55,6 +55,8 @@ def _content_text(content: Any) -> str:
 def format_worker_event(task_id: str, event: Any) -> str | None:
     """One tagged CLI line per background event; None for events with no display."""
     if isinstance(event, TextDelta):
+        if event.text.startswith("! format error:"):
+            return f"[{task_id}] (thinking...)"
         return f"[{task_id}] {event.text}"
     if isinstance(event, ToolCallDelta) and event.name:
         return f"[{task_id}] $ {event.name}({event.arguments_delta})"

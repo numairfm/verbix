@@ -72,3 +72,9 @@ def test_format_worker_event_covers_started_and_finished():
         )
         is None
     )
+
+
+def test_format_worker_event_masks_format_errors():
+    ev = TextDelta(text="! format error: No tool calls found.")
+    assert format_worker_event("task-1", ev) == "[task-1] (thinking...)"
+

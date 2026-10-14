@@ -37,6 +37,8 @@ def test_worker_prompt_contains_zero_examples_and_has_invariants():
     assert "Execute" in prompt
     assert "Verify" in prompt
     assert "Complete" in prompt
+    assert "honest" in prompt.lower()
+    assert "never invent facts" in prompt.lower()
 
     # Assert zero benchmark submission token references anywhere in worker.yaml
     assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in raw_text, (

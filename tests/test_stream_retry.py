@@ -142,8 +142,9 @@ async def test_query_stream_retries_when_stream_dies_after_empty_role_chunk(monk
 
         async def _gen():
             if calls == 1:
-                # Initial empty role chunk before any text/thought/tool event
+                # Initial empty role chunk and internal reasoning chunk before any text/tool event
                 yield {"choices": [{"delta": {"role": "assistant"}, "finish_reason": None}]}
+                yield {"choices": [{"delta": {"reasoning_content": "thinking..."}, "finish_reason": None}]}
                 raise _conn_error()
             yield _text_chunk("Hello there!", "stop")
 

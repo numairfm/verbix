@@ -165,6 +165,11 @@ async def drain_pending_announcements(runtime: Any) -> None:
         if not batch:
             return
 
+        batch_ids = {tid for tid, _, _ in batch}
+        runtime._pending_announcements[:] = [
+            (t, r) for t, r in runtime._pending_announcements if t not in batch_ids
+        ]
+
         items = [res for _, res, _ in batch]
         runtime.announcer.messages = _snapshot_foreground_history(runtime)
         prompt = (
@@ -173,29 +178,37 @@ async def drain_pending_announcements(runtime: Any) -> None:
             "State the outcome clearly, and only add a follow-up question if a genuine next step exists:]\n"
             + "\n\n".join(items)
         )
-        final_text = await runtime.submit(prompt, runtime.wake_output, agent=runtime.announcer)
+        announced_ok = False
+        final_text = ""
+        try:
+            final_text = await runtime.submit(prompt, runtime.wake_output, agent=runtime.announcer)
+            last_handle = getattr(runtime, "_last_turn_handle", None)
+            turn_completed = (
+                getattr(last_handle, "completed", True) if last_handle is not None else True
+            )
+            was_interrupted = (
+                bool(getattr(runtime.floor, "interrupt_requested", False))
+                or bool(getattr(runtime.floor, "user_speaking", False))
+                or not turn_completed
+            )
+            if final_text and not was_interrupted:
+                announced_ok = True
+                if ledger is not None:
+                    for task_id, _, _ in batch:
+                        ledger.mark_heard(task_id)
+                for task_id, res, status in batch:
+                    runtime.foreground.messages.append(
+                        {"role": "user", "content": f"[Task '{task_id}' {status}]: {res}"}
+                    )
+                runtime.foreground.messages.append({"role": "assistant", "content": final_text})
+        finally:
+            if not announced_ok:
+                existing_ids = {t for t, _ in runtime._pending_announcements}
+                for tid, res, _ in reversed(batch):
+                    if tid not in existing_ids:
+                        runtime._pending_announcements.insert(0, (tid, res))
 
-        last_handle = getattr(runtime, "_last_turn_handle", None)
-        turn_completed = getattr(last_handle, "completed", True) if last_handle is not None else True
-        was_interrupted = (
-            bool(getattr(runtime.floor, "interrupt_requested", False))
-            or bool(getattr(runtime.floor, "user_speaking", False))
-            or not turn_completed
-        )
-        if final_text and not was_interrupted:
-            batch_ids = {tid for tid, _, _ in batch}
-            runtime._pending_announcements[:] = [
-                (t, r) for t, r in runtime._pending_announcements if t not in batch_ids
-            ]
-            if ledger is not None:
-                for task_id, _, _ in batch:
-                    ledger.mark_heard(task_id)
-            for task_id, res, status in batch:
-                runtime.foreground.messages.append(
-                    {"role": "user", "content": f"[Task '{task_id}' {status}]: {res}"}
-                )
-            runtime.foreground.messages.append({"role": "assistant", "content": final_text})
-        if final_text and not was_interrupted and runtime.on_wake:
+        if announced_ok and runtime.on_wake:
             wake_res = runtime.on_wake(final_text)
             if asyncio.iscoroutine(wake_res):
                 await wake_res

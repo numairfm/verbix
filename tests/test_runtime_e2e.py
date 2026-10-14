@@ -568,9 +568,14 @@ async def test_scripted_live_session_replay_has_no_duplicate_spawns_and_no_doubl
     tmp_path,
 ):
     import asyncio
+
     from verbix.provider.models import (
         Finish as ProviderFinish,
+    )
+    from verbix.provider.models import (
         TextDelta as ProviderTextDelta,
+    )
+    from verbix.provider.models import (
         ToolCallDelta as ProviderToolCallDelta,
     )
     from verbix.runtime.floor import FloorState

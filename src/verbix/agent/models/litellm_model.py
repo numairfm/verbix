@@ -229,7 +229,6 @@ class LitellmModel:
                             or delta.get("thought")
                         )
                     if reasoning:
-                        yielded_any = True
                         yield ThoughtDelta(thought=reasoning)
 
                     # 2. Text Content

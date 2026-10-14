@@ -19,6 +19,7 @@ def test_worker_registry_has_main_tools():
         "clipboard",
         "media",
         "app",
+        "open",
     }
     if probe_sandbox().available:
         expected.add("bash")

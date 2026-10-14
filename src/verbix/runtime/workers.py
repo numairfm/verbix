@@ -30,6 +30,7 @@ _DEFAULT_WORKER_TOOLS = (
     "clipboard",
     "media",
     "app",
+    "open",
     "bash",
 )
 

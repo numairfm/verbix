@@ -18,6 +18,7 @@ from verbix.tools.edit import FileEditTool
 from verbix.tools.glob import GlobTool
 from verbix.tools.grep import GrepTool
 from verbix.tools.media import MediaTool
+from verbix.tools.open import OpenTool
 from verbix.tools.read import FileReadTool
 from verbix.tools.sandbox import SandboxConfig, SandboxResult, execute_sandboxed
 from verbix.tools.screenshot import ScreenshotTool
@@ -43,6 +44,7 @@ __all__ = [
     "GlobTool",
     "GrepTool",
     "MediaTool",
+    "OpenTool",
     "SandboxConfig",
     "SandboxResult",
     "ScreenshotTool",
@@ -72,6 +74,7 @@ TOOL_CATALOG: dict[str, Callable[[Any], Any]] = {
     "clipboard": lambda runtime: ClipboardTool(),
     "media": lambda runtime: MediaTool(),
     "app": lambda runtime: AppTool(),
+    "open": lambda runtime: OpenTool(),
     "spawn": SpawnTool,
     "status": StatusTool,
     "cancel": CancelTool,

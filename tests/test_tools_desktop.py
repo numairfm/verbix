@@ -314,7 +314,89 @@ def test_worker_registry_and_runtime_grounding_include_clipboard_media_and_app(t
     from verbix.tools.spawn import SpawnTool
 
     rt = Runtime(workspace=tmp_path, provider=MagicMock())
-    for tool_name in ("clipboard", "media", "app"):
+    for tool_name in ("clipboard", "media", "app", "open"):
         assert tool_name in rt.worker_tool_names
         assert tool_name in rt.system_prompt
         assert tool_name in SpawnTool(rt).description
+
+
+@pytest.mark.asyncio
+async def test_open_tool_launches_safe_files_and_rejects_missing_or_outside_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from verbix.tools import open as open_mod
+    from verbix.tools.open import OpenTool
+
+    opened_targets: list[Path] = []
+
+    def fake_dispatch(target: Path) -> str:
+        opened_targets.append(target)
+        return f"Opened '{target.name}' with Okular."
+
+    monkeypatch.setattr(open_mod, "_dispatch_open", fake_dispatch)
+
+    doc = tmp_path / "report.pdf"
+    doc.write_bytes(b"%PDF-1.7 sample pdf")
+    sub = tmp_path / "docs_folder"
+    sub.mkdir()
+
+    tool = OpenTool()
+    ctx = ToolContext(workspace=tmp_path)
+
+    r_file = await tool.execute({"path": "report.pdf"}, ctx)
+    assert r_file.is_error is False
+    assert "Okular" in r_file.observation
+    assert opened_targets == [doc.resolve()]
+
+    r_dir = await tool.execute({"path": "docs_folder"}, ctx)
+    assert r_dir.is_error is False
+    assert opened_targets == [doc.resolve(), sub.resolve()]
+
+    # Missing file
+    r_missing = await tool.execute({"path": "nope.pdf"}, ctx)
+    assert r_missing.is_error is True
+
+    # Workspace escape
+    r_escape = await tool.execute({"path": "../outside.pdf"}, ctx)
+    assert r_escape.is_error is True
+
+    # Secret file (.env)
+    (tmp_path / ".env").write_text("SECRET=1\n", encoding="utf-8")
+    r_secret = await tool.execute({"path": ".env"}, ctx)
+    assert r_secret.is_error is True
+
+
+@pytest.mark.asyncio
+async def test_open_tool_blocks_executable_extensions_and_magic_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from verbix.tools import open as open_mod
+    from verbix.tools.open import OpenTool
+
+    monkeypatch.setattr(
+        open_mod, "_dispatch_open", lambda target: (_ for _ in ()).throw(AssertionError("should not dispatch"))
+    )
+
+    tool = OpenTool()
+    ctx = ToolContext(workspace=tmp_path)
+
+    # 1. Blocked script/binary extensions
+    for name in ("run.sh", "payload.exe", "launch.desktop", "script.bat", "app.AppImage"):
+        p = tmp_path / name
+        p.write_text("echo hello\n", encoding="utf-8")
+        res = await tool.execute({"path": name}, ctx)
+        assert res.is_error is True
+        assert "executable" in res.observation.lower()
+
+    # 2. Extensionless shebang script
+    shebang = tmp_path / "innocent_note"
+    shebang.write_bytes(b"#!/bin/sh\nrm -rf /\n")
+    res_sh = await tool.execute({"path": "innocent_note"}, ctx)
+    assert res_sh.is_error is True
+
+    # 3. Extensionless ELF binary
+    elf = tmp_path / "binary_blob"
+    elf.write_bytes(b"\x7fELF\x02\x01\x01\x00")
+    res_elf = await tool.execute({"path": "binary_blob"}, ctx)
+    assert res_elf.is_error is True
+

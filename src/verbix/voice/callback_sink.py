@@ -14,10 +14,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from array import array
-from collections import deque
 from collections.abc import AsyncIterator
 from typing import Any
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ class CallbackAudioSink:
         self.channels = channels
         self.audio_format = audio_format.lower()
         self._lock = threading.Lock()
-        self._pending: deque[float] = deque()
+        self._buf: np.ndarray = np.zeros(0, dtype=np.float32)
         self._played_samples = 0
         self._stopping = False
         self._feeding = False
@@ -94,34 +94,41 @@ class CallbackAudioSink:
             return
         if self.audio_format in ("f32", "float", "f32le"):
             n = len(data) // 4
-            vals = [float(v) for v in array("f", data[: n * 4])]
+            if n == 0:
+                return
+            vals = np.frombuffer(data[: n * 4], dtype=np.float32).copy()
         else:
             n = len(data) // 2
-            vals = [v / 32768.0 for v in array("h", data[: n * 2])]
+            if n == 0:
+                return
+            vals = np.frombuffer(data[: n * 2], dtype=np.int16).astype(np.float32) / 32768.0
         with self._lock:
-            self._pending.extend(vals)
+            self._buf = np.concatenate((self._buf, vals)) if len(self._buf) else vals
 
     def _callback(self, outdata: Any, frames: int, _time: Any, _status: Any) -> None:
         need = frames * self.channels
         with self._lock:
             if self._stopping:
-                k = min(need, self._fade_left, len(self._pending))
-                taken = [self._pending.popleft() for _ in range(k)]
-                if self._fade_total > 1:
+                k = min(need, self._fade_left, len(self._buf))
+                taken = self._buf[:k].copy()
+                self._buf = self._buf[k:]
+                if self._fade_total > 1 and k > 0:
                     pos = self._fade_total - self._fade_left
-                    denom = self._fade_total - 1
-                    taken = [v * (1.0 - (pos + j) / denom) for j, v in enumerate(taken)]
-                else:
-                    taken = [0.0] * k
+                    denom = float(self._fade_total - 1)
+                    ramp = 1.0 - (pos + np.arange(k, dtype=np.float32)) / denom
+                    taken *= ramp
+                elif k > 0:
+                    taken.fill(0.0)
                 self._fade_left -= k
                 if self._fade_left == 0:
-                    self._pending.clear()
+                    self._buf = np.zeros(0, dtype=np.float32)
             else:
-                k = min(need, len(self._pending))
-                taken = [self._pending.popleft() for _ in range(k)]
+                k = min(need, len(self._buf))
+                taken = self._buf[:k].copy()
+                self._buf = self._buf[k:]
             self._played_samples += k
         outdata.fill(0)
-        if taken:
+        if k > 0:
             col = outdata[:, 0] if getattr(outdata, "ndim", 1) == 2 else outdata
             col[:k] = taken
 
@@ -130,7 +137,7 @@ class CallbackAudioSink:
         with self._lock:
             self._stopping = True
             # ponytail: snapshot at stop so a short tail ramps fully 1->0 instead of jumping
-            self._fade_total = min(self._fade_len(), len(self._pending))
+            self._fade_total = min(self._fade_len(), len(self._buf))
             self._fade_left = self._fade_total
 
     def close(self) -> None:
@@ -157,7 +164,7 @@ class CallbackAudioSink:
                 with self._lock:
                     if self._stopping:
                         return False
-                    if not self._pending:
+                    if len(self._buf) == 0:
                         return True
                 await asyncio.sleep(0.005)
         except asyncio.CancelledError:

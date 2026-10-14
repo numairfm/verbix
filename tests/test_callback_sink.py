@@ -172,3 +172,23 @@ def test_callback_sink_sets_20ms_blocksize_and_fails_fast_with_portaudio_hint(mo
     with pytest.raises(RuntimeError, match="libportaudio2|portaudio"):
         CallbackAudioSink(sample_rate=24000)
 
+
+def test_callback_sink_uses_contiguous_float32_buffer_and_handles_unaligned_bytes(monkeypatch):
+    import numpy as np
+
+    sink = _stubbed_sink(monkeypatch)
+    assert isinstance(sink._buf, np.ndarray)
+    assert sink._buf.dtype == np.float32
+
+    # Unaligned 6-byte chunk for f32 (1 full float32 + 2 trailing bytes) and empty chunk
+    raw = np.array([0.5], dtype=np.float32).tobytes() + b"\xff\xff"
+    sink._enqueue(b"")
+    sink._enqueue(raw)
+    assert len(sink._buf) == 1
+
+    out = np.zeros((4, 1), dtype=np.float32)
+    sink._callback(out, 4, None, None)
+    assert math.isclose(float(out[0, 0]), 0.5, rel_tol=1e-6)
+    assert sink.played_samples == 1
+
+

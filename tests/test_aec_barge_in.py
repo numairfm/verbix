@@ -276,3 +276,55 @@ def test_is_speaking_ignores_raw_player_flag():
     runtime.floor.set_state("SPEAKING")
     assert pipeline._is_speaking is True
 
+
+def test_callback_sink_feeds_aec_reference_via_worker_thread_on_dac_dequeue(monkeypatch):
+    import sys
+    import time
+    import types
+
+    class FakeStream:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    fake_sd = types.ModuleType("sounddevice")
+    fake_sd.OutputStream = FakeStream
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+
+    from verbix.voice.callback_sink import CallbackAudioSink
+
+    fed_bytes = bytearray()
+    sink = CallbackAudioSink(sample_rate=24000, on_played=fed_bytes.extend)
+
+    # Enqueue 2400 samples (100ms); nothing has been pulled by DAC yet
+    audio = np.ones(2400, dtype=np.float32).tobytes()
+    sink._enqueue(audio)
+    assert len(fed_bytes) == 0
+
+    # DAC pulls 480 samples (20ms); worker thread drains queue and feeds reference hook
+    out = np.zeros((480, 1), dtype=np.float32)
+    sink._callback(out, 480, None, None)
+    deadline = time.monotonic() + 1.0
+    while len(fed_bytes) < 480 * 4 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert len(fed_bytes) == 480 * 4
+    sink.close()
+
+    # VoicePipeline configures EchoCanceller with 20ms stream_delay_ms hint matching blocksize
+    pipeline = VoicePipeline(
+        runtime=MagicMock(),
+        stt=MagicMock(),
+        player=AudioPlayer(tts=MockTextToSpeech(), sink=MockAudioSink()),
+        capture=FakeCapture(),
+    )
+    assert pipeline.aec.stream_delay_ms == 20
+
+

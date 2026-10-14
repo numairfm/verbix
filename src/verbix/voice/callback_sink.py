@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import queue
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import numpy as np
@@ -51,6 +52,7 @@ class CallbackAudioSink:
         sample_rate: int = 24000,
         channels: int = 1,
         audio_format: str = "f32",
+        on_played: Callable[[bytes], None] | None = None,
     ) -> None:
         assert channels == 1, "CallbackAudioSink is mono-only"
         try:
@@ -68,6 +70,11 @@ class CallbackAudioSink:
         self._feeding = False
         self._fade_total = 0
         self._fade_left = 0
+        self._on_played: Callable[[bytes], None] | None = None
+        self._played_queue: queue.SimpleQueue[bytes | None] | None = None
+        self._played_thread: threading.Thread | None = None
+        if on_played is not None:
+            self.on_played = on_played
         try:
             self._stream = sd.OutputStream(
                 samplerate=sample_rate,
@@ -78,7 +85,40 @@ class CallbackAudioSink:
             )
             self._stream.start()
         except Exception as e:
+            self._stop_played_worker()
             raise RuntimeError(f"{_PORTAUDIO_HINT} ({e})") from e
+
+    @property
+    def on_played(self) -> Callable[[bytes], None] | None:
+        return self._on_played
+
+    @on_played.setter
+    def on_played(self, fn: Callable[[bytes], None] | None) -> None:
+        self._on_played = fn
+        if fn is not None and self._played_queue is None:
+            q: queue.SimpleQueue[bytes | None] = queue.SimpleQueue()
+            self._played_queue = q
+            t = threading.Thread(target=self._drain_played, args=(q,), daemon=True)
+            self._played_thread = t
+            t.start()
+
+    def _drain_played(self, q: queue.SimpleQueue[bytes | None]) -> None:
+        while True:
+            chunk = q.get()
+            if chunk is None:
+                return
+            fn = self._on_played
+            if fn is not None:
+                try:
+                    fn(chunk)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("on_played error: %s", e)
+
+    def _stop_played_worker(self) -> None:
+        q = self._played_queue
+        self._played_queue = None
+        if q is not None:
+            q.put_nowait(None)
 
     @property
     def played_samples(self) -> int:
@@ -131,6 +171,9 @@ class CallbackAudioSink:
         if k > 0:
             col = outdata[:, 0] if getattr(outdata, "ndim", 1) == 2 else outdata
             col[:k] = taken
+            q = self._played_queue
+            if q is not None:
+                q.put_nowait(taken.tobytes())
 
     def stop(self) -> None:
         """Flag fade-out: callback emits a 10ms fade then silence."""
@@ -141,6 +184,7 @@ class CallbackAudioSink:
             self._fade_left = self._fade_total
 
     def close(self) -> None:
+        self._stop_played_worker()
         try:
             self._stream.stop()
             self._stream.close()

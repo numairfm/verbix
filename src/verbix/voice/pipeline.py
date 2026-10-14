@@ -45,7 +45,7 @@ class VoicePipeline:
         else:
             from verbix.voice.aec import EchoCanceller
 
-            self.aec = EchoCanceller()
+            self.aec = EchoCanceller(stream_delay_ms=20)
         self._speech_output = SpeechOutput(
             player.tts,
             player.sink,

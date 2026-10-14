@@ -222,6 +222,7 @@ def test_worker_task_get_status_excludes_system_prompt_and_scaffolding():
 
 @pytest.mark.asyncio
 async def test_spawn_creates_private_scratch_dir(tmp_path, monkeypatch):
+    from pathlib import Path
     from types import SimpleNamespace
 
     from verbix.runtime.foreground import DEFAULT_WORKER_PROMPT
@@ -244,10 +245,12 @@ async def test_spawn_creates_private_scratch_dir(tmp_path, monkeypatch):
         ledger=TaskLedger(),
         _broadcast_event=lambda *a: broadcasted.append(a),
     )
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     task_id = await spawn_worker(runtime, "do stuff")
     assert task_id == "task-1"
-    scratch = tmp_path / ".verbix" / "tasks" / "task-1"
+    scratch = tmp_path / "home" / ".verbix" / "tasks" / "task-1"
     assert scratch.is_dir()
+    assert not (tmp_path / ".verbix").exists()
     assert started == ["task-1"]
     assert ("task_registered", {"task_id": "task-1", "objective": "do stuff"}) in [
         (a[0], a[1]) for a in broadcasted

@@ -183,12 +183,6 @@ def find_default_stt_model(workspace: Path | None = None) -> Path:
         return Path(env).resolve()
 
     # Models layout reservation: models/stt|tts|llm (only stt is read here).
-    if workspace is not None:
-        scoped = Path(workspace) / ".verbix" / "models"
-        if scoped.is_dir():
-            for f in sorted(scoped.glob("**/*.gguf")):
-                if f.is_file():
-                    return f.resolve()
     scoped_global = Path.home() / ".verbix" / "models"
     if scoped_global.is_dir():
         for f in sorted(scoped_global.glob("**/*.gguf")):

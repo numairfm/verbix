@@ -338,6 +338,13 @@ async def test_bash_tool_is_always_sandboxed_allowlists_env_and_masks_dotenv(
     esc_res = await tool.execute({"command": "touch /usr/escape_test"}, ctx)
     assert esc_res.is_error is True
 
+    # 4. Running BashTool on a clean workspace never creates <workspace>/.verbix
+    clean_ws = tmp_path / "clean_ws"
+    clean_ws.mkdir()
+    clean_res = await tool.execute({"command": "echo hi"}, ToolContext(workspace=clean_ws))
+    assert clean_res.is_error is False
+    assert not (clean_ws / ".verbix").exists()
+
 
 def test_worker_registry_omits_bash_when_sandbox_unavailable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

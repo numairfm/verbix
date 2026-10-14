@@ -108,10 +108,10 @@ def fail_runtime_task(runtime: Any, task_id: str, result: str) -> None:
 
 async def spawn_worker(runtime: Any, objective: str) -> str:
     """Spawns an independent background worker with full workspace tools."""
-    prune_spills(Path(runtime.workspace) / ".verbix" / "logs")
+    prune_spills(Path.home() / ".verbix" / "logs")
     runtime._task_counter += 1
     task_id = f"task-{runtime._task_counter}"
-    scratch_dir = Path(runtime.workspace) / ".verbix" / "tasks" / task_id
+    scratch_dir = Path.home() / ".verbix" / "tasks" / task_id
     scratch_dir.mkdir(parents=True, exist_ok=True)
 
     config_dir = Path(__file__).resolve().parent.parent / "agent" / "config"

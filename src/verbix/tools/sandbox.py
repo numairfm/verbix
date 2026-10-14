@@ -97,7 +97,7 @@ def probe_sandbox(allow_network: bool = False) -> SandboxStatus:
 
 def build_sandbox_env(workspace: Path) -> dict[str, str]:
     """Builds the child environment strictly from an allowlist (PATH, LANG, TERM + scratch dirs)."""
-    scratch_home = workspace / ".verbix" / "home"
+    scratch_home = Path.home() / ".verbix" / "home"
     scratch_home.mkdir(parents=True, exist_ok=True)
     env: dict[str, str] = {
         "PATH": "/usr/bin:/bin",
@@ -182,6 +182,17 @@ async def execute_sandboxed(command: str, config: SandboxConfig) -> SandboxResul
         str(workspace_path),
     ]
 
+    verbix_home = Path.home() / ".verbix"
+    scratch_home = verbix_home / "home"
+    scratch_home.mkdir(parents=True, exist_ok=True)
+    cmd_args.extend(["--bind", str(scratch_home), str(scratch_home)])
+    tasks_dir = verbix_home / "tasks"
+    if tasks_dir.is_dir():
+        cmd_args.extend(["--bind", str(tasks_dir), str(tasks_dir)])
+    logs_dir = verbix_home / "logs"
+    if logs_dir.is_dir():
+        cmd_args.extend(["--ro-bind", str(logs_dir), str(logs_dir)])
+
     # Mask secret files inside workspace with a read-only empty file so bash cannot read or overwrite them
     secret_candidates = [
         workspace_path / ".env",
@@ -192,7 +203,7 @@ async def execute_sandboxed(command: str, config: SandboxConfig) -> SandboxResul
         secret_candidates.extend(verbix_dir.glob("auth.*"))
     existing_secrets = list(dict.fromkeys(p for p in secret_candidates if p.is_file()))
     if existing_secrets:
-        mask_file = workspace_path / ".verbix" / ".mask"
+        mask_file = verbix_home / ".mask"
         mask_file.parent.mkdir(parents=True, exist_ok=True)
         mask_file.write_bytes(b"")
         cmd_args.extend(["--ro-bind", str(mask_file), str(mask_file)])

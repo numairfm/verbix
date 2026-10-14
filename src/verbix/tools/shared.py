@@ -51,9 +51,9 @@ def bind_output(
     except OSError:
         return capped
     try:
-        display = str(target.relative_to(rel_to)) if rel_to is not None else target.name
+        display = str(target.relative_to(rel_to)) if rel_to is not None else str(target)
     except ValueError:
-        display = target.name
+        display = str(target)
     return f"{capped}\n... output truncated; full content saved to {display} ..."
 
 
@@ -89,20 +89,27 @@ def _is_secret_basename(name: str) -> bool:
 
 
 def resolve_contained_path(path_str: str, workspace: Path) -> Path:
-    """Resolves a path and ensures it stays strictly within the workspace boundary."""
+    """Resolves a path and ensures it stays strictly within the workspace or safe ~/.verbix subdirs."""
     if _is_secret_basename(Path(path_str).name):
         raise ValueError(f"refusing to access secret file '{path_str}'")
     norm_workspace = workspace.resolve()
-    target = (workspace / path_str).resolve()
+    raw_path = Path(path_str).expanduser()
+    target = raw_path.resolve() if raw_path.is_absolute() else (workspace / raw_path).resolve()
     if _is_secret_basename(target.name):
         raise ValueError(f"refusing to access secret file '{path_str}'")
-    try:
-        target.relative_to(norm_workspace)
-    except ValueError:
-        raise ValueError(
-            f"Path '{path_str}' escapes configured workspace '{workspace}'"
-        ) from None
-    return target
+    allowed_roots = [
+        norm_workspace,
+        *((Path.home() / ".verbix" / sub).resolve() for sub in ("tasks", "logs", "screenshots")),
+    ]
+    for root in allowed_roots:
+        try:
+            target.relative_to(root)
+            return target
+        except ValueError:
+            continue
+    raise ValueError(
+        f"Path '{path_str}' escapes configured workspace '{workspace}'"
+    )
 
 
 def record_version(target: Path, raw: bytes, context: ToolContext) -> None:

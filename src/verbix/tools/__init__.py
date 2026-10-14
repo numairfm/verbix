@@ -88,7 +88,7 @@ def build_registry(
     max_lines, max_bytes = output_limits
     ws = Path.cwd() if workspace is None else Path(workspace)
     ctx = ToolContext(workspace=ws)
-    spill_dir = ws / ".verbix" / "logs"
+    spill_dir = Path.home() / ".verbix" / "logs"
     registry = ToolRegistry()
 
     def _make_handler(t: Any) -> Callable[..., Any]:

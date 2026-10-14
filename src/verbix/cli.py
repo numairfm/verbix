@@ -247,6 +247,15 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
 
 def drain_stdin() -> None:
     """Discards already-buffered stdin lines so stale Enters never become phantom commands."""
+    if os.name == "nt":
+        try:
+            import msvcrt
+
+            while msvcrt.kbhit():
+                msvcrt.getwch()
+        except (ImportError, OSError):
+            pass
+        return
     try:
         while select.select([sys.stdin], [], [], 0)[0]:
             if not os.read(sys.stdin.fileno(), 4096):

@@ -29,8 +29,7 @@ uv run verbix --toggle                  # send mic toggle to a running daemon
 ```
 
 Useful flags: `--model`, `--receptionist-model`, `--worker-model`, `--workspace`,
-`--max-tokens`, `--audio-sink auto|callback|subprocess`, `--show-thoughts`,
-`--system-prompt`, `--socket-path`.
+`--max-tokens`, `--show-thoughts`, `--system-prompt`, `--socket-path`.
 
 ## Configuration
 
@@ -207,6 +206,11 @@ uv run pyright src/verbix   # third-party import noise only (pydantic/httpx2/num
 Conventions: `ruff` clean, `pyright` no new errors. Voice/audio paths use the
 `Mock*` protocols in `voice/base.py` for headless tests. Live voice tests need
 provisioned models via `uv run scripts/fetch_voice_models.py`.
+
+## Platform support
+
+- **Linux (`x86_64`, `aarch64`)**: Supported tier. Requires system packages `bubblewrap` (`bwrap`, for mandatory worker `bash` sandboxing) and `libportaudio2` (`portaudio`, for `sounddevice` audio capture and playback).
+- **Windows (`amd64`) & macOS (`arm64`, `x86_64`)**: Experimental and untested by the maintainer. No sandbox backend is enabled on Windows or macOS, so the `bash` tool is automatically omitted from workers (with a startup notice on `stderr`), and workers operate using the 8 cross-platform workspace/web/screenshot tools (`read`, `write`, `edit`, `grep`, `glob`, `web_search`, `web_fetch`, `screenshot`). IPC (`--serve` / `--toggle`) uses POSIX Unix domain sockets.
 
 ## Limits (as built)
 

@@ -312,3 +312,31 @@ async def test_server_concurrent_writes_are_serialized(tmp_path):
     writer.close()
     await writer.wait_closed()
     await server.stop()
+
+
+def test_drain_stdin_uses_msvcrt_on_windows(monkeypatch):
+    import sys
+    import types
+
+    from verbix.cli import drain_stdin
+
+    select_called = False
+
+    def exploding_select(*a, **k):
+        nonlocal select_called
+        select_called = True
+        raise AssertionError("select.select must not be called on Windows stdin")
+
+    chars = ["a", "\n"]
+    fake_msvcrt = types.ModuleType("msvcrt")
+    fake_msvcrt.kbhit = lambda: bool(chars)
+    fake_msvcrt.getwch = lambda: chars.pop(0)
+
+    monkeypatch.setattr("verbix.cli.os.name", "nt")
+    monkeypatch.setattr("verbix.cli.select.select", exploding_select)
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+    drain_stdin()
+    assert select_called is False
+    assert chars == []
+

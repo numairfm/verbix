@@ -412,6 +412,39 @@ def test_parse_toolcall_actions_accepts_markdown_code_fenced_arguments():
     assert actions[0]["command"] == "echo 1"
 
 
+def test_parse_toolcall_actions_includes_assistant_content_on_format_error():
+    from verbix.agent.exceptions import FormatError
+    from verbix.agent.models.utils.actions_toolcall import parse_toolcall_actions
+
+    with pytest.raises(FormatError) as exc_info:
+        parse_toolcall_actions(
+            [],
+            format_error_template="{{ error }}",
+            content="I am explaining something without tools.",
+        )
+    err = exc_info.value
+    assert len(err.messages) == 2
+    assert err.messages[0] == {"role": "assistant", "content": "I am explaining something without tools.", "extra": {}}
+    assert err.messages[1]["role"] == "user"
+    assert "No tool calls found" in err.messages[1]["content"]
+
+
+def test_parse_toolcall_actions_without_content_only_has_user_message():
+    from verbix.agent.exceptions import FormatError
+    from verbix.agent.models.utils.actions_toolcall import parse_toolcall_actions
+
+    with pytest.raises(FormatError) as exc_info:
+        parse_toolcall_actions(
+            [],
+            format_error_template="{{ error }}",
+            content=None,
+        )
+    err = exc_info.value
+    assert len(err.messages) == 1
+    assert err.messages[0]["role"] == "user"
+    assert "No tool calls found" in err.messages[0]["content"]
+
+
 def test_litellm_model_defaults_to_ignore_errors_cost_tracking(monkeypatch):
     from unittest.mock import MagicMock, patch
 

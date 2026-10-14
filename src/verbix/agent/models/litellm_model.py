@@ -146,11 +146,12 @@ class LitellmModel:
         try:
             actions = self._parse_actions(response, kwargs.get("tools"))
         except FormatError as e:
-            e.messages[0]["extra"].update(cost_output)
-            try:
-                e.messages[0]["extra"]["response"] = response.model_dump(mode="json")
-            except Exception:  # noqa: BLE001
-                e.messages[0]["extra"]["response"] = repr(response)
+            if e.messages and isinstance(e.messages[0], dict):
+                e.messages[0].setdefault("extra", {}).update(cost_output)
+                try:
+                    e.messages[0]["extra"]["response"] = response.model_dump(mode="json")
+                except Exception:  # noqa: BLE001
+                    e.messages[0]["extra"]["response"] = repr(response)
             raise
         message = response.choices[0].message.model_dump()
         message["extra"] = {
@@ -324,6 +325,7 @@ class LitellmModel:
             format_error_template=self.config.format_error_template,
             template_kwargs={"finish_reason": response.choices[0].finish_reason},
             allowed_tools=allowed or None,
+            content=getattr(response.choices[0].message, "content", None),
         )
 
     def format_message(self, **kwargs: Any) -> dict[str, Any]:

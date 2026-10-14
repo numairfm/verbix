@@ -36,6 +36,7 @@ def parse_toolcall_actions(
     format_error_template: str,
     template_kwargs: dict[str, Any] | None = None,
     allowed_tools: set[str] | None = None,
+    content: str | None = None,
 ) -> list[dict[str, Any]]:
     """Parse tool calls from the response. Raises FormatError if unknown tool or invalid args.
 
@@ -45,18 +46,20 @@ def parse_toolcall_actions(
     """
     template_kwargs = template_kwargs or {}
     if not tool_calls:
-        raise FormatError(
-            {
-                "role": "user",
-                "content": Template(format_error_template, undefined=StrictUndefined).render(
-                    error="No tool calls found in the response. Every response MUST include at least one tool call.",
-                    actions=[],
-                    has_tool_calls=False,
-                    **template_kwargs,
-                ),
-                "extra": {"interrupt_type": "FormatError"},
-            }
-        )
+        user_msg = {
+            "role": "user",
+            "content": Template(format_error_template, undefined=StrictUndefined).render(
+                error="No tool calls found in the response. Every response MUST include at least one tool call.",
+                actions=[],
+                has_tool_calls=False,
+                **template_kwargs,
+            ),
+            "extra": {"interrupt_type": "FormatError"},
+        }
+        if content and content.strip():
+            assistant_msg = {"role": "assistant", "content": content, "extra": {}}
+            raise FormatError(assistant_msg, user_msg)
+        raise FormatError(user_msg)
     actions = []
     for tool_call in tool_calls:
         error_msg = ""

@@ -170,8 +170,10 @@ class WorkerAgent:
                 if inspect.iscoroutine(response):
                     response = await response
         except FormatError as e:
-            if e.messages and isinstance(e.messages[0], dict):
-                self.cost += e.messages[0].get("extra", {}).get("cost", 0.0)
+            if e.messages:
+                for m in e.messages:
+                    if isinstance(m, dict):
+                        self.cost += m.get("extra", {}).get("cost", 0.0)
             self.n_consecutive_format_errors += 1
             err_content = "Error: No tool call found. Every step MUST execute a tool."
             if e.messages:

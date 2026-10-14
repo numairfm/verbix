@@ -365,4 +365,82 @@ async def test_worker_emits_event_on_query_exception():
     assert "! query error:" in text_events[0].text
 
 
+@pytest.mark.asyncio
+async def test_worker_preserves_assistant_text_on_format_error():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from verbix.agent.models.litellm_model import LitellmModel
+
+    model = LitellmModel(model_name="test-model")
+    tools = ToolRegistry()
+    tools.register(
+        "finish",
+        {"type": "function", "function": {"name": "finish"}},
+        lambda a: ToolResult("done", is_terminal=True),
+    )
+
+    first_resp = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content="I could not find foo.txt anywhere.",
+                    tool_calls=None,
+                ),
+                finish_reason="stop",
+            )
+        ],
+        model_dump=lambda **kw: {"choices": []},
+    )
+    second_resp = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=None,
+                    tool_calls=[
+                        SimpleNamespace(
+                            id="c1",
+                            function=SimpleNamespace(name="finish", arguments='{"summary": "done"}'),
+                        )
+                    ],
+                    model_dump=lambda **kw: {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{"id": "c1", "function": {"name": "finish", "arguments": '{"summary": "done"}'}}],
+                    },
+                ),
+                finish_reason="tool_calls",
+            )
+        ],
+        model_dump=lambda **kw: {"choices": []},
+    )
+
+    with (
+        patch("litellm.completion", side_effect=[first_resp, second_resp]),
+        patch("litellm.cost_calculator.completion_cost", return_value=0.01),
+    ):
+        agent = WorkerAgent(model=model, tools=tools)
+        result = await agent.run("find foo.txt")
+
+    assert result["status"] == "completed"
+    assert result["summary"] == "done"
+
+    assistant_msgs = [
+        m for m in agent.messages
+        if m.get("role") == "assistant" and m.get("content") == "I could not find foo.txt anywhere."
+    ]
+    assert len(assistant_msgs) == 1, f"Expected assistant prose to be preserved, got {agent.messages}"
+    user_err_msgs = [
+        m for m in agent.messages
+        if m.get("role") == "user" and "No tool calls found" in m.get("content", "")
+    ]
+    assert len(user_err_msgs) == 1, f"Expected user format error reminder, got {agent.messages}"
+
+    idx_assistant = agent.messages.index(assistant_msgs[0])
+    idx_user_err = agent.messages.index(user_err_msgs[0])
+    assert idx_user_err == idx_assistant + 1
+    assert agent.cost == pytest.approx(0.02)
+    assert result["cost"] == pytest.approx(0.02)
+
+
 

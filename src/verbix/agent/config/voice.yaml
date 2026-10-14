@@ -30,6 +30,9 @@ agent:
     - spawn
     - status
     - cancel
+  max_calls_per_tool_per_turn:
+    status: 1
+    cancel: 1
   step_limit: 0
   cost_limit: 3.0
 model:

@@ -68,6 +68,9 @@ class VoiceConfig(BaseModel):
     tool_choice: str | None = None
     system_prompt: str = ""
     spoken_error_fallback: str = "Sorry — I ran into a problem. Could you say that again?"
+    max_calls_per_tool_per_turn: dict[str, int] = Field(
+        default_factory=lambda: {"status": 1, "cancel": 1}
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -159,15 +162,27 @@ class VoiceAgent:
         self.messages.extend(messages)
         return list(messages)
 
-    def get_tool_definitions(self) -> list[dict[str, Any]] | None:
+    def get_tool_definitions(
+        self, excluded: set[str] | None = None
+    ) -> list[dict[str, Any]] | None:
         """Return tool schemas configured for this agent from the registry."""
         if self.tools is None or self.config.tool_choice == "none":
             return None
+        excl = excluded or set()
         if self.config.tools:
-            defs = self.tools.get_definitions(self.config.tools)
+            allowed = [n for n in self.config.tools if n not in excl]
+            if not allowed:
+                return None
+            defs = self.tools.get_definitions(allowed)
             return defs if defs else None
-        defs = self.tools.get_definitions()
-        return defs if defs else None
+        all_defs = self.tools.get_definitions()
+        if excl and all_defs:
+            all_defs = [
+                d
+                for d in all_defs
+                if d.get("function", {}).get("name") not in excl
+            ]
+        return all_defs if all_defs else None
 
     def _model_stream_cost(self) -> float:
         cost = getattr(self.model, "last_stream_cost", 0.0)
@@ -221,6 +236,7 @@ class VoiceAgent:
             self.messages.append({"role": "user", "content": user_content})
 
         repeat_history: list[tuple[str, str]] = []
+        per_turn_counts: dict[str, int] = {}
 
         try:
             while True:
@@ -236,7 +252,12 @@ class VoiceAgent:
 
                 self.n_calls += 1
                 self.turn_calls += 1
-                tool_defs = self.get_tool_definitions()
+                exhausted = {
+                    k
+                    for k, v in per_turn_counts.items()
+                    if v >= self.config.max_calls_per_tool_per_turn.get(k, 999999)
+                }
+                tool_defs = self.get_tool_definitions(excluded=exhausted)
                 self._delivered_text = ""
                 prev_stream_cost = self._model_stream_cost()
 
@@ -369,11 +390,18 @@ class VoiceAgent:
 
                         yield ToolCallStarted(call_id=call_id, tool_name=name, arguments=args)
 
-                        if (
+                        cap = self.config.max_calls_per_tool_per_turn.get(name)
+                        if cap is not None and per_turn_counts.get(name, 0) >= cap:
+                            res = ToolResult(
+                                f"Tool '{name}' was already called in this turn. Respond to the user directly using the previous result.",
+                                is_error=True,
+                            )
+                        elif (
                             self.tools is not None
                             and hasattr(self.tools, "is_side_effecting")
                             and self.tools.is_side_effecting(name)
                         ):
+                            per_turn_counts[name] = per_turn_counts.get(name, 0) + 1
                             pending = asyncio.ensure_future(self._execute_tool(name, args))
                             try:
                                 res = await asyncio.shield(pending)
@@ -400,6 +428,7 @@ class VoiceAgent:
                                 )
                                 raise
                         else:
+                            per_turn_counts[name] = per_turn_counts.get(name, 0) + 1
                             res = await self._execute_tool(name, args)
 
                         yield ToolCallFinished(
@@ -417,7 +446,10 @@ class VoiceAgent:
                             }
                         )
 
-                        sig = (name, (tc["args_str"] or "").strip())
+                        try:
+                            sig = (name, json.dumps(args, sort_keys=True))
+                        except (TypeError, ValueError):
+                            sig = (name, (tc["args_str"] or "").strip())
                         repeat_history.append(sig)
                         if (
                             len(repeat_history) >= _REPEAT_LIMIT

@@ -501,3 +501,29 @@ def test_finish_log_redacts_keys(tmp_path, caplog):
     assert secret not in caplog.text
     assert "REDACTED" in caplog.text
     assert runtime.ledger.get("task-1").result_summary.count(secret) == 2
+
+
+def test_runtime_status_without_task_id_includes_recent_actions_and_honors_full(tmp_path):
+    from verbix.runtime.worker import WorkerTask
+
+    runtime = Runtime(workspace=tmp_path, provider=MagicMock())
+    session = MagicMock(spec=["messages"])
+    session.messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "read", "arguments": '{"path": "README.md"}'}}
+            ],
+        },
+        {"role": "tool", "content": "showing lines 1-10 of 10\n# Verbix"},
+    ]
+    t = WorkerTask(id="task-1", description="read docs", session=session)
+    t._status = "running"
+    runtime.tasks["task-1"] = t
+
+    concise = runtime.status()
+    assert "Called read" in concise
+
+    full = runtime.status(full=True)
+    assert 'read({"path": "README.md"})' in full
+

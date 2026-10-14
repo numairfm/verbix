@@ -299,7 +299,11 @@ async def test_voice_agent_repeat_breaker_never_emits_exit_role_to_api_and_speak
         lambda a: ToolResult("running", is_error=False),
     )
 
-    agent = VoiceAgent(model=mock_model, tools=tools)
+    agent = VoiceAgent(
+        model=mock_model,
+        tools=tools,
+        config=VoiceConfig(max_calls_per_tool_per_turn={}),
+    )
     events = [e async for e in agent.step_stream("what?")]
 
     tc = [e for e in events if isinstance(e, TurnComplete)][-1]
@@ -356,4 +360,86 @@ async def test_voice_agent_preserves_already_delivered_speech_on_limit_exit():
     assert tc.is_error is True
     assert "LimitsExceeded" not in tc.final_text
     assert "I checked your workspace right now." in tc.final_text
+
+
+@pytest.mark.asyncio
+async def test_voice_agent_prunes_status_after_one_call_in_same_turn():
+    seen_tools_per_call = []
+
+    async def fake_stream(messages, tools=None, **kw):
+        tool_names = [t["function"]["name"] for t in (tools or [])]
+        seen_tools_per_call.append(tool_names)
+        if len(seen_tools_per_call) == 1:
+            yield ToolCallDelta(index=0, call_id="c1", name="status", arguments_delta="{}")
+        else:
+            yield TextDelta(text="Task-1 is currently running pytest.")
+            yield TurnComplete(final_text="Task-1 is currently running pytest.")
+
+    mock_model = MagicMock()
+    mock_model.query_stream = fake_stream
+
+    tools = ToolRegistry()
+    for name in ("spawn", "status", "cancel"):
+        tools.register(
+            name,
+            {"type": "function", "function": {"name": name}},
+            lambda a: ToolResult("task-1 running: Called bash"),
+        )
+
+    agent = VoiceAgent(
+        model=mock_model,
+        tools=tools,
+        config=VoiceConfig(tools=["spawn", "status", "cancel"]),
+    )
+    events = [e async for e in agent.step_stream("what is happening?")]
+
+    assert seen_tools_per_call[0] == ["spawn", "status", "cancel"]
+    assert "status" not in seen_tools_per_call[1]
+    assert "spawn" in seen_tools_per_call[1]
+    tc = [e for e in events if isinstance(e, TurnComplete)][-1]
+    assert tc.exit_reason == "ok"
+    assert "Task-1 is currently running pytest." in tc.final_text
+
+
+@pytest.mark.asyncio
+async def test_voice_agent_canonicalizes_json_args_in_repeat_history():
+    calls = 0
+
+    async def reordered_stream(messages, tools=None, **kw):
+        nonlocal calls
+        calls += 1
+        if calls > 10:
+            yield TurnComplete(final_text="bail")
+            return
+        arg_variants = [
+            '{"a": 1, "b": 2}',
+            '{"b": 2, "a": 1}',
+            '{ "a" : 1 , "b" : 2 }',
+        ]
+        yield ToolCallDelta(
+            index=0,
+            call_id=f"c{calls}",
+            name="spawn",
+            arguments_delta=arg_variants[(calls - 1) % 3],
+        )
+
+    mock_model = MagicMock()
+    mock_model.query_stream = reordered_stream
+    tools = ToolRegistry()
+    tools.register(
+        "spawn",
+        {"type": "function", "function": {"name": "spawn"}},
+        lambda a: ToolResult("started"),
+    )
+
+    agent = VoiceAgent(
+        model=mock_model,
+        tools=tools,
+        config=VoiceConfig(tools=["spawn"], max_calls_per_tool_per_turn={}),
+    )
+    events = [e async for e in agent.step_stream("go")]
+    tc = [e for e in events if isinstance(e, TurnComplete)][-1]
+    assert tc.exit_reason == "repeated_tool_call"
+    assert calls == 3
+
 

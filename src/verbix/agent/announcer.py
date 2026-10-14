@@ -44,5 +44,7 @@ class AnnouncerAgent(VoiceAgent):
         cfg.spoken_error_fallback = ""
         super().__init__(model=model, tools=None, config=cfg, env=env)
 
-    def get_tool_definitions(self) -> list[dict[str, Any]] | None:
+    def get_tool_definitions(
+        self, excluded: set[str] | None = None
+    ) -> list[dict[str, Any]] | None:
         return None

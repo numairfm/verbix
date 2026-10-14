@@ -385,9 +385,7 @@ class Runtime:
         if active:
             lines.append("Active tasks:")
             for t in active:
-                start_str = datetime.fromtimestamp(t._created_at).astimezone().strftime("%H:%M:%S")
-                elapsed = int(time.time() - t._created_at)
-                lines.append(f"- {t.id}: '{t.description}' (running for {elapsed}s, started at {start_str})")
+                lines.append(f"- {t.get_status(full=full)}")
         if recent_done:
             lines.append("Recently completed:")
             for t in recent_done:

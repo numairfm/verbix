@@ -196,7 +196,6 @@ class LitellmModel:
                     ),
                 )
                 async for chunk in response:
-                    yielded_any = True
                     chunks.append(chunk)
                     if getattr(chunk, "usage", None):
                         saw_usage = True
@@ -230,6 +229,7 @@ class LitellmModel:
                             or delta.get("thought")
                         )
                     if reasoning:
+                        yielded_any = True
                         yield ThoughtDelta(thought=reasoning)
 
                     # 2. Text Content
@@ -237,6 +237,7 @@ class LitellmModel:
                     if content is None and isinstance(delta, dict):
                         content = delta.get("content")
                     if content:
+                        yielded_any = True
                         accumulated_text.append(content)
                         yield TextDelta(text=content)
 
@@ -258,6 +259,7 @@ class LitellmModel:
                             if isinstance(fn, dict):
                                 fn_name = fn.get("name")
                                 args_delta = fn.get("arguments", "")
+                            yielded_any = True
                             yield ToolCallDelta(
                                 index=idx,
                                 call_id=call_id,

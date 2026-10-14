@@ -46,26 +46,20 @@ environment wins over file values (`cli.py:29`).
 Agent tuning lives in `src/verbix/agent/config/`: `voice.yaml`
 (foreground), `worker.yaml` / `swe_worker.yaml` (background workers).
 
-### Config scopes and persona
+### Global config and persona (`~/.verbix/`)
 
-Two config scopes, merged as builtin defaults < global `~/.verbix/`
-< project `./.verbix/` < env < CLI flags. Both `config.yaml` files are
-optional and accept only `provider` and `stt_model`:
+All Verbix configuration, auth, persona, models, screenshots, task scratch directories, and tool spill logs live under `~/.verbix/` (never inside project workspaces):
+- Config precedence: builtin defaults < `~/.verbix/config.yaml` < env < CLI flags. `config.yaml` is optional and accepts `provider` and `stt_model`:
 
 ```yaml
 # stt_model: /path/to/model.gguf
 ```
 
-First run scaffolds `~/.verbix/` with a commented `config.yaml` and an
-empty `PERSONA.md`; the project scope (`./.verbix/`) is never auto-created.
+First run scaffolds `~/.verbix/` with a commented `config.yaml` and an empty `PERSONA.md`.
 
-`PERSONA.md` (global + project, project appended after global) is an
-overlay appended to the system prompt under `# USER PERSONA` — it never
-replaces core prompts. A leading `<!-- ... -->` guidance block is stripped.
-`--system-prompt` replaces file persona entirely when set.
+`~/.verbix/PERSONA.md` is an overlay appended to the system prompt under `# USER PERSONA` — it never replaces core prompts. A leading `<!-- ... -->` guidance block is stripped. `--system-prompt` replaces file persona entirely when set.
 
-Provider selection: `--provider` flag > `VERBIX_PROVIDER` env > config
-`provider` name. The name selects an entry in `~/.verbix/auth.json`:
+Provider selection: `--provider` flag > `VERBIX_PROVIDER` env > config `provider` name. The name selects an entry in `~/.verbix/auth.json`:
 
 ```json
 {
@@ -78,19 +72,9 @@ Provider selection: `--provider` flag > `VERBIX_PROVIDER` env > config
 }
 ```
 
-`--model` beats the entry model; `--api-key`/`--base-url` beat the entry
-key/base URL.
+`--model` beats the entry model; `--api-key`/`--base-url` beat the entry key/base URL.
 
-Warning: gitignore project weights — add `.verbix/models/` to `.gitignore`
-so downloaded `.gguf` files never get committed.
-
-Audio extras are optional: `uv sync --extra audio` (`sounddevice`).
-Voice mode uses on-device inference: Supertonic 3 INT8 for
-TTS (via sherpa-onnx) and Nemotron 3.5 ASR 0.6B GGUF for STT (via transcribe.cpp). Run `uv run scripts/fetch_voice_models.py`
-to download and verify models into `./voice-runtime` (`VERBIX_VOICE_DIR`
-overrides, `~/.verbix/voice` is the installed fallback).
-Without them, text and `--serve` modes still work.
-Attribution: `THIRD-PARTY-NOTICES.md`.
+Audio (`sounddevice`) and on-device voice inference are included in the default environment (`uv sync`). Voice mode uses Supertonic 3 INT8 for TTS (via sherpa-onnx) and Nemotron 3.5 ASR 0.6B GGUF for STT (via transcribe.cpp). Run `uv run scripts/fetch_voice_models.py` to download and verify models into `./voice-runtime` (`VERBIX_VOICE_DIR` overrides, `~/.verbix/voice` is the installed fallback). Attribution: `THIRD-PARTY-NOTICES.md`.
 
 ## Architecture
 
@@ -109,37 +93,28 @@ Two layers. The agent layer does the work; the voice layer owns the floor.
                │ spawn
    ┌───────────┼───────────┐
    ▼           ▼           ▼
- worker 1   worker 2   worker 3   tools: finish(summary)
-                                          + shell/files via LocalEnvironment
+ worker 1   worker 2   worker 3   tools: read/write/edit/grep/glob
+                                          web_search/web_fetch/screenshot
+                                          clipboard/media/app/open + bash (bwrap)
    └───────────┼───────────┘  (workers never see the chat —
                │ responses   only the spawn objective)
                ▼
    ┌───────────────────────┐
-   │ batch window          │  completions queue in
-   │ (~300 ms design)      │  _pending_announcements
+   │ TaskLedger +          │  completions fold into next turn
+   │ _pending_announcements│  or drain proactively when silent
    └───────────┬───────────┘
                ▼
    ┌───────────────────────┐
-   │ main agent            │  idle-only drain speaks each
-   │ (foreground)          │  result through wake_output,
-   └───────────┬───────────┘  one at a time
+   │ announcer companion   │  toolless VoiceAgent speaks each
+   │ (same voice)          │  result through wake_output
+   └───────────┬───────────┘
                ▼
               user (one voice)
 ```
 
-The foreground (`Runtime.foreground`, a `DefaultAgent`) answers directly or
-delegates via `spawn` / `status` / `cancel` (`runtime/tools.py`). Each worker
-(`runtime/worker.py:WorkerTask`) runs its own `DefaultAgent` + `finish` tool
-on a `LocalEnvironment` in the workspace, started with `asyncio.create_task`
-— no queue, no cap. On finish the result is appended to foreground history as
-`[Task '<id>' completed]: …`, queued, and voiced by the foreground companion
-when the floor is idle (`runtime/runtime.py:665-707`), under `_drain_lock` so
-announcements serialize. `TaskLedger` (`runtime/ledger.py`) is the single
-record of task id → objective → status → delivery.
+The foreground (`Runtime.foreground`, a `VoiceAgent`) answers directly or delegates via `spawn` / `status` / `cancel` (`tools/spawn.py`, `tools/status.py`, `tools/cancel.py`). Each worker (`runtime/worker.py:WorkerTask`) runs its own `WorkerAgent` (`agent/worker.py`) in the workspace, started with `asyncio.create_task`. On finish, the result is recorded in `TaskLedger` (`runtime/ledger.py`, `delivery="pending"`) and either voiced proactively by `Runtime.announcer` when the floor is available (`floor.can_announce()`) or folded into the user's next foreground turn and marked `"heard"` once delivered.
 
-Foreground sees the full chat; a worker sees exactly one user message — the
-spawn objective — and calls `finish(summary)` when done. Cancelled workers are
-marked cancelled and stay silent beyond the cancel acknowledgement.
+Foreground sees the full chat plus active/newly-completed task grounding; a worker sees only its spawn objective and concludes with a final text answer when done. Cancelled workers are marked cancelled and stay silent beyond the cancel acknowledgement.
 
 ### Voice layer
 
@@ -177,17 +152,17 @@ STATE: IDLE
 | Path | Owns |
 |---|---|
 | `cli.py` | argparse, `.env` loader, 4 run modes, `CliPrinter` (stdout transcript, stderr diagnostics) |
-| `runtime/runtime.py` | `Runtime`: foreground agent, `submit`/`spawn`/`status`/`cancel`, pending-announcement drain |
-| `runtime/tools.py` | foreground tools: `spawn(objective)`, `status`, `cancel`; worker tool: `finish(summary)` |
+| `runtime/runtime.py` | `Runtime`: foreground/announcer agents, `submit`/`spawn`/`status`/`cancel`, pending-announcement drain |
+| `runtime/workers.py` | `build_worker_registry`, `describe_worker_tools`, `spawn_worker`, task completion/failure handlers |
 | `runtime/worker.py` | `WorkerTask`: background `asyncio.Task`, result/error capture, `get_status` |
 | `runtime/ledger.py` | `TaskLedger`: id, objective, status, delivery (`pending`/`heard`/`interrupted`) |
-| `runtime/floor.py` | `FloorArbiter`: `IDLE`/`LISTENING`/`SPEAKING` + interrupt flag |
-| `core/` | canonical messages/events, history repair, inner agent loop |
+| `runtime/floor.py` | `FloorArbiter`: `IDLE`/`LISTENING`/`SPEAKING` + sticky `user_speaking` + interrupt flag |
+| `core/` | canonical messages/events, history repair |
 | `provider/` | streaming OpenAI-compatible SSE client, errors, event types |
-| `tools/` | `Tool`/`ToolContext`, `file_read`/`file_write`/`file_edit`, `bash` via bubblewrap (`bwrap` missing → raise, never silent fallback) |
+| `tools/` | `Tool`/`ToolContext`, `read`/`write`/`edit`/`grep`/`glob`, `web_search`/`web_fetch`, `screenshot`, `clipboard`/`media`/`app`/`open`, `spawn`/`status`/`cancel`, and `bash` via mandatory bubblewrap (`bwrap`) |
 | `voice/` | `pipeline`, `capture`, `transcribe_stt` (Nemotron ASR via transcribe.cpp), `sherpa_tts` (Supertonic TTS via sherpa-onnx), `player`, `output` (sentence streaming), `callback_sink`, `base` protocols + mocks |
 | `ipc/` | `server`/`client`/`protocol`: JSONL over Unix socket, `ping/prompt/status/cancel/toggle`, runtime event fan-out |
-| `agent/` | agent core: `agents/default`, `environments/local`, `models/litellm_model`, `tools/registry`, `config/*.yaml` |
+| `agent/` | agent core: `voice.py` (`VoiceAgent`), `worker.py` (`WorkerAgent`), `models/litellm_model.py`, `tools/registry.py`, `config/*.yaml` |
 
 ## IPC
 
@@ -210,7 +185,7 @@ provisioned models via `uv run scripts/fetch_voice_models.py`.
 ## Platform support
 
 - **Linux (`x86_64`, `aarch64`)**: Supported tier. Requires system packages `bubblewrap` (`bwrap`, for mandatory worker `bash` sandboxing) and `libportaudio2` (`portaudio`, for `sounddevice` audio capture and playback).
-- **Windows (`amd64`) & macOS (`arm64`, `x86_64`)**: Experimental and untested by the maintainer. No sandbox backend is enabled on Windows or macOS, so the `bash` tool is automatically omitted from workers (with a startup notice on `stderr`), and workers operate using the 8 cross-platform workspace/web/screenshot tools (`read`, `write`, `edit`, `grep`, `glob`, `web_search`, `web_fetch`, `screenshot`). IPC (`--serve` / `--toggle`) uses POSIX Unix domain sockets.
+- **Windows (`amd64`) & macOS (`arm64`, `x86_64`)**: Experimental and untested by the maintainer. No sandbox backend is enabled on Windows or macOS, so the `bash` tool is automatically omitted from workers (with a startup notice on `stderr`), and workers operate using the 12 cross-platform workspace/web/desktop tools (`read`, `write`, `edit`, `grep`, `glob`, `web_search`, `web_fetch`, `screenshot`, `clipboard`, `media`, `app`, `open`). IPC (`--serve` / `--toggle`) uses POSIX Unix domain sockets.
 
 ## Limits (as built)
 

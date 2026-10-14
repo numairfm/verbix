@@ -205,7 +205,8 @@ async def drain_pending_announcements(runtime: Any) -> None:
             if not announced_ok:
                 existing_ids = {t for t, _ in runtime._pending_announcements}
                 for tid, res, _ in reversed(batch):
-                    if tid not in existing_ids:
+                    entry = ledger.get(tid) if ledger is not None else None
+                    if (entry is None or entry.delivery == "pending") and tid not in existing_ids:
                         runtime._pending_announcements.insert(0, (tid, res))
 
         if announced_ok and runtime.on_wake:

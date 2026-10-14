@@ -260,7 +260,7 @@ def _running_user_procs() -> list[Any]:
     return out
 
 
-def _matching_procs(entry: AppEntry) -> list[Any]:
+def _matching_procs(entry: AppEntry, procs: list[Any] | None = None) -> list[Any]:
     base_exe = entry.exe_name.lower().removesuffix("-bin")
     target_names = {
         entry.exe_name.lower(),
@@ -270,7 +270,7 @@ def _matching_procs(entry: AppEntry) -> list[Any]:
         entry.name.lower(),
     }
     matched: list[Any] = []
-    for proc in _running_user_procs():
+    for proc in (procs if procs is not None else _running_user_procs()):
         pname = (proc.info.get("name") or "").lower()
         pexe = Path(proc.info.get("exe") or "").name.lower()
         cmdline = proc.info.get("cmdline") or []
@@ -338,21 +338,12 @@ class AppTool:
                 is_error=True,
             )
 
-        catalog = discover_installed_apps()
+        catalog = await asyncio.to_thread(discover_installed_apps)
 
         if action == "list":
-            procs = _running_user_procs()
-            running_names = {
-                (p.info.get("name") or "").lower()
-                for p in procs
-                if p.info.get("name")
-            } | {
-                Path(p.info.get("exe") or "").name.lower()
-                for p in procs
-                if p.info.get("exe")
-            }
+            procs = await asyncio.to_thread(_running_user_procs)
             running_apps = [
-                e.name for e in catalog if e.exe_name.lower() in running_names
+                e.name for e in catalog if _matching_procs(e, procs)
             ]
             installed = [
                 f"{e.name} ({e.generic_name})"
@@ -387,13 +378,13 @@ class AppTool:
 
         if action == "launch":
             try:
-                spawned_pid = _launch_entry(entry)
-                running = _matching_procs(entry)
+                spawned_pid = await asyncio.to_thread(_launch_entry, entry)
+                running = await asyncio.to_thread(_matching_procs, entry)
                 for _ in range(5):
                     if running:
                         break
                     await asyncio.sleep(0.05)
-                    running = _matching_procs(entry)
+                    running = await asyncio.to_thread(_matching_procs, entry)
                 pid = running[0].pid if running else spawned_pid
                 pid_part = f", PID {pid}" if pid is not None else ""
                 return ToolResult(
@@ -403,7 +394,7 @@ class AppTool:
                 return ToolResult(f"error: failed to launch '{entry.name}': {e}", is_error=True)
 
         # action == "close"
-        matched = _matching_procs(entry)
+        matched = await asyncio.to_thread(_matching_procs, entry)
         closed = 0
         for proc in matched:
             try:
@@ -413,12 +404,15 @@ class AppTool:
                 continue
         if closed == 0:
             return ToolResult(f"No running '{entry.name}' process found to close.")
+        still_alive = False
         wait_fn = getattr(psutil, "wait_procs", None)
         if callable(wait_fn):
             try:
-                wait_fn(matched, timeout=2.0)
+                _, alive = await asyncio.to_thread(wait_fn, matched, 2.0)
+                still_alive = bool(alive)
             except (AttributeError, TypeError):
                 pass
+        state_str = "termination signaled" if still_alive else "verified stopped"
         return ToolResult(
-            f"Closed '{entry.name}' ({closed} process(es) terminated; verified stopped)."
+            f"Closed '{entry.name}' ({closed} process(es) terminated; {state_str})."
         )

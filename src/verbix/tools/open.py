@@ -50,11 +50,11 @@ _MACHO_MAGICS = (
 
 
 def _is_executable_payload(target: Path) -> bool:
+    suffix = target.suffix.lower()
+    if suffix in _BLOCKED_EXTENSIONS or suffix == ".app":
+        return True
     if not target.is_file():
         return False
-    suffix = target.suffix.lower()
-    if suffix in _BLOCKED_EXTENSIONS:
-        return True
     try:
         with target.open("rb") as f:
             head = f.read(4)

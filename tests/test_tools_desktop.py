@@ -400,3 +400,9 @@ async def test_open_tool_blocks_executable_extensions_and_magic_bytes(
     res_elf = await tool.execute({"path": "binary_blob"}, ctx)
     assert res_elf.is_error is True
 
+    # 4. macOS .app directory bundle
+    app_bundle = tmp_path / "Evil.app"
+    app_bundle.mkdir()
+    res_app = await tool.execute({"path": "Evil.app"}, ctx)
+    assert res_app.is_error is True
+

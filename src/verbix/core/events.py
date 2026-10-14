@@ -10,6 +10,7 @@ ExitReason = Literal[
     "limits_exceeded",
     "time_exceeded",
     "format_error",
+    "empty_response",
     "exception",
 ]
 

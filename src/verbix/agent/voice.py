@@ -469,7 +469,20 @@ class VoiceAgent:
 
                     continue
 
-                self.messages.append({"role": "assistant", "content": step_delivered_text})
+                has_final = bool(
+                    step_delivered_text
+                    or self._delivered_text
+                    or (turn_complete_event is not None and turn_complete_event.final_text)
+                )
+                if not has_final and self.turn_calls <= 1:
+                    yield self._abort_turn("empty_response")
+                    return
+
+                content_to_record = step_delivered_text or (
+                    turn_complete_event.final_text if turn_complete_event is not None else ""
+                )
+                if content_to_record:
+                    self.messages.append({"role": "assistant", "content": content_to_record})
 
                 if turn_complete_event is not None:
                     yield turn_complete_event

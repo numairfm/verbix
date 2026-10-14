@@ -279,6 +279,14 @@ class LitellmModel:
                 )
                 await asyncio.sleep(min(8.0, 2.0 ** (attempts - 1)))
                 continue
+            if not yielded_any and attempts < _MAX_STREAM_ATTEMPTS - 1:
+                attempts += 1
+                logger.warning(
+                    f"Stream finished without text or tool calls for model {self.config.model_name} "
+                    f"(attempt {attempts + 1}/{_MAX_STREAM_ATTEMPTS}); retrying",
+                )
+                await asyncio.sleep(min(8.0, 2.0 ** (attempts - 1)))
+                continue
             break
 
         full_text = "".join(accumulated_text)

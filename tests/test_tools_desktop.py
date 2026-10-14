@@ -273,6 +273,40 @@ async def test_app_tool_launch_close_and_list_uses_catalog_and_psutil_never_shel
     res_close = await tool.execute({"action": "close", "name": "firefox"}, ctx)
     assert res_close.is_error is False
     assert terminated_pids == [1111]
+    assert "verified" in res_close.observation.lower()
+
+
+@pytest.mark.asyncio
+async def test_app_tool_list_includes_all_installed_apps_with_generic_names_not_truncated_at_40(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from verbix.tools import app as app_mod
+    from verbix.tools.app import AppTool
+
+    apps_dir = tmp_path / "applications"
+    apps_dir.mkdir(parents=True)
+    for i in range(55):
+        (apps_dir / f"app-{i:02d}.desktop").write_text(
+            f"[Desktop Entry]\nType=Application\nName=App {i:02d}\nExec=/usr/bin/app{i:02d}\n",
+            encoding="utf-8",
+        )
+    (apps_dir / "z-firefox.desktop").write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Firefox\n"
+        "GenericName=Web Browser\n"
+        "Exec=/usr/bin/firefox %u\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(app_mod, "_linux_desktop_dirs", lambda: [apps_dir])
+    monkeypatch.setattr(app_mod, "_running_user_procs", list)
+    monkeypatch.setattr(app_mod.sys, "platform", "linux")
+
+    res = await AppTool().execute({"action": "list"}, ToolContext(workspace=tmp_path))
+    assert res.is_error is False
+    assert "Firefox (Web Browser)" in res.observation
+
 
 
 def test_worker_registry_and_runtime_grounding_include_clipboard_media_and_app(tmp_path: Path):

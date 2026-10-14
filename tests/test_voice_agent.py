@@ -544,4 +544,28 @@ async def test_voice_agent_executes_parallel_tool_calls_and_maintains_multi_turn
     assert agent.messages[-2] == {"role": "user", "content": "follow up"}
 
 
+@pytest.mark.asyncio
+async def test_voice_agent_empty_thought_only_stream_aborts_turn_without_blank_assistant_message():
+    from verbix.core.events import ThoughtDelta
+
+    mock_model = MagicMock()
+
+    async def thought_only_stream(messages, tools=None, **kw):
+        yield ThoughtDelta(thought="Thinking about launching Firefox...")
+
+    mock_model.query_stream = thought_only_stream
+    agent = VoiceAgent(model=mock_model, config=VoiceConfig())
+    events = [e async for e in agent.step_stream("open firefox")]
+
+    complete = [e for e in events if isinstance(e, TurnComplete)]
+    assert len(complete) == 1
+    assert complete[0].is_error is True
+    assert complete[0].exit_reason == "empty_response"
+    assert not any(
+        m.get("role") == "assistant" and m.get("content") == "" and not m.get("tool_calls")
+        for m in agent.messages
+    )
+
+
+
 

@@ -19,6 +19,7 @@ agent:
 
     ## Command Execution Rules:
     - Prefer 'read'/'write'/'edit'/'grep'/'glob' for all file work — they behave identically on every OS and keep you inside the workspace. Use 'bash' only when no tool covers the job.
+    - Use 'app' to list, launch, or close desktop applications, 'media' for media playback and system volume, and 'clipboard' for clipboard access. 'bash' runs inside an isolated PID and display sandbox (--unshare-pid) that cannot see or control host desktop processes — never run ps, pgrep, pkill, or GUI commands in 'bash' to check, launch, or close desktop apps. Once 'app' reports verified running or verified stopped, conclude immediately.
     - 'read' opens images too (jpg/png/gif/webp) — look at pictures with it instead of guessing from filenames or metadata.
     - Use 'screenshot' to capture the desktop display when asked to look at the screen, inspect visual layout, UI bugs, or error dialogs.
     - Use 'glob' to find files by pattern, and 'grep' to search code and file contents with line numbers.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import configparser
 import os
 import plistlib
@@ -25,6 +26,7 @@ class AppEntry:
     exe_name: str
     argv: tuple[str, ...]
     keywords: tuple[str, ...] = ()
+    generic_name: str = ""
 
 
 def _linux_desktop_dirs() -> list[Path]:
@@ -92,6 +94,7 @@ def _discover_linux_apps() -> list[AppEntry]:
             if sec.get("Terminal", "false").strip().lower() == "true":
                 continue
             name = sec.get("Name", "").strip()
+            generic_name = sec.get("GenericName", "").strip()
             exec_line = sec.get("Exec", "").strip()
             if not name or not exec_line:
                 continue
@@ -103,7 +106,7 @@ def _discover_linux_apps() -> list[AppEntry]:
                 filter(
                     None,
                     [
-                        sec.get("GenericName", ""),
+                        generic_name,
                         sec.get("Keywords", ""),
                         app_id,
                         exe_name,
@@ -121,6 +124,7 @@ def _discover_linux_apps() -> list[AppEntry]:
                     exe_name=exe_name,
                     argv=argv,
                     keywords=keywords,
+                    generic_name=generic_name,
                 )
             )
     return sorted(entries, key=lambda e: e.name.lower())
@@ -241,7 +245,7 @@ def _running_user_procs() -> list[Any]:
     my_pid = os.getpid()
     my_uid = os.getuid() if hasattr(os, "getuid") else None
     out: list[Any] = []
-    for proc in psutil.process_iter(["pid", "name", "exe", "uids"]):
+    for proc in psutil.process_iter(["pid", "name", "exe", "cmdline", "uids"]):
         try:
             info = proc.info
             pid = info.get("pid")
@@ -256,19 +260,45 @@ def _running_user_procs() -> list[Any]:
     return out
 
 
-def _launch_entry(entry: AppEntry) -> None:
+def _matching_procs(entry: AppEntry) -> list[Any]:
+    base_exe = entry.exe_name.lower().removesuffix("-bin")
+    target_names = {
+        entry.exe_name.lower(),
+        base_exe,
+        f"{base_exe}-bin",
+        entry.id.lower(),
+        entry.name.lower(),
+    }
+    matched: list[Any] = []
+    for proc in _running_user_procs():
+        pname = (proc.info.get("name") or "").lower()
+        pexe = Path(proc.info.get("exe") or "").name.lower()
+        cmdline = proc.info.get("cmdline") or []
+        cmd0 = Path(cmdline[0]).name.lower() if cmdline else ""
+        if (
+            pname in target_names
+            or pname.removesuffix("-bin") in target_names
+            or pexe in target_names
+            or cmd0 in target_names
+        ):
+            matched.append(proc)
+    return matched
+
+
+def _launch_entry(entry: AppEntry) -> int | None:
     if sys.platform == "win32" and hasattr(os, "startfile"):
         os.startfile(entry.argv[0])  # type: ignore[attr-defined]
-    else:
-        subprocess.Popen(
-            list(entry.argv),
-            shell=False,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-        )
+        return None
+    proc = subprocess.Popen(
+        list(entry.argv),
+        shell=False,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+    return getattr(proc, "pid", None)
 
 
 class AppTool:
@@ -316,22 +346,30 @@ class AppTool:
                 (p.info.get("name") or "").lower()
                 for p in procs
                 if p.info.get("name")
+            } | {
+                Path(p.info.get("exe") or "").name.lower()
+                for p in procs
+                if p.info.get("exe")
             }
             running_apps = [
                 e.name for e in catalog if e.exe_name.lower() in running_names
             ]
             installed = [
-                e.name
+                f"{e.name} ({e.generic_name})"
+                if e.generic_name and e.generic_name.lower() != e.name.lower()
+                else e.name
                 for e in catalog
-                if not name or name.lower() in e.name.lower() or name.lower() in e.id.lower()
+                if not name
+                or name.lower() in e.name.lower()
+                or name.lower() in e.id.lower()
+                or name.lower() in e.generic_name.lower()
+                or any(name.lower() in kw for kw in e.keywords)
             ]
             lines = []
             if running_apps:
                 lines.append(f"Running desktop apps: {', '.join(sorted(set(running_apps)))}")
             if installed:
-                preview = ", ".join(installed[:40])
-                more = f" (+{len(installed) - 40} more)" if len(installed) > 40 else ""
-                lines.append(f"Installed desktop apps: {preview}{more}")
+                lines.append(f"Installed desktop apps: {', '.join(installed)}")
             return ToolResult("\n".join(lines) if lines else "No matching desktop applications found.")
 
         if not name:
@@ -349,23 +387,38 @@ class AppTool:
 
         if action == "launch":
             try:
-                _launch_entry(entry)
-                return ToolResult(f"Launched '{entry.name}'.")
+                spawned_pid = _launch_entry(entry)
+                running = _matching_procs(entry)
+                for _ in range(5):
+                    if running:
+                        break
+                    await asyncio.sleep(0.05)
+                    running = _matching_procs(entry)
+                pid = running[0].pid if running else spawned_pid
+                pid_part = f", PID {pid}" if pid is not None else ""
+                return ToolResult(
+                    f"Launched '{entry.name}' (verified running{pid_part})."
+                )
             except OSError as e:
                 return ToolResult(f"error: failed to launch '{entry.name}': {e}", is_error=True)
 
         # action == "close"
-        target_names = {entry.exe_name.lower(), entry.id.lower(), entry.name.lower()}
+        matched = _matching_procs(entry)
         closed = 0
-        for proc in _running_user_procs():
-            pname = (proc.info.get("name") or "").lower()
-            pexe = Path(proc.info.get("exe") or "").name.lower()
-            if pname in target_names or pexe in target_names:
-                try:
-                    proc.terminate()
-                    closed += 1
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
+        for proc in matched:
+            try:
+                proc.terminate()
+                closed += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
         if closed == 0:
             return ToolResult(f"No running '{entry.name}' process found to close.")
-        return ToolResult(f"Closed '{entry.name}' ({closed} process(es) terminated).")
+        wait_fn = getattr(psutil, "wait_procs", None)
+        if callable(wait_fn):
+            try:
+                wait_fn(matched, timeout=2.0)
+            except (AttributeError, TypeError):
+                pass
+        return ToolResult(
+            f"Closed '{entry.name}' ({closed} process(es) terminated; verified stopped)."
+        )

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from verbix.tools.base import ToolContext
-from verbix.tools.web_search import WebSearchTool
+from verbix.tools.web_search import DuckDuckGoLiteParser, WebSearchTool
 
 
 @pytest.fixture
@@ -364,4 +364,99 @@ async def test_web_search_timeout_error_handling(
 
     assert res.is_error is True
     assert res.observation == "error: search request timed out for query 'test query'"
+
+
+def test_ddg_parser_structural_markers():
+    parser = DuckDuckGoLiteParser()
+    assert parser.has_search_form is False
+    assert parser.has_zero_results_marker is False
+
+    valid_html = """
+    <form action="/lite/" method="post">
+      <input type="text" name="q" value="foo">
+    </form>
+    <table><tr><td>No results.</td></tr></table>
+    """
+    parser.feed(valid_html)
+    assert parser.has_search_form is True
+    assert parser.has_zero_results_marker is True
+
+
+@pytest.mark.asyncio
+async def test_ddg_bot_challenge_returns_error(
+    search_tool: WebSearchTool, tool_context: ToolContext, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("VERBIX_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+
+    html_payload = b"""<!DOCTYPE html>
+<html>
+<body>
+<div id="challenge-form" class="anomaly-modal">
+  <h2>Bot Detection Challenge</h2>
+  <p>Please complete security check</p>
+</div>
+</body>
+</html>"""
+
+    with patch("urllib.request.urlopen", return_value=_mock_response(html_payload)):
+        res = await search_tool.execute({"query": "python"}, tool_context)
+
+    assert res.is_error is True
+    assert "blocked" in res.observation.lower() or "challenge" in res.observation.lower()
+    assert "BRAVE_API_KEY" in res.observation
+
+
+@pytest.mark.asyncio
+async def test_ddg_unrecognized_response_returns_error(
+    search_tool: WebSearchTool, tool_context: ToolContext, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("VERBIX_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+
+    html_payload = b"""<!DOCTYPE html>
+<html>
+<body>
+<div>Unexpected error occurred.</div>
+</body>
+</html>"""
+
+    with patch("urllib.request.urlopen", return_value=_mock_response(html_payload)):
+        res = await search_tool.execute({"query": "python"}, tool_context)
+
+    assert res.is_error is True
+    assert "unrecognized or bot-challenged" in res.observation.lower()
+    assert "BRAVE_API_KEY" in res.observation
+
+
+@pytest.mark.asyncio
+async def test_ddg_genuine_zero_results_returns_no_results(
+    search_tool: WebSearchTool, tool_context: ToolContext, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("VERBIX_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+
+    html_payload = b"""<!DOCTYPE html>
+<html>
+<body>
+<form action="/lite/" method="post">
+  <input type="text" name="q" value="weird query 12345" />
+</form>
+<table>
+  <tr><td>No results.</td></tr>
+</table>
+</body>
+</html>"""
+
+    with patch("urllib.request.urlopen", return_value=_mock_response(html_payload)):
+        res = await search_tool.execute({"query": "weird query 12345"}, tool_context)
+
+    assert res.is_error is False
+    assert res.observation == "No results found for query: 'weird query 12345'."
 

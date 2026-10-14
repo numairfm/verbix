@@ -45,6 +45,8 @@ class DuckDuckGoLiteParser(html.parser.HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.results: list[SearchResult] = []
+        self.has_search_form: bool = False
+        self.has_zero_results_marker: bool = False
         self._in_sponsored = False
         self._in_link = False
         self._in_snippet = False
@@ -56,6 +58,11 @@ class DuckDuckGoLiteParser(html.parser.HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr_dict = dict(attrs)
         classes = (attr_dict.get("class") or "").split()
+
+        if (tag == "form" and "/lite" in (attr_dict.get("action") or "")) or (
+            tag == "input" and attr_dict.get("name") == "q"
+        ):
+            self.has_search_form = True
 
         if tag == "tr" and "result-sponsored" in classes:
             self._in_sponsored = True
@@ -111,6 +118,8 @@ class DuckDuckGoLiteParser(html.parser.HTMLParser):
                 self._current_url = ""
 
     def handle_data(self, data: str) -> None:
+        if "no results" in data.lower():
+            self.has_zero_results_marker = True
         if self._in_sponsored:
             return
         if self._in_link:
@@ -155,6 +164,19 @@ def _search_duckduckgo(query: str, max_results: int) -> list[SearchResult]:
     parser = DuckDuckGoLiteParser()
     parser.feed(html_content)
     parser.close()
+
+    if not parser.results:
+        if "anomaly-modal" in html_content or "challenge-form" in html_content:
+            raise urllib.error.URLError(
+                "DuckDuckGo blocked request with a bot detection challenge. "
+                "For reliable search, configure BRAVE_API_KEY, TAVILY_API_KEY, or EXA_API_KEY."
+            )
+        if not (parser.has_zero_results_marker or parser.has_search_form):
+            raise urllib.error.URLError(
+                "DuckDuckGo returned an unrecognized or bot-challenged response. "
+                "For reliable search, configure BRAVE_API_KEY, TAVILY_API_KEY, or EXA_API_KEY."
+            )
+
     return parser.results[:max_results]
 
 
@@ -360,7 +382,7 @@ class WebSearchTool:
                     f"error: search request timed out for query '{query}'",
                     is_error=True,
                 )
-            return ToolResult(f"error: search network error: {e.reason}", is_error=True)
+            return ToolResult(f"error: search request failed: {e.reason}", is_error=True)
         except TimeoutError:
             return ToolResult(
                 f"error: search request timed out for query '{query}'",

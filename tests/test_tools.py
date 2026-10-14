@@ -357,3 +357,42 @@ def test_worker_registry_omits_bash_when_sandbox_unavailable(
     assert "read" in names
 
 
+@pytest.mark.asyncio
+async def test_spawn_worker_omits_bash_from_worker_config_when_sandbox_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from verbix.runtime.foreground import DEFAULT_WORKER_PROMPT
+    from verbix.runtime.ledger import TaskLedger
+    from verbix.runtime.worker import WorkerTask
+    from verbix.runtime.workers import spawn_worker
+    from verbix.tools.sandbox import SandboxStatus
+
+    monkeypatch.setattr(
+        "verbix.tools.sandbox.probe_sandbox",
+        lambda allow_network=False: SandboxStatus(
+            available=False, backend=None, reason="no sandbox on host", capabilities=""
+        ),
+    )
+    monkeypatch.setattr(WorkerTask, "start", lambda self: None)
+    runtime = SimpleNamespace(
+        workspace=tmp_path,
+        _task_counter=0,
+        worker_system_prompt=DEFAULT_WORKER_PROMPT,
+        worker_model=None,
+        provider=MagicMock(),
+        worker_echo=False,
+        tasks={},
+        _environments=[],
+        ledger=TaskLedger(),
+        _broadcast_event=lambda *a: None,
+    )
+    task_id = await spawn_worker(runtime, "inspect files")
+    worker_agent = runtime.tasks[task_id].session
+    assert "bash" not in worker_agent.config.tools
+    tool_defs = worker_agent.get_tool_definitions() or []
+    assert "bash" not in {d["function"]["name"] for d in tool_defs}
+
+

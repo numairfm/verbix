@@ -121,14 +121,6 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
         agent_cfg_dict["system_template"] = runtime.worker_system_prompt
         agent_cfg_dict["system_prompt"] = runtime.worker_system_prompt
 
-    worker_config = WorkerConfig(**agent_cfg_dict)
-
-    env_cfg_dict = raw_worker_cfg.get("environment", {})
-    env_extra = env_cfg_dict.get("env", {})
-    timeout = int(env_cfg_dict.get("timeout", 600))
-    env = LocalEnvironment(cwd=str(runtime.workspace), env=env_extra, timeout=timeout)
-
-    model_to_use = adapt_provider(runtime.worker_model or runtime.provider)
     from verbix.tools import build_registry
     from verbix.tools.sandbox import probe_sandbox
     from verbix.tools.shared import resolve_output_limits
@@ -149,7 +141,16 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
     )
     if not probe_sandbox().available:
         worker_tool_names = [n for n in worker_tool_names if n != "bash"]
-        agent_cfg_dict["tools"] = worker_tool_names
+    agent_cfg_dict["tools"] = worker_tool_names
+
+    worker_config = WorkerConfig(**agent_cfg_dict)
+
+    env_cfg_dict = raw_worker_cfg.get("environment", {})
+    env_extra = env_cfg_dict.get("env", {})
+    timeout = int(env_cfg_dict.get("timeout", 600))
+    env = LocalEnvironment(cwd=str(runtime.workspace), env=env_extra, timeout=timeout)
+
+    model_to_use = adapt_provider(runtime.worker_model or runtime.provider)
     worker_tools = build_registry(
         worker_tool_names,
         workspace=runtime.workspace,

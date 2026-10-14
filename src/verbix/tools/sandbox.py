@@ -190,11 +190,12 @@ async def execute_sandboxed(command: str, config: SandboxConfig) -> SandboxResul
     verbix_dir = workspace_path / ".verbix"
     if verbix_dir.is_dir():
         secret_candidates.extend(verbix_dir.glob("auth.*"))
-    existing_secrets = [p for p in secret_candidates if p.is_file()]
+    existing_secrets = list(dict.fromkeys(p for p in secret_candidates if p.is_file()))
     if existing_secrets:
         mask_file = workspace_path / ".verbix" / ".mask"
         mask_file.parent.mkdir(parents=True, exist_ok=True)
         mask_file.write_bytes(b"")
+        cmd_args.extend(["--ro-bind", str(mask_file), str(mask_file)])
         for secret_path in existing_secrets:
             cmd_args.extend(["--ro-bind", str(mask_file), str(secret_path)])
 

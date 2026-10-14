@@ -130,46 +130,51 @@ def find_ripgrep_binary() -> str | None:
 _PRUNED_DIRS = frozenset({".git", ".verbix", ".venv", "node_modules", "__pycache__"})
 
 
-def _load_ignore_spec(workspace: Path, target: Path):
+def _read_dir_spec(d: Path):
     import pathspec
 
     lines: list[str] = []
-    ws = workspace.resolve()
-    tgt = target.resolve()
-    dirs = [ws]
-    if tgt != ws and tgt.is_dir():
-        try:
-            rel_parts = tgt.relative_to(ws).parts
-            cur = ws
-            for part in rel_parts:
-                cur = cur / part
-                dirs.append(cur)
-        except ValueError:
-            pass
-    for d in dirs:
-        for fname in (".gitignore", ".ignore"):
-            ig = d / fname
-            if ig.is_file():
-                try:
-                    prefix = "" if d == ws else (d.relative_to(ws).as_posix() + "/")
-                    for raw_line in ig.read_text(encoding="utf-8", errors="replace").splitlines():
-                        s = raw_line.strip()
-                        if not s or s.startswith("#"):
-                            continue
-                        if prefix and not s.startswith("!"):
-                            lines.append(prefix + s.lstrip("/"))
-                        else:
-                            lines.append(s)
-                except OSError:
-                    pass
-    return pathspec.GitIgnoreSpec.from_lines(lines)
+    for fname in (".gitignore", ".ignore"):
+        ig = d / fname
+        if ig.is_file():
+            try:
+                for raw_line in ig.read_text(encoding="utf-8", errors="replace").splitlines():
+                    s = raw_line.strip()
+                    if s and not s.startswith("#"):
+                        lines.append(s)
+            except OSError:
+                pass
+    return pathspec.GitIgnoreSpec.from_lines(lines) if lines else None
+
+
+def _is_ignored(
+    path: Path, is_dir: bool, ws: Path, spec_cache: dict[Path, object]
+) -> bool:
+    rel_parts = path.relative_to(ws).parts
+    ancestors = [ws]
+    cur = ws
+    for part in rel_parts[:-1]:
+        cur = cur / part
+        ancestors.append(cur)
+
+    ignored = False
+    for anc in ancestors:
+        if anc not in spec_cache:
+            spec_cache[anc] = _read_dir_spec(anc)
+        spec = spec_cache[anc]
+        if spec is None:
+            continue
+        rel_to_anc = path.relative_to(anc).as_posix() + ("/" if is_dir else "")
+        res = spec.check_file(rel_to_anc)  # type: ignore[attr-defined]
+        if res.include is not None:
+            ignored = bool(res.include)
+    return ignored
 
 
 def iter_workspace_files(
     target: Path, workspace: Path, glob_pattern: str | None = None
 ) -> list[Path]:
     """Walks target in pure Python, pruning ignored directories and honoring .gitignore via pathspec."""
-    import fnmatch
     import pathspec
 
     ws = workspace.resolve()
@@ -177,9 +182,9 @@ def iter_workspace_files(
     if tgt.is_file():
         return [tgt]
 
-    ignore_spec = _load_ignore_spec(ws, tgt)
+    spec_cache: dict[Path, object] = {}
     glob_spec = (
-        pathspec.GitIgnoreSpec.from_lines([glob_pattern])
+        pathspec.GitIgnoreSpec.from_lines([glob_pattern.strip()])
         if glob_pattern and glob_pattern.strip()
         else None
     )
@@ -190,26 +195,28 @@ def iter_workspace_files(
         for d in sorted(dirnames):
             if d in _PRUNED_DIRS or d.startswith("."):
                 continue
-            d_rel = (root_path / d).relative_to(ws).as_posix() + "/"
-            if ignore_spec.match_file(d_rel):
+            d_path = root_path / d
+            if _is_ignored(d_path, True, ws, spec_cache):
                 continue
             kept_dirs.append(d)
         dirnames[:] = kept_dirs
 
         for fname in sorted(filenames):
-            if fname.startswith("."):
+            if fname.startswith(".") or _is_secret_basename(fname):
                 continue
             fpath = root_path / fname
-            rel_ws = fpath.relative_to(ws).as_posix()
-            if ignore_spec.match_file(rel_ws):
+            try:
+                resolved = fpath.resolve()
+                resolved.relative_to(ws)
+            except (OSError, ValueError):
                 continue
-            if glob_pattern and glob_pattern.strip():
-                pat = glob_pattern.strip()
+            if resolved.name.startswith(".") or _is_secret_basename(resolved.name):
+                continue
+            if _is_ignored(fpath, False, ws, spec_cache):
+                continue
+            if glob_spec is not None:
                 rel_tgt = fpath.relative_to(tgt).as_posix()
-                if "/" not in pat and "**" not in pat:
-                    if not fnmatch.fnmatch(rel_tgt, pat):
-                        continue
-                elif glob_spec is not None and not glob_spec.match_file(rel_tgt):
+                if not glob_spec.match_file(rel_tgt):
                     continue
             results.append(fpath)
     return sorted(results)

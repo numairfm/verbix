@@ -22,6 +22,7 @@ from verbix.agent.utils.history import (
 )
 from verbix.core.events import (
     AgentEvent,
+    ExitReason,
     TextDelta,
     ThoughtDelta,
     ToolCallDelta,
@@ -66,6 +67,7 @@ class VoiceConfig(BaseModel):
     max_context_tokens: int | None = 16000
     tool_choice: str | None = None
     system_prompt: str = ""
+    spoken_error_fallback: str = "Sorry — I ran into a problem. Could you say that again?"
 
     @model_validator(mode="before")
     @classmethod
@@ -185,6 +187,19 @@ class VoiceAgent:
         except Exception as e:  # noqa: BLE001
             return ToolResult(f"Error executing tool '{name}': {e}", is_error=True)
 
+    def _abort_turn(self, exit_reason: ExitReason) -> TurnComplete:
+        """Repairs history without 'exit' role and returns a user-safe TurnComplete."""
+        self.messages[:] = validate_and_repair_history(
+            self.messages, delivered_text=self._delivered_text
+        )
+        if self._delivered_text.strip():
+            final = self._delivered_text
+        else:
+            final = self.config.spoken_error_fallback
+            if final:
+                self.messages.append({"role": "assistant", "content": final})
+        return TurnComplete(final_text=final, exit_reason=exit_reason, is_error=True)
+
     async def step_stream(self, user_input: str | None = None) -> AsyncIterator[AgentEvent]:
         """Stream an agent turn asynchronously, yielding AgentEvents and executing tools."""
         if self.config.turn_scoped_limits:
@@ -212,15 +227,11 @@ class VoiceAgent:
                 calls = self.turn_calls if self.config.turn_scoped_limits else self.n_calls
                 spent = self.turn_cost if self.config.turn_scoped_limits else self.cost
                 if 0 < self.config.step_limit <= calls or 0 < self.config.cost_limit <= spent:
-                    exc_msg = "LimitsExceeded"
-                    self.messages.append({"role": "exit", "content": exc_msg})
-                    yield TurnComplete(final_text=exc_msg)
+                    yield self._abort_turn("limits_exceeded")
                     return
 
                 if 0 < self.config.wall_time_limit_seconds <= int(time.time() - self._start_time):
-                    time_msg = "TimeExceeded"
-                    self.messages.append({"role": "exit", "content": time_msg})
-                    yield TurnComplete(final_text=time_msg)
+                    yield self._abort_turn("time_exceeded")
                     return
 
                 self.n_calls += 1
@@ -412,12 +423,15 @@ class VoiceAgent:
                             len(repeat_history) >= _REPEAT_LIMIT
                             and len(set(repeat_history[-_REPEAT_LIMIT:])) == 1
                         ):
-                            self.messages.append({"role": "exit", "content": "RepeatedToolCall"})
-                            yield TurnComplete(final_text="RepeatedToolCall")
+                            yield self._abort_turn("repeated_tool_call")
                             return
 
                         if res.is_terminal:
-                            yield TurnComplete(final_text=res.observation)
+                            yield TurnComplete(
+                                final_text=res.observation,
+                                exit_reason="terminal_tool",
+                                is_error=res.is_error,
+                            )
                             return
 
                     continue
@@ -438,10 +452,5 @@ class VoiceAgent:
             raise
         except Exception as e:  # noqa: BLE001
             self.logger.warning("Voice agent turn failed: %s", e)
-            self.messages[:] = validate_and_repair_history(
-                self.messages, delivered_text=self._delivered_text
-            )
-            note = "Sorry — I ran into a problem. Could you say that again?"
-            self.messages.append({"role": "assistant", "content": note})
-            yield TurnComplete(final_text=note)
+            yield self._abort_turn("exception")
             return

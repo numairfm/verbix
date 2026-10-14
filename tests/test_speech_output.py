@@ -356,3 +356,21 @@ async def test_idle_listening_preserves_pending_reference():
     assert aec.resets == 0
     assert aec.refs
     await pipeline.stop_continuous_session()
+
+
+@pytest.mark.asyncio
+async def test_speech_output_never_synthesizes_error_turn_complete_tokens():
+    tts = MockTextToSpeech()
+    sink = MockAudioSink(playback_delay=0.01)
+    out = SpeechOutput(tts=tts, sink=sink)
+
+    await out.emit(
+        TurnComplete(
+            final_text="RepeatedToolCall",
+            exit_reason="repeated_tool_call",
+            is_error=True,
+        )
+    )
+    await asyncio.sleep(0.05)
+    assert tts.synthesized_texts == []
+

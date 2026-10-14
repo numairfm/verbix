@@ -211,7 +211,13 @@ async def test_voice_agent_limits_exceeded():
     agent.n_calls = 1  # already at limit
 
     events = [e async for e in agent.step_stream("hi")]
-    assert any(isinstance(e, TurnComplete) and "LimitsExceeded" in e.final_text for e in events)
+    assert any(
+        isinstance(e, TurnComplete)
+        and e.exit_reason == "limits_exceeded"
+        and e.is_error is True
+        and "LimitsExceeded" not in e.final_text
+        for e in events
+    )
 
 
 @pytest.mark.asyncio
@@ -274,3 +280,80 @@ async def test_voice_agent_renders_system_and_instance_templates():
 
     assert captured_messages[0] == {"role": "system", "content": "You are VerbixVoice."}
     assert captured_messages[1] == {"role": "user", "content": "Task: weather"}
+
+
+@pytest.mark.asyncio
+async def test_voice_agent_repeat_breaker_never_emits_exit_role_to_api_and_speaks_fallback():
+    from verbix.agent.models.litellm_model import LitellmModel
+
+    mock_model = MagicMock()
+
+    async def repeat_stream(messages, tools=None, **kw):
+        yield ToolCallDelta(index=0, call_id="c1", name="status", arguments_delta="{}")
+
+    mock_model.query_stream = repeat_stream
+    tools = ToolRegistry()
+    tools.register(
+        "status",
+        {"type": "function", "function": {"name": "status"}},
+        lambda a: ToolResult("running", is_error=False),
+    )
+
+    agent = VoiceAgent(model=mock_model, tools=tools)
+    events = [e async for e in agent.step_stream("what?")]
+
+    tc = [e for e in events if isinstance(e, TurnComplete)][-1]
+    assert tc.exit_reason == "repeated_tool_call"
+    assert tc.is_error is True
+    assert "RepeatedToolCall" not in tc.final_text
+    assert "Sorry" in tc.final_text
+
+    # Assert on the exact payload built by LitellmModel._prepare_messages_for_api
+    litellm_model = LitellmModel(model_name="openrouter/google/gemini-3.5-flash-lite")
+    api_payload = litellm_model._prepare_messages_for_api(agent.messages)
+    roles = {m.get("role") for m in api_payload}
+    assert "exit" not in roles
+    assert roles <= {"system", "user", "assistant", "tool"}
+
+    # Announcer must have empty spoken_error_fallback so it never says "Could you say that again?"
+    announcer = AnnouncerAgent(
+        model=mock_model, config=AnnouncerConfig(step_limit=1, turn_scoped_limits=False)
+    )
+    announcer.n_calls = 1
+    ann_events = [e async for e in announcer.step_stream("debrief")]
+    ann_tc = [e for e in ann_events if isinstance(e, TurnComplete)][-1]
+    assert ann_tc.exit_reason == "limits_exceeded"
+    assert ann_tc.final_text == ""
+    assert not any(
+        "Could you say that again" in str(m.get("content", ""))
+        for m in announcer.messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_voice_agent_preserves_already_delivered_speech_on_limit_exit():
+    mock_model = MagicMock()
+
+    async def partial_then_tool_stream(messages, tools=None, **kw):
+        yield TextDelta(text="I checked your workspace right now. ")
+        yield TextDelta(text="Let me also check status.")
+        yield ToolCallDelta(index=0, call_id="c1", name="status", arguments_delta="{}")
+
+    mock_model.query_stream = partial_then_tool_stream
+    tools = ToolRegistry()
+    tools.register(
+        "status",
+        {"type": "function", "function": {"name": "status"}},
+        lambda a: ToolResult("ok"),
+    )
+
+    config = VoiceConfig(step_limit=1, turn_scoped_limits=True)
+    agent = VoiceAgent(model=mock_model, tools=tools, config=config)
+    events = [e async for e in agent.step_stream("check")]
+
+    tc = [e for e in events if isinstance(e, TurnComplete)][-1]
+    assert tc.exit_reason == "limits_exceeded"
+    assert tc.is_error is True
+    assert "LimitsExceeded" not in tc.final_text
+    assert "I checked your workspace right now." in tc.final_text
+

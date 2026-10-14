@@ -330,6 +330,8 @@ class CliPrinter:
                 sys.stderr.write("\n")
                 self.in_thought = False
             final = event.final_text.strip()
+            if final in {"RepeatedToolCall", "LimitsExceeded", "TimeExceeded", "RepeatedFormatError"}:
+                final = ""
             if final and final not in "".join(self._delivered):
                 self._open_prefix()
                 sys.stdout.write(final)

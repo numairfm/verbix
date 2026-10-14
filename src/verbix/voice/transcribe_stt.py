@@ -99,6 +99,7 @@ class TranscribeSession:
         self.sample_rate = sample_rate
         self.on_endpoint = on_endpoint
         self._buf = bytearray()
+        self._spans: list[bytes] = []
         self._finalized = False
         self._duration: float = 0.0
         self.fed_chunks: list[bytes] = []
@@ -107,6 +108,8 @@ class TranscribeSession:
     def speech_duration(self) -> float:
         if self._duration > 0:
             return self._duration
+        if self._spans:
+            return (sum(len(s) for s in self._spans) // 2) / float(self.sample_rate) if self.sample_rate else 0.0
         return (len(self._buf) // 2) / float(self.sample_rate) if self.sample_rate else 0.0
 
     def feed(self, chunk: bytes) -> None:
@@ -121,11 +124,13 @@ class TranscribeSession:
                 logger.debug("Segmenter feed error: %s", e)
             if hasattr(self._segmenter, "pop_segments"):
                 spans = self._segmenter.pop_segments()
-                if spans and self.on_endpoint:
-                    try:
-                        self.on_endpoint()
-                    except Exception as e:  # noqa: BLE001
-                        logger.debug("on_endpoint callback error: %s", e)
+                if spans:
+                    self._spans.extend(spans)
+                    if self.on_endpoint:
+                        try:
+                            self.on_endpoint()
+                        except Exception as e:  # noqa: BLE001
+                            logger.debug("on_endpoint callback error: %s", e)
 
     def feed_barge_in(self, chunk: bytes) -> bool:
         if self._finalized or not chunk:
@@ -141,6 +146,7 @@ class TranscribeSession:
     def cancel(self) -> None:
         self._finalized = True
         self._buf.clear()
+        self._spans.clear()
         if self._segmenter is not None and hasattr(self._segmenter, "reset"):
             self._segmenter.reset()
 
@@ -154,12 +160,20 @@ class TranscribeSession:
         self._finalized = True
         if self._segmenter is not None and hasattr(self._segmenter, "flush"):
             try:
-                self._segmenter.flush()
+                flushed = self._segmenter.flush()
+                if flushed:
+                    self._spans.extend(flushed)
             except Exception as e:  # noqa: BLE001
                 logger.debug("Segmenter flush error: %s", e)
-        audio = bytes(self._buf)
+        if self._spans:
+            audio = b"".join(self._spans)
+        elif self._segmenter is None:
+            audio = bytes(self._buf)
+        else:
+            audio = b""
         self._duration = (len(audio) // 2) / float(self.sample_rate) if self.sample_rate else 0.0
         self._buf.clear()
+        self._spans.clear()
         if not audio or len(audio) < 2400:  # < 150ms
             return ""
         return await asyncio.to_thread(self._stt.transcribe, audio, self.sample_rate)

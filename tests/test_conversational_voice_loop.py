@@ -611,4 +611,74 @@ async def test_barge_in_transcript_matches_ptt_transcript_word_for_word():
     await pipeline.stop_continuous_session()
 
 
+@pytest.mark.asyncio
+async def test_continuous_loop_cancels_old_session_after_playback_and_preserves_tail_speech():
+    sessions = []
+
+    def make_session(**kw):
+        s = MagicMock()
+        s.polluted_by_barge_in = False
+        s.is_speech_detected = False
+        s.speech_duration = 1.0
+        s.fed_chunks = []
+        s.feed = MagicMock(side_effect=s.fed_chunks.append)
+
+        def _barge(chunk):
+            s.polluted_by_barge_in = True
+            if b"tail_speech" in chunk:
+                s.is_speech_detected = True
+            return False
+
+        s.feed_barge_in = _barge
+        s.finalize = AsyncMock(return_value="hello there")
+        s.cancel = MagicMock()
+        s.reset = MagicMock()
+        sessions.append(s)
+        return s
+
+    stt = MagicMock()
+    stt.open_session = MagicMock(side_effect=make_session)
+
+    runtime = MagicMock()
+    runtime.floor = FloorArbiter()
+    runtime.is_idle = True
+    runtime.pending_continuation = None
+
+    capture = MagicMock()
+    capture.sample_rate = 16000
+    capture.is_recording = False
+    capture.start_recording = AsyncMock()
+    capture.stop_recording = AsyncMock(return_value=b"")
+
+    pipeline = VoicePipeline(
+        runtime=runtime,
+        stt=stt,
+        player=AudioPlayer(tts=MockTextToSpeech(), sink=MockAudioSink()),
+        capture=capture,
+        aec=MagicMock(is_available=False),
+    )
+
+    async def fake_submit(text, output, **kw):
+        runtime.floor.set_state("SPEAKING")
+        # User starts speaking right at the end of playback (before barge-in interrupts)
+        pipeline.capture.on_chunk(b"tail_speech_onset")
+        return "Hi!"
+
+    runtime.submit = fake_submit
+
+    await pipeline.start_continuous_session()
+    pipeline._speech_endpoint_event.set()
+    await asyncio.sleep(0.05)
+
+    # Old session must be cancelled before opening the new post-playback session,
+    # and the new session must be unpolluted by barge-in yet seeded with the tail speech onset!
+    assert len(sessions) == 2
+    assert sessions[0].cancel.called is True
+    assert pipeline._live_stt is sessions[1]
+    assert pipeline._live_stt.polluted_by_barge_in is False
+    assert b"tail_speech_onset" in b"".join(pipeline._live_stt.fed_chunks)
+    await pipeline.stop_continuous_session()
+
+
+
 

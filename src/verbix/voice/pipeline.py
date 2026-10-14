@@ -61,8 +61,10 @@ class VoicePipeline:
         self._continuous_task: asyncio.Task[None] | None = None
         self._speech_endpoint_event: asyncio.Event = asyncio.Event()
         self._gate_stt_feed: bool = False
+        self._barge_in_triggered: bool = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._mic_lookback: bytes = b""
+        self._tail_lookback: bytearray = bytearray()
         self._dump_mic_dir = Path(dump_mic_dir) if dump_mic_dir else None
         self._dump_turn = 0
         self._dump_buf = bytearray()
@@ -215,6 +217,7 @@ class VoicePipeline:
         """Interrupts ongoing speech playback or active turn execution immediately upon user speech detection."""
         if not self._is_speaking and not self._speech_output.is_playing:
             return
+        self._barge_in_triggered = True
         snapshot = self._speech_output.interrupt()
         heard = snapshot.confirmed_heard if snapshot is not None else ""
         self._stash_interruption(snapshot)
@@ -269,7 +272,7 @@ class VoicePipeline:
             or output_playing
         )
 
-    async def _setup_turn_listening(self) -> None:
+    async def _setup_turn_listening(self, *, seed_bytes: bytes = b"") -> None:
         """Sets up STT session and attaches capture callback for listening."""
         from verbix.runtime.floor import FloorState
 
@@ -287,6 +290,14 @@ class VoicePipeline:
             sample_rate=sample_rate,
             on_endpoint=self._on_speech_endpoint,
         )
+        self._mic_lookback = b""
+        self._tail_lookback.clear()
+        if seed_bytes and self._live_stt is not None:
+            self._dump_buf = bytearray(seed_bytes)
+            try:
+                self._live_stt.feed(seed_bytes)
+            except (OSError, RuntimeError) as e:
+                logger.debug("Error seeding STT session from tail lookback: %s", e)
 
         def _feed_chunk(chunk: bytes) -> None:
             if not chunk:
@@ -311,6 +322,8 @@ class VoicePipeline:
                     else chunk
                 )
                 self._mic_lookback = (self._mic_lookback + bytes(clean_chunk))[-9600:]
+                if not getattr(self._speech_output, "is_playing", False):
+                    self._tail_lookback.extend(clean_chunk)
                 if self._live_stt is not None and not self._gate_stt_feed:
                     detected = False
                     try:
@@ -357,12 +370,10 @@ class VoicePipeline:
                     transcribed_text = await self._live_stt.finalize()
                     speech_dur = self._live_stt.speech_duration
                     self._dump_wav(bytes(self._dump_buf), kind="turn", text=transcribed_text)
-                    self._live_stt = None
 
                 transcribed_text = transcribed_text.strip()
                 if not transcribed_text:
                     if self._is_continuous_active:
-                        self._gate_stt_feed = False
                         await self._setup_turn_listening()
                     continue
 
@@ -378,8 +389,13 @@ class VoicePipeline:
                         f"User request: {transcribed_text}"
                     )
 
-                if self._is_continuous_active:
-                    await self._setup_turn_listening()
+                if self._live_stt is not None and hasattr(self._live_stt, "reset"):
+                    self._live_stt.reset()
+                self._barge_in_triggered = False
+                self._mic_lookback = b""
+                self._tail_lookback.clear()
+                self._speech_endpoint_event.clear()
+                self._gate_stt_feed = False
 
                 turn_task = asyncio.create_task(
                     self.execute_voice_turn(transcribed_text)
@@ -403,8 +419,12 @@ class VoicePipeline:
                         await asyncio.sleep(0.02)
                     await asyncio.sleep(0.15)
                 finally:
-                    if self._is_continuous_active and self._live_stt is None:
-                        await self._setup_turn_listening()
+                    if self._is_continuous_active and not self._barge_in_triggered:
+                        if getattr(self._live_stt, "is_speech_detected", False):
+                            seed = self._mic_lookback
+                        else:
+                            seed = bytes(self._tail_lookback[-9600:])
+                        await self._setup_turn_listening(seed_bytes=seed)
 
         except asyncio.CancelledError:
             pass

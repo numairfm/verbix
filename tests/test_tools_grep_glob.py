@@ -131,3 +131,39 @@ def test_registry_builds_grep_and_glob(sample_workspace: Path):
     names = {d["function"]["name"] for d in defs}
     assert "grep" in names
     assert "glob" in names
+
+
+@pytest.mark.asyncio
+async def test_grep_and_glob_stdlib_fallback_honors_gitignore_and_skips_binary(
+    sample_workspace: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr("verbix.tools.grep.find_ripgrep_binary", lambda: None)
+    monkeypatch.setattr("verbix.tools.glob.find_ripgrep_binary", lambda: None)
+
+    (sample_workspace / ".gitignore").write_text("ignored_dir/\n*.log\n!keep.log\n", encoding="utf-8")
+    ignored = sample_workspace / "ignored_dir"
+    ignored.mkdir()
+    (ignored / "secret.py").write_text("def hello_secret(): pass\n", encoding="utf-8")
+    (sample_workspace / "drop.log").write_text("hello drop\n", encoding="utf-8")
+    (sample_workspace / "keep.log").write_text("hello keep\n", encoding="utf-8")
+    (sample_workspace / "binary.py").write_bytes(b"\x00\x01\x02hello binary\n")
+
+    ctx = ToolContext(workspace=sample_workspace)
+
+    glob_res = await GlobTool().execute({"pattern": "**/*"}, ctx)
+    assert glob_res.is_error is False
+    glob_lines = glob_res.observation.splitlines()
+    assert "sub/test.py" in glob_lines
+    assert "keep.log" in glob_lines
+    assert "drop.log" not in glob_lines
+    assert not any("ignored_dir" in line for line in glob_lines)
+
+    grep_res = await GrepTool().execute({"pattern": "hello"}, ctx)
+    assert grep_res.is_error is False
+    assert "main.py:1:def hello():" in grep_res.observation
+    assert "sub/test.py:1:def test_hello():" in grep_res.observation
+    assert "keep.log:1:hello keep" in grep_res.observation
+    assert "drop.log" not in grep_res.observation
+    assert "secret.py" not in grep_res.observation
+    assert "binary.py" not in grep_res.observation
+

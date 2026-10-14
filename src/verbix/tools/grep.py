@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import re
+from pathlib import Path
 from typing import Any
 
 from verbix.tools.base import ToolContext, ToolResult
-from verbix.tools.shared import find_ripgrep_binary, resolve_contained_path
+from verbix.tools.shared import (
+    find_ripgrep_binary,
+    iter_workspace_files,
+    resolve_contained_path,
+)
 
 
 class GrepTool:
@@ -57,45 +63,84 @@ class GrepTool:
             return ToolResult(f"error: path '{path_str}' does not exist", is_error=True)
 
         rg_bin = find_ripgrep_binary()
-        cmd = [rg_bin, "--line-number", "--no-heading", "--color=never"]
+        if rg_bin is not None:
+            cmd = [rg_bin, "--line-number", "--no-heading", "--color=never", "--path-separator=/"]
 
-        if not args.get("case_sensitive", False):
-            cmd.append("-i")
+            if not args.get("case_sensitive", False):
+                cmd.append("-i")
 
-        glob_filter = args.get("glob")
-        if glob_filter and isinstance(glob_filter, str) and glob_filter.strip():
-            cmd.extend(["--glob", glob_filter.strip()])
+            glob_filter = args.get("glob")
+            if glob_filter and isinstance(glob_filter, str) and glob_filter.strip():
+                cmd.extend(["--glob", glob_filter.strip()])
 
-        cmd.extend(["--", pattern])
+            cmd.extend(["--", pattern])
 
+            try:
+                rel_path = target.relative_to(context.workspace)
+                target_arg = rel_path.as_posix() if str(rel_path) != "." else "."
+            except ValueError:
+                target_arg = str(target)
+            cmd.append(target_arg)
+
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=str(context.workspace),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    lines = [
+                        line.removeprefix("./")
+                        for line in stdout.decode("utf-8", errors="replace").splitlines()
+                        if line.strip()
+                    ]
+                    if lines:
+                        return ToolResult("\n".join(lines))
+                    return ToolResult("No matches found.")
+                if proc.returncode == 1:
+                    return ToolResult("No matches found.")
+                err_text = stderr.decode("utf-8", errors="replace").strip()
+                return ToolResult(f"error: {err_text}", is_error=True)
+            except OSError:
+                pass
+
+        return await asyncio.to_thread(
+            self._search_python,
+            pattern,
+            target,
+            context.workspace.resolve(),
+            bool(args.get("case_sensitive", False)),
+            args.get("glob") if isinstance(args.get("glob"), str) else None,
+        )
+
+    @staticmethod
+    def _search_python(
+        pattern: str,
+        target: Path,
+        workspace: Path,
+        case_sensitive: bool,
+        glob_filter: str | None,
+    ) -> ToolResult:
+        flags = 0 if case_sensitive else re.IGNORECASE
         try:
-            rel_path = target.relative_to(context.workspace)
-            target_arg = str(rel_path) if str(rel_path) != "." else "."
-        except ValueError:
-            target_arg = str(target)
-        cmd.append(target_arg)
+            regex = re.compile(pattern, flags=flags)
+        except re.error as e:
+            return ToolResult(f"error: invalid regex '{pattern}': {e}", is_error=True)
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=str(context.workspace),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-        except OSError as e:
-            return ToolResult(f"error: failed to execute ripgrep: {e}", is_error=True)
-
-        if proc.returncode == 0:
-            lines = [
-                line.removeprefix("./")
-                for line in stdout.decode("utf-8", errors="replace").splitlines()
-                if line.strip()
-            ]
-            if lines:
-                return ToolResult("\n".join(lines))
-            return ToolResult("No matches found.")
-        if proc.returncode == 1:
-            return ToolResult("No matches found.")
-        err_text = stderr.decode("utf-8", errors="replace").strip()
-        return ToolResult(f"error: {err_text}", is_error=True)
+        matches: list[str] = []
+        for fpath in iter_workspace_files(target, workspace, glob_pattern=glob_filter):
+            try:
+                raw = fpath.read_bytes()
+            except OSError:
+                continue
+            if b"\x00" in raw[:4096]:
+                continue
+            rel = fpath.relative_to(workspace).as_posix()
+            for lineno, line in enumerate(raw.decode("utf-8", errors="replace").splitlines(), 1):
+                if regex.search(line):
+                    matches.append(f"{rel}:{lineno}:{line}")
+        if matches:
+            return ToolResult("\n".join(matches))
+        return ToolResult("No matches found.")

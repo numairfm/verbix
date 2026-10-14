@@ -119,13 +119,98 @@ def check_fresh(target: Path, context: ToolContext) -> str | None:
     return None
 
 
-def find_ripgrep_binary() -> str:
-    """Finds the ripgrep binary bundled in the venv or available in PATH."""
+def find_ripgrep_binary() -> str | None:
+    """Finds the ripgrep binary bundled in the venv or available in PATH, or None."""
     venv_bin = Path(sys.executable).parent / ("rg.exe" if sys.platform == "win32" else "rg")
     if venv_bin.is_file() and os.access(venv_bin, os.X_OK):
         return str(venv_bin)
-    found = shutil.which("rg")
-    if found:
-        return found
-    return "rg"
+    return shutil.which("rg")
+
+
+_PRUNED_DIRS = frozenset({".git", ".verbix", ".venv", "node_modules", "__pycache__"})
+
+
+def _load_ignore_spec(workspace: Path, target: Path):
+    import pathspec
+
+    lines: list[str] = []
+    ws = workspace.resolve()
+    tgt = target.resolve()
+    dirs = [ws]
+    if tgt != ws and tgt.is_dir():
+        try:
+            rel_parts = tgt.relative_to(ws).parts
+            cur = ws
+            for part in rel_parts:
+                cur = cur / part
+                dirs.append(cur)
+        except ValueError:
+            pass
+    for d in dirs:
+        for fname in (".gitignore", ".ignore"):
+            ig = d / fname
+            if ig.is_file():
+                try:
+                    prefix = "" if d == ws else (d.relative_to(ws).as_posix() + "/")
+                    for raw_line in ig.read_text(encoding="utf-8", errors="replace").splitlines():
+                        s = raw_line.strip()
+                        if not s or s.startswith("#"):
+                            continue
+                        if prefix and not s.startswith("!"):
+                            lines.append(prefix + s.lstrip("/"))
+                        else:
+                            lines.append(s)
+                except OSError:
+                    pass
+    return pathspec.GitIgnoreSpec.from_lines(lines)
+
+
+def iter_workspace_files(
+    target: Path, workspace: Path, glob_pattern: str | None = None
+) -> list[Path]:
+    """Walks target in pure Python, pruning ignored directories and honoring .gitignore via pathspec."""
+    import fnmatch
+    import pathspec
+
+    ws = workspace.resolve()
+    tgt = target.resolve()
+    if tgt.is_file():
+        return [tgt]
+
+    ignore_spec = _load_ignore_spec(ws, tgt)
+    glob_spec = (
+        pathspec.GitIgnoreSpec.from_lines([glob_pattern])
+        if glob_pattern and glob_pattern.strip()
+        else None
+    )
+    results: list[Path] = []
+    for root_str, dirnames, filenames in os.walk(tgt):
+        root_path = Path(root_str)
+        kept_dirs: list[str] = []
+        for d in sorted(dirnames):
+            if d in _PRUNED_DIRS or d.startswith("."):
+                continue
+            d_rel = (root_path / d).relative_to(ws).as_posix() + "/"
+            if ignore_spec.match_file(d_rel):
+                continue
+            kept_dirs.append(d)
+        dirnames[:] = kept_dirs
+
+        for fname in sorted(filenames):
+            if fname.startswith("."):
+                continue
+            fpath = root_path / fname
+            rel_ws = fpath.relative_to(ws).as_posix()
+            if ignore_spec.match_file(rel_ws):
+                continue
+            if glob_pattern and glob_pattern.strip():
+                pat = glob_pattern.strip()
+                rel_tgt = fpath.relative_to(tgt).as_posix()
+                if "/" not in pat and "**" not in pat:
+                    if not fnmatch.fnmatch(rel_tgt, pat):
+                        continue
+                elif glob_spec is not None and not glob_spec.match_file(rel_tgt):
+                    continue
+            results.append(fpath)
+    return sorted(results)
 

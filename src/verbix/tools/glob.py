@@ -4,7 +4,11 @@ import asyncio
 from typing import Any
 
 from verbix.tools.base import ToolContext, ToolResult
-from verbix.tools.shared import find_ripgrep_binary, resolve_contained_path
+from verbix.tools.shared import (
+    find_ripgrep_binary,
+    iter_workspace_files,
+    resolve_contained_path,
+)
 
 
 class GlobTool:
@@ -49,47 +53,50 @@ class GlobTool:
             return ToolResult(f"error: '{path_str}' is not a directory", is_error=True)
 
         rg_bin = find_ripgrep_binary()
-        cmd = [rg_bin, "--files", "-g", pattern]
+        if rg_bin is not None:
+            cmd = [rg_bin, "--files", "--path-separator=/", "-g", pattern]
 
-        try:
-            rel_path = target.relative_to(context.workspace)
-            target_arg = str(rel_path) if str(rel_path) != "." else "."
-        except ValueError:
-            target_arg = str(target)
-        cmd.append(target_arg)
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=str(context.workspace),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-        except OSError:
-            # Fallback to standard library glob if ripgrep process execution fails
             try:
-                matches = sorted(
-                    str(p.relative_to(context.workspace))
-                    for p in target.glob(pattern)
-                    if p.is_file()
-                )
-                if matches:
-                    return ToolResult("\n".join(matches))
-                return ToolResult("No files matched pattern.")
-            except Exception as e:  # noqa: BLE001
-                return ToolResult(f"error: {e}", is_error=True)
+                rel_path = target.relative_to(context.workspace)
+                target_arg = rel_path.as_posix() if str(rel_path) != "." else "."
+            except ValueError:
+                target_arg = str(target)
+            cmd.append(target_arg)
 
-        if proc.returncode == 0:
-            lines = [
-                line.removeprefix("./")
-                for line in stdout.decode("utf-8", errors="replace").splitlines()
-                if line.strip()
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=str(context.workspace),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    lines = [
+                        line.removeprefix("./")
+                        for line in stdout.decode("utf-8", errors="replace").splitlines()
+                        if line.strip()
+                    ]
+                    if lines:
+                        return ToolResult("\n".join(lines))
+                    return ToolResult("No files matched pattern.")
+                if proc.returncode == 1:
+                    return ToolResult("No files matched pattern.")
+                err_text = stderr.decode("utf-8", errors="replace").strip()
+                return ToolResult(f"error: {err_text}", is_error=True)
+            except OSError:
+                pass
+
+        try:
+            ws = context.workspace.resolve()
+            matches = [
+                p.relative_to(ws).as_posix()
+                for p in await asyncio.to_thread(
+                    iter_workspace_files, target, ws, pattern
+                )
             ]
-            if lines:
-                return ToolResult("\n".join(lines))
+            if matches:
+                return ToolResult("\n".join(matches))
             return ToolResult("No files matched pattern.")
-        if proc.returncode == 1:
-            return ToolResult("No files matched pattern.")
-        err_text = stderr.decode("utf-8", errors="replace").strip()
-        return ToolResult(f"error: {err_text}", is_error=True)
+        except Exception as e:  # noqa: BLE001
+            return ToolResult(f"error: {e}", is_error=True)

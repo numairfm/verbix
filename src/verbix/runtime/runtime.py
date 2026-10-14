@@ -224,8 +224,9 @@ class Runtime:
         if hasattr(self, "ledger"):
             for entry in self.ledger.pending_deliveries():
                 folded_ids.append(entry.id)
+                desc_part = f" ('{entry.objective}')" if entry.objective else ""
                 pending_lines.append(
-                    f"[Task '{entry.id}' {entry.status}]: {entry.result_summary}"
+                    f"[Task '{entry.id}'{desc_part} {entry.status}]: {entry.result_summary}"
                 )
         if hasattr(self, "_pending_announcements"):
             for tid, res in self._pending_announcements:
@@ -268,7 +269,7 @@ class Runtime:
                     yield event
             finally:
                 if not self.floor.interrupt_requested:
-                    handle.completed = True
+                    handle.completed = turn_ok
                     if turn_ok:
                         for tid in folded_ids:
                             self._mark_task_heard(tid)
@@ -310,9 +311,12 @@ class Runtime:
         final_text = ""
         async with self.floor.acquire(FloorState.FOREGROUND):
             self._turn_counter = getattr(self, "_turn_counter", 0) + 1
+            turn_kind = (
+                "announcer" if session is getattr(self, "announcer", None) else "foreground"
+            )
             handle = TurnHandle(
                 task=asyncio.current_task(),
-                kind="foreground",
+                kind=turn_kind,
                 turn_id=self._turn_counter,
                 delivered_text_provider=lambda: self._submit_delivered_text(output, session),
             )
@@ -346,7 +350,7 @@ class Runtime:
                     or (output is not None and getattr(output, "last_interruption", None) is not None)
                 )
                 if not was_interrupted:
-                    handle.completed = True
+                    handle.completed = turn_ok
                     if turn_ok:
                         for tid in folded_ids:
                             self._mark_task_heard(tid)
@@ -393,10 +397,11 @@ class Runtime:
         if not had_active and heard is None:
             return
 
-        delivered = heard if heard is not None else target.delivered_text()
-        self.foreground.messages[:] = validate_and_repair_history(
-            self.foreground.messages, delivered_text=delivered
-        )
+        if target.kind == "foreground":
+            delivered = heard if heard is not None else target.delivered_text()
+            self.foreground.messages[:] = validate_and_repair_history(
+                self.foreground.messages, delivered_text=delivered
+            )
         target.repaired = True
 
     async def spawn(self, task: str) -> str:

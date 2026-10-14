@@ -67,11 +67,13 @@ class FloorArbiter:
     def set_user_speaking(self, active: bool) -> None:
         prev = self.user_speaking
         self.user_speaking = bool(active)
+        if not self.user_speaking:
+            self.interrupt_requested = False
         if prev and not self.user_speaking and self.on_change is not None:
             self.on_change(self._state, self._state)
 
     def can_announce(self) -> bool:
-        if self.user_speaking:
+        if self.user_speaking or self.interrupt_requested:
             return False
         return self._state in (FloorState.IDLE, FloorState.LISTENING)
 

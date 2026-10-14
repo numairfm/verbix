@@ -10,7 +10,7 @@ import yaml
 
 from verbix.agent.tools.registry import ToolRegistry
 from verbix.agent.worker import WorkerAgent, WorkerConfig
-from verbix.runtime.announcer import drain_pending_announcements
+from verbix.runtime.announcer import _can_announce, drain_pending_announcements
 from verbix.runtime.foreground import (
     DEFAULT_WORKER_PROMPT,
     adapt_provider,
@@ -74,10 +74,7 @@ def finish_runtime_task(runtime: Any, task_id: str, result: str) -> None:
         runtime._broadcast_event("task_completed", {"task_id": task_id, "result": result})
     if hasattr(runtime, "_pending_announcements"):
         runtime._pending_announcements.append((task_id, result))
-    if getattr(runtime, "floor", None) and (
-        getattr(runtime.floor, "can_announce", lambda: False)()
-        or getattr(runtime.floor, "is_idle", False)
-    ):
+    if _can_announce(runtime):
         try:
             loop = asyncio.get_running_loop()
             drain = getattr(runtime, "_drain_pending_announcements", None) or (
@@ -98,10 +95,7 @@ def fail_runtime_task(runtime: Any, task_id: str, result: str) -> None:
         runtime._broadcast_event("task_failed", {"task_id": task_id, "result": result})
     if hasattr(runtime, "_pending_announcements"):
         runtime._pending_announcements.append((task_id, result))
-    if getattr(runtime, "floor", None) and (
-        getattr(runtime.floor, "can_announce", lambda: False)()
-        or getattr(runtime.floor, "is_idle", False)
-    ):
+    if _can_announce(runtime):
         try:
             loop = asyncio.get_running_loop()
             drain = getattr(runtime, "_drain_pending_announcements", None) or (

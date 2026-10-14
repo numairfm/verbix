@@ -128,6 +128,10 @@ class VoicePipeline:
         if self._speech_output.is_playing or not self.runtime.is_idle:
             snapshot = self._speech_output.interrupt()
             heard = snapshot.confirmed_heard if snapshot is not None else ""
+            if hasattr(self.runtime, "floor") and hasattr(
+                self.runtime.floor, "set_user_speaking"
+            ):
+                self.runtime.floor.set_user_speaking(True)
             await self.runtime.cancel_turn(heard=heard)
             self.runtime.user_active = True
             await self.start_recording()
@@ -284,7 +288,9 @@ class VoicePipeline:
         self._gate_stt_feed = False
         self._dump_buf = bytearray()
 
-        if hasattr(self.runtime, "floor"):
+        if hasattr(self.runtime, "floor") and not getattr(
+            self.runtime.floor, "is_speaking", False
+        ):
             self.runtime.floor.set_state(FloorState.LISTENING)
 
         self._speech_endpoint_event.clear()
@@ -302,6 +308,12 @@ class VoicePipeline:
                 self._dump_buf = bytearray(seed_bytes)
             try:
                 self._live_stt.feed(seed_bytes)
+                if (
+                    getattr(self._live_stt, "is_speech_detected", False)
+                    and hasattr(self.runtime, "floor")
+                    and hasattr(self.runtime.floor, "set_user_speaking")
+                ):
+                    self.runtime.floor.set_user_speaking(True)
             except (OSError, RuntimeError) as e:
                 logger.debug("Error seeding STT session from tail lookback: %s", e)
 
@@ -493,6 +505,8 @@ class VoicePipeline:
         if self.runtime is not None and hasattr(self.runtime, "floor"):
             from verbix.runtime.floor import FloorState
 
+            if hasattr(self.runtime.floor, "set_user_speaking"):
+                self.runtime.floor.set_user_speaking(True)
             self.runtime.floor.set_state(FloorState.LISTENING)
 
         open_session_fn = getattr(self.stt, "open_session", None)
@@ -540,6 +554,8 @@ class VoicePipeline:
             if self.runtime is not None and hasattr(self.runtime, "floor"):
                 from verbix.runtime.floor import FloorState
 
+                if hasattr(self.runtime.floor, "set_user_speaking"):
+                    self.runtime.floor.set_user_speaking(False)
                 self.runtime.floor.set_state(FloorState.IDLE)
             secs = len(audio_bytes) / 32000 if audio_bytes else 0.0
             return {"action": "idle", "transcription": "", "detail": f"{secs:.1f}s captured"}
@@ -580,14 +596,12 @@ class VoicePipeline:
         finally:
             if hasattr(self, "aec") and callable(getattr(self.aec, "reset", None)):
                 self.aec.reset()
-            if (
-                self.runtime is not None
-                and hasattr(self.runtime, "floor")
-                and self.runtime.floor.state == FloorState.SPEAKING
-            ):
-                if self._is_continuous_active:
+            if self.runtime is not None and hasattr(self.runtime, "floor"):
+                if self._is_continuous_active and not getattr(
+                    self.runtime.floor, "is_speaking", False
+                ):
                     self.runtime.floor.set_state(FloorState.LISTENING)
-                else:
+                elif self.runtime.floor.state == FloorState.SPEAKING:
                     self.runtime.floor.set_state(FloorState.IDLE)
 
     def delivered_text(self) -> str:

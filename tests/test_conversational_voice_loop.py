@@ -772,6 +772,11 @@ async def test_barge_in_during_proactive_announcement_keeps_task_pending_and_fol
 
     await pipeline.start_continuous_session()
     try:
+        # Seed a prior completed foreground turn so we verify barge-in on an announcement
+        # does not delete or overwrite the previous foreground turn's assistant message
+        rt.foreground.messages.append({"role": "user", "content": "Check stock"})
+        rt.foreground.messages.append({"role": "assistant", "content": "On it, checking NVDA."})
+
         sess1 = stt.sessions[0]
         sess1.feed_barge_in = lambda chunk: b"BARGE" in chunk
 
@@ -792,6 +797,11 @@ async def test_barge_in_during_proactive_announcement_keeps_task_pending_and_fol
 
         assert pipeline.turn_output.is_playing is False
         assert rt.floor.user_speaking is True
+        # Prior foreground assistant message MUST remain intact!
+        assert any(
+            m.get("role") == "assistant" and m.get("content") == "On it, checking NVDA."
+            for m in rt.foreground.messages
+        )
         # Task MUST remain pending (not heard), and announcer MUST NOT restart while user_speaking is True!
         assert rt.ledger.get("task-1").delivery == "pending"
         await asyncio.sleep(0.08)

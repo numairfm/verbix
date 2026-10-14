@@ -188,3 +188,22 @@ async def test_grep_and_glob_stdlib_fallback_honors_gitignore_and_skips_binary(
     assert "hello_secret_auth" not in grep_res.observation
     assert "hello_dotenv" not in grep_res.observation
 
+
+@pytest.mark.asyncio
+async def test_grep_and_glob_rg_fast_path_excludes_secret_files(sample_workspace: Path):
+    (sample_workspace / "auth.json").write_text('{"key": "hello_rg_auth_secret"}\n', encoding="utf-8")
+    (sample_workspace / ".env").write_text("KEY=hello_rg_dotenv_secret\n", encoding="utf-8")
+    ctx = ToolContext(workspace=sample_workspace)
+
+    glob_res = await GlobTool().execute({"pattern": "*"}, ctx)
+    assert "auth.json" not in glob_res.observation
+    assert ".env" not in glob_res.observation
+
+    grep_res = await GrepTool().execute({"pattern": "hello_rg_"}, ctx)
+    assert "hello_rg_auth_secret" not in grep_res.observation
+    assert "hello_rg_dotenv_secret" not in grep_res.observation
+
+    grep_dotenv = await GrepTool().execute({"pattern": "hello_rg_", "glob": ".env"}, ctx)
+    assert "hello_rg_dotenv_secret" not in grep_dotenv.observation
+
+

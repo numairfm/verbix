@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from verbix.tools.base import ToolContext, ToolResult
 from verbix.tools.shared import (
+    _is_secret_basename,
     find_ripgrep_binary,
     iter_workspace_files,
     resolve_contained_path,
@@ -54,7 +56,19 @@ class GlobTool:
 
         rg_bin = find_ripgrep_binary()
         if rg_bin is not None:
-            cmd = [rg_bin, "--files", "--path-separator=/", "-g", pattern]
+            cmd = [
+                rg_bin,
+                "--files",
+                "--path-separator=/",
+                "-g",
+                pattern,
+                "-g",
+                "!.env",
+                "-g",
+                "!auth.json",
+                "-g",
+                "!auth.*",
+            ]
 
             try:
                 rel_path = target.relative_to(context.workspace)
@@ -73,9 +87,10 @@ class GlobTool:
                 stdout, stderr = await proc.communicate()
                 if proc.returncode == 0:
                     lines = [
-                        line.removeprefix("./")
-                        for line in stdout.decode("utf-8", errors="replace").splitlines()
-                        if line.strip()
+                        cleaned
+                        for raw_line in stdout.decode("utf-8", errors="replace").splitlines()
+                        if (cleaned := raw_line.removeprefix("./")).strip()
+                        and not _is_secret_basename(Path(cleaned).name)
                     ]
                     if lines:
                         return ToolResult("\n".join(lines))

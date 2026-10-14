@@ -24,10 +24,6 @@ def __getattr__(name: str) -> Any:
         from verbix.voice.sherpa_tts import SherpaTTS
 
         return SherpaTTS
-    if name == "SherpaSTT":
-        from verbix.voice.sherpa_stt import SherpaSTT
-
-        return SherpaSTT
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -39,7 +35,6 @@ __all__ = [
     "MockSpeechToText",
     "MockTextToSpeech",
     "PTTCapture",
-    "SherpaSTT",
     "SherpaTTS",
     "SpeechOutput",
     "SpeechToText",

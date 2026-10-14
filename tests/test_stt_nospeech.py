@@ -1,10 +1,11 @@
 """No-speech guards at the single decode choke point (signal-based, no word lists)."""
 
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-from verbix.voice.sherpa_stt import SherpaSTT
+from verbix.voice.transcribe_stt import TranscribeSession
 
 
 class FakeSegmenter:
@@ -22,10 +23,12 @@ class FakeSegmenter:
 
 
 @pytest.mark.asyncio
-async def test_vad_gate_skips_model_on_low_energy_noise(tmp_path):
-    """When the segmenter yields no speech spans for noise, model recognizer is never loaded."""
-    stt = SherpaSTT(model_dir=tmp_path, segmenter=FakeSegmenter())
+async def test_vad_gate_skips_model_on_low_energy_noise():
+    """When the segmenter yields no speech spans for noise, model recognizer is never called."""
+    mock_stt = MagicMock()
+    sess = TranscribeSession(stt=mock_stt, segmenter=FakeSegmenter(), sample_rate=16000)
     rng = np.random.default_rng(0)
     noise = (rng.uniform(-0.003, 0.003, 16000) * 32768).astype(np.int16).tobytes()
-    assert await stt.transcribe(noise) == ""
-    assert not stt.is_loaded  # model never loaded/touched
+    sess.feed(noise)
+    assert await sess.finalize() == ""
+    mock_stt.transcribe.assert_not_called()

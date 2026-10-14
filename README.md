@@ -85,8 +85,8 @@ Warning: gitignore project weights — add `.verbix/models/` to `.gitignore`
 so downloaded `.gguf` files never get committed.
 
 Audio extras are optional: `uv sync --extra audio` (`sounddevice`).
-Voice mode uses sherpa-onnx for on-device inference: Supertonic 3 INT8 for
-TTS and Canary 180M Flash INT8 for STT. Run `uv run scripts/fetch_voice_models.py`
+Voice mode uses on-device inference: Supertonic 3 INT8 for
+TTS (via sherpa-onnx) and Nemotron 3.5 ASR 0.6B GGUF for STT (via transcribe.cpp). Run `uv run scripts/fetch_voice_models.py`
 to download and verify models into `./voice-runtime` (`VERBIX_VOICE_DIR`
 overrides, `~/.verbix/voice` is the installed fallback).
 Without them, text and `--serve` modes still work.
@@ -152,9 +152,9 @@ IDLE ──toggle──▶ LISTENING ──toggle──▶ SPEAKING ──draine
                                                  repair history, record)
 ```
 
-`VoicePipeline` (`voice/pipeline.py`): `PTTCapture` → live `SherpaSTT`
+`VoicePipeline` (`voice/pipeline.py`): `PTTCapture` → live `TranscribeSTT`
 session → `runtime.submit(text, SpeechOutput)` → sentence-streamed in-process
-`SherpaTTS` → `AudioPlayer` → single sink (`callback_sink`/`sinks`). Toggle during playback
+`SherpaTTS` → `AudioPlayer` → `CallbackAudioSink`. Toggle during playback
 or a running turn interrupts first (`interrupted_and_recording`). Empty
 transcriptions return to `IDLE` without a model call. `SpeechOutput`
 (`voice/output.py`) owns sentence buffering and `delivered_text()`, which is
@@ -185,7 +185,7 @@ STATE: IDLE
 | `core/` | canonical messages/events, history repair, inner agent loop |
 | `provider/` | streaming OpenAI-compatible SSE client, errors, event types |
 | `tools/` | `Tool`/`ToolContext`, `file_read`/`file_write`/`file_edit`, `bash` via bubblewrap (`bwrap` missing → raise, never silent fallback) |
-| `voice/` | `pipeline`, `capture`, `sherpa_stt` (Canary ASR via sherpa-onnx), `sherpa_tts` (Supertonic TTS via sherpa-onnx), `player`, `output` (sentence streaming), `sinks`/`callback_sink`, `base` protocols + mocks |
+| `voice/` | `pipeline`, `capture`, `transcribe_stt` (Nemotron ASR via transcribe.cpp), `sherpa_tts` (Supertonic TTS via sherpa-onnx), `player`, `output` (sentence streaming), `callback_sink`, `base` protocols + mocks |
 | `ipc/` | `server`/`client`/`protocol`: JSONL over Unix socket, `ping/prompt/status/cancel/toggle`, runtime event fan-out |
 | `agent/` | agent core: `agents/default`, `environments/local`, `models/litellm_model`, `tools/registry`, `config/*.yaml` |
 

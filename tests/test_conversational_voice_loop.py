@@ -8,7 +8,7 @@ from verbix.runtime.floor import FloorArbiter, FloorState
 from verbix.voice.base import MockAudioSink, MockTextToSpeech
 from verbix.voice.pipeline import VoicePipeline
 from verbix.voice.player import AudioPlayer
-from verbix.voice.sherpa_stt import STTSession
+from verbix.voice.transcribe_stt import STTSession
 
 
 class FakeCapture:

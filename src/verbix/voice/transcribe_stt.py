@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,136 @@ logger = logging.getLogger(__name__)
 _VOICED_FRAME_S = 0.032
 _MIN_VOICED_S = 0.15
 _VOICED_RMS = 300.0
+
+
+class _Segment:
+    """One committed audio span; its bytes are decoded exactly once."""
+
+    __slots__ = ("pcm", "task", "text")
+
+    def __init__(self, pcm: bytes) -> None:
+        self.pcm = pcm
+        self.text: str | None = None
+        self.task: asyncio.Task[None] | None = None
+
+
+class STTSession:
+    """Incremental transcription session driven by Silero speech spans."""
+
+    def __init__(
+        self,
+        decode_fn: Callable[..., Awaitable[str]],
+        segmenter: Any,
+        sample_rate: int = 16000,
+        on_endpoint: Callable[[], None] | None = None,
+    ) -> None:
+        self._decode_fn = decode_fn
+        self._segmenter = segmenter
+        self.sample_rate = sample_rate
+        self.on_endpoint = on_endpoint
+        self._segments: list[_Segment] = []
+        self._finalized = False
+
+    @property
+    def committed_text(self) -> str:
+        """Decoded text of committed segments, in order."""
+        return " ".join(s.text for s in self._segments if s.text).strip()
+
+    @property
+    def speech_duration(self) -> float:
+        """Total duration in seconds of VAD-classified speech spans in this session."""
+        bytes_count = sum(len(s.pcm) for s in self._segments)
+        return (bytes_count // 2) / float(self.sample_rate) if self.sample_rate else 0.0
+
+    def feed(self, pcm: bytes) -> None:
+        """Buffers one PCM chunk (16-bit signed mono) through the segmenter."""
+        if self._finalized or not pcm:
+            return
+        self._segmenter.feed(pcm)
+        spans = self._segmenter.pop_segments()
+        for span in spans:
+            self._push_segment(span)
+        if spans and self.on_endpoint:
+            try:
+                self.on_endpoint()
+            except Exception as e:  # noqa: BLE001
+                logger.debug("on_endpoint callback error: %s", e)
+
+    @property
+    def is_speech_detected(self) -> bool:
+        if hasattr(self._segmenter, "is_speech_detected"):
+            return bool(self._segmenter.is_speech_detected)
+        return False
+
+    def feed_barge_in(self, pcm: bytes) -> bool:
+        """Feeds PCM during playback. Returns True if user voice activity is detected."""
+        if self._finalized or not pcm:
+            return False
+        self.feed(pcm)
+        return self.is_speech_detected
+
+    async def finalize(self) -> str:
+        """Decodes every speech span and returns the joined text."""
+        if self._finalized:
+            return self.committed_text
+        self._finalized = True
+        for span in self._segmenter.flush():
+            self._push_segment(span)
+        for seg in self._segments:
+            if seg.text is None and seg.task is not None:
+                try:
+                    await seg.task
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling():
+                        raise
+            if seg.text is None:
+                seg.text = await self._decode_once(seg.pcm)
+        return self.committed_text
+
+    def cancel(self) -> None:
+        """Abandons the session: cancels pending decodes, drops audio."""
+        self._finalized = True
+        for seg in self._segments:
+            if seg.task is not None and not seg.task.done():
+                seg.task.cancel()
+
+    def reset(self) -> None:
+        """Resets session audio and segmenter state so no previous audio leaks."""
+        self.cancel()
+        self._segments.clear()
+        self._finalized = False
+        if hasattr(self._segmenter, "reset"):
+            self._segmenter.reset()
+
+    def _push_segment(self, pcm: bytes) -> None:
+        if not pcm:
+            return
+        seg = _Segment(pcm)
+        self._segments.append(seg)
+        seg.task = self._spawn_decode(seg)
+
+    def _spawn_decode(self, seg: _Segment) -> asyncio.Task[None] | None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+        if self._finalized:
+            return None
+        return loop.create_task(self._decode_segment(seg))
+
+    async def _decode_segment(self, seg: _Segment) -> None:
+        try:
+            seg.text = await self._decode_once(seg.pcm)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Segment decode error, will retry at finalize: %s", e)
+            return
+
+    async def _decode_once(self, pcm: bytes) -> str:
+        text = await self._decode_fn(pcm, prompt="")
+        return text.strip() if text else ""
 
 
 def _has_min_voiced_duration(

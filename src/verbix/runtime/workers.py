@@ -18,27 +18,39 @@ from verbix.runtime.foreground import (
 from verbix.runtime.worker import WorkerTask
 from verbix.tools.shared import prune_spills
 
+_DEFAULT_WORKER_TOOLS = (
+    "read",
+    "write",
+    "edit",
+    "grep",
+    "glob",
+    "web_search",
+    "web_fetch",
+    "screenshot",
+    "clipboard",
+    "media",
+    "app",
+    "bash",
+)
+
+
+def _load_worker_yaml_dict() -> dict[str, Any]:
+    config_dir = Path(__file__).resolve().parent.parent / "agent" / "config"
+    worker_path = config_dir / "worker.yaml"
+    if not worker_path.is_file():
+        worker_path = config_dir / "swe_worker.yaml"
+    if worker_path.is_file():
+        return yaml.safe_load(worker_path.read_text(encoding="utf-8")) or {}
+    return {}
+
 
 def build_worker_registry(workspace: Path | None = None) -> ToolRegistry:
-    """Background worker's tools: read, write, edit, grep, glob, web_search, web_fetch, screenshot, bash, finish.
-
-    File work goes through the dedicated tools, identically on every OS;
-    bash is the escape hatch for what has no dedicated tool.
-    """
+    """Builds the background worker's tool registry from worker.yaml (omitting bash if unsandboxed)."""
     from verbix.tools import build_registry
     from verbix.tools.sandbox import probe_sandbox
 
-    names = [
-        "read",
-        "write",
-        "edit",
-        "grep",
-        "glob",
-        "web_search",
-        "web_fetch",
-        "screenshot",
-        "bash",
-    ]
+    agent_cfg = _load_worker_yaml_dict().get("agent", {})
+    names = list(agent_cfg.get("tools") or _DEFAULT_WORKER_TOOLS)
     if not probe_sandbox().available:
         names = [n for n in names if n != "bash"]
 
@@ -114,17 +126,7 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
     scratch_dir = Path.home() / ".verbix" / "tasks" / task_id
     scratch_dir.mkdir(parents=True, exist_ok=True)
 
-    config_dir = Path(__file__).resolve().parent.parent / "agent" / "config"
-    worker_path = config_dir / "worker.yaml"
-    if not worker_path.is_file():
-        worker_path = config_dir / "swe_worker.yaml"
-
-    raw_worker_cfg: dict[str, Any] = {}
-    if worker_path.is_file():
-        raw_worker_cfg = (
-            yaml.safe_load(worker_path.read_text(encoding="utf-8")) or {}
-        )
-
+    raw_worker_cfg = _load_worker_yaml_dict()
     agent_cfg_dict = raw_worker_cfg.get("agent", {})
     if runtime.worker_system_prompt != DEFAULT_WORKER_PROMPT:
         agent_cfg_dict["system_template"] = runtime.worker_system_prompt
@@ -134,20 +136,7 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
     from verbix.tools.sandbox import probe_sandbox
     from verbix.tools.shared import resolve_output_limits
 
-    worker_tool_names = list(
-        agent_cfg_dict.get("tools")
-        or [
-            "read",
-            "write",
-            "edit",
-            "grep",
-            "glob",
-            "web_search",
-            "web_fetch",
-            "screenshot",
-            "bash",
-        ]
-    )
+    worker_tool_names = list(agent_cfg_dict.get("tools") or _DEFAULT_WORKER_TOOLS)
     if not probe_sandbox().available:
         worker_tool_names = [n for n in worker_tool_names if n != "bash"]
     agent_cfg_dict["tools"] = worker_tool_names

@@ -586,7 +586,7 @@
           <div class="cascade-idx">5</div>
           <div class="cascade-stage">Control Signal Leaked to TTS</div>
           <div class="cascade-desc">
-            <code>VoiceAgent</code> yielded <code>TurnComplete(final_text="RepeatedToolCall")</code>. <code>SpeechOutput.emit()</code> computed <code>_tail("RepeatedToolCall")</code> and fed the internal error token into Kokoro TTS, speaking <em>"RepeatedToolCall"</em> aloud.
+            <code>VoiceAgent</code> yielded <code>TurnComplete(final_text="RepeatedToolCall")</code>. <code>SpeechOutput.emit()</code> computed <code>_tail("RepeatedToolCall")</code> and fed the internal error token into Supertonic TTS, speaking <em>"RepeatedToolCall"</em> aloud.
           </div>
           <div class="cascade-pin">agent/voice.py:416<br/>voice/output.py:135-138</div>
         </div>
@@ -756,7 +756,7 @@
           <tr>
             <td><strong><code>speech_chunking</code></strong></td>
             <td><code>True</code> — buffers pre-tool text; releases on <code>split_chunks &gt; 1</code></td>
-            <td><code>True</code> — immediate clause-level streaming to Kokoro TTS</td>
+            <td><code>True</code> — immediate clause-level streaming to Supertonic TTS</td>
             <td><code>False</code> — streams every <code>TextDelta</code> live to CLI/IPC telemetry</td>
           </tr>
           <tr>
@@ -1320,7 +1320,7 @@ _CAMEL_CONTROL_RE = re.compile(r"\b(?:RepeatedToolCall|LimitsExceeded|TimeExceed
 
 
 def sanitize_spoken_text(text: str) -> str:
-    """Strips internal control identifiers so they can never reach Kokoro TTS."""
+    """Strips internal control identifiers so they can never reach Supertonic TTS."""
     cleaned = (text or "").strip()
     if not cleaned or cleaned in _INTERNAL_TOKENS:
         return ""

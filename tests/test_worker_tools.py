@@ -16,6 +16,9 @@ def test_worker_registry_has_main_tools():
         "web_search",
         "web_fetch",
         "screenshot",
+        "clipboard",
+        "media",
+        "app",
     }
     if probe_sandbox().available:
         expected.add("bash")

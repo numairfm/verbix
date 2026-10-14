@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from verbix.tools.app import AppTool
 from verbix.tools.base import (
     Tool,
     ToolContext,
@@ -12,9 +13,11 @@ from verbix.tools.base import (
 )
 from verbix.tools.bash import BashTool
 from verbix.tools.cancel import CancelTool
+from verbix.tools.clipboard import ClipboardTool
 from verbix.tools.edit import FileEditTool
 from verbix.tools.glob import GlobTool
 from verbix.tools.grep import GrepTool
+from verbix.tools.media import MediaTool
 from verbix.tools.read import FileReadTool
 from verbix.tools.sandbox import SandboxConfig, SandboxResult, execute_sandboxed
 from verbix.tools.screenshot import ScreenshotTool
@@ -30,13 +33,16 @@ if TYPE_CHECKING:
 
 __all__ = [
     "TOOL_CATALOG",
+    "AppTool",
     "BashTool",
     "CancelTool",
+    "ClipboardTool",
     "FileEditTool",
     "FileReadTool",
     "FileWriteTool",
     "GlobTool",
     "GrepTool",
+    "MediaTool",
     "SandboxConfig",
     "SandboxResult",
     "ScreenshotTool",
@@ -63,6 +69,9 @@ TOOL_CATALOG: dict[str, Callable[[Any], Any]] = {
     "web_search": lambda runtime: WebSearchTool(),
     "web_fetch": lambda runtime: WebFetchTool(),
     "screenshot": lambda runtime: ScreenshotTool(),
+    "clipboard": lambda runtime: ClipboardTool(),
+    "media": lambda runtime: MediaTool(),
+    "app": lambda runtime: AppTool(),
     "spawn": SpawnTool,
     "status": StatusTool,
     "cancel": CancelTool,

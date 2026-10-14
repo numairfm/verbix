@@ -37,6 +37,9 @@ agent:
     - web_search
     - web_fetch
     - screenshot
+    - clipboard
+    - media
+    - app
     - bash
   step_limit: 30
   cost_limit: 3.0

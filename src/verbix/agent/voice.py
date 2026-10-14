@@ -237,6 +237,7 @@ class VoiceAgent:
 
         repeat_history: list[tuple[str, str]] = []
         per_turn_counts: dict[str, int] = {}
+        self._delivered_text = ""
 
         try:
             while True:
@@ -258,7 +259,6 @@ class VoiceAgent:
                     if v >= self.config.max_calls_per_tool_per_turn.get(k, 999999)
                 }
                 tool_defs = self.get_tool_definitions(excluded=exhausted)
-                self._delivered_text = ""
                 prev_stream_cost = self._model_stream_cost()
 
                 accumulated_tool_calls: dict[int, dict[str, Any]] = {}
@@ -267,6 +267,7 @@ class VoiceAgent:
                 has_tool_calls = False
                 pending_text = ""
                 released_text = ""
+                step_delivered_text = ""
                 first_chunk_marked = False
 
                 self.messages[:] = compact_messages(
@@ -288,6 +289,7 @@ class VoiceAgent:
                         if len(split_chunks(pending_text)) > 1:
                             for buffered in buffered_text_events:
                                 self._delivered_text += buffered.text
+                                step_delivered_text += buffered.text
                                 yield buffered
                             released_text += pending_text
                             pending_text = ""
@@ -339,6 +341,7 @@ class VoiceAgent:
                 if not has_tool_calls:
                     for buffered in buffered_text_events:
                         self._delivered_text += buffered.text
+                        step_delivered_text += buffered.text
                         yield buffered
                     buffered_text_events.clear()
 
@@ -468,13 +471,12 @@ class VoiceAgent:
 
                     continue
 
-                full_text = self._delivered_text
-                self.messages.append({"role": "assistant", "content": full_text})
+                self.messages.append({"role": "assistant", "content": step_delivered_text})
 
                 if turn_complete_event is not None:
                     yield turn_complete_event
                 else:
-                    yield TurnComplete(final_text=full_text)
+                    yield TurnComplete(final_text=self._delivered_text)
                 return
 
         except asyncio.CancelledError:

@@ -41,7 +41,11 @@ def event_to_payload(event: AgentEvent) -> tuple[str, dict[str, Any]]:
             "is_error": event.is_error,
         }
     if isinstance(event, TurnComplete):
-        return "turn_complete", {"final_text": event.final_text}
+        return "turn_complete", {
+            "final_text": event.final_text,
+            "exit_reason": event.exit_reason,
+            "is_error": event.is_error,
+        }
     return "unknown", {}
 
 

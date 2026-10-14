@@ -240,9 +240,10 @@ class VoicePipeline:
         except TypeError:
             fresh = self.stt.open_session(sample_rate=sample_rate)
         lookback = getattr(self, "_mic_lookback", b"") or b""
-        if lookback:
+        if lookback and self._dump_mic_dir is not None:
             self._dump_buf = bytearray(lookback)
             self._dump_wav(lookback, kind="lookback")
+        if lookback:
             try:
                 fresh.feed(lookback)
             except (OSError, RuntimeError) as e:
@@ -293,7 +294,8 @@ class VoicePipeline:
         self._mic_lookback = b""
         self._tail_lookback.clear()
         if seed_bytes and self._live_stt is not None:
-            self._dump_buf = bytearray(seed_bytes)
+            if self._dump_mic_dir is not None:
+                self._dump_buf = bytearray(seed_bytes)
             try:
                 self._live_stt.feed(seed_bytes)
             except (OSError, RuntimeError) as e:
@@ -309,7 +311,8 @@ class VoicePipeline:
                 if not self._gate_stt_feed and self._live_stt is not None:
                     try:
                         self._live_stt.feed(chunk)
-                        self._dump_buf.extend(chunk)
+                        if self._dump_mic_dir is not None:
+                            self._dump_buf.extend(chunk)
                     except (OSError, RuntimeError) as e:
                         logger.debug("Error feeding STT chunk: %s", e)
                 return
@@ -322,8 +325,12 @@ class VoicePipeline:
                     else chunk
                 )
                 self._mic_lookback = (self._mic_lookback + bytes(clean_chunk))[-9600:]
-                if not getattr(self._speech_output, "is_playing", False):
+                if getattr(self._speech_output, "is_playing", False):
+                    self._tail_lookback.clear()
+                else:
                     self._tail_lookback.extend(clean_chunk)
+                    if len(self._tail_lookback) > 9600:
+                        del self._tail_lookback[:-9600]
                 if self._live_stt is not None and not self._gate_stt_feed:
                     detected = False
                     try:
@@ -338,7 +345,8 @@ class VoicePipeline:
             if not self._gate_stt_feed and self._live_stt is not None:
                 try:
                     self._live_stt.feed(chunk)
-                    self._dump_buf.extend(chunk)
+                    if self._dump_mic_dir is not None:
+                        self._dump_buf.extend(chunk)
                 except (OSError, RuntimeError) as e:
                     logger.debug("Error feeding STT chunk: %s", e)
 

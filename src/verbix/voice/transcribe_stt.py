@@ -98,11 +98,20 @@ class TranscribeSession:
         self._segmenter = segmenter
         self.sample_rate = sample_rate
         self.on_endpoint = on_endpoint
+        self._uses_spans = (
+            segmenter is not None
+            and hasattr(segmenter, "pop_segments")
+            and hasattr(segmenter, "flush")
+        )
         self._buf = bytearray()
         self._spans: list[bytes] = []
         self._finalized = False
         self._duration: float = 0.0
         self.fed_chunks: list[bytes] = []
+
+    @property
+    def is_speech_detected(self) -> bool:
+        return bool(getattr(self._segmenter, "is_speech_detected", False))
 
     @property
     def speech_duration(self) -> float:
@@ -115,8 +124,9 @@ class TranscribeSession:
     def feed(self, chunk: bytes) -> None:
         if self._finalized or not chunk:
             return
-        self.fed_chunks.append(chunk)
-        self._buf.extend(chunk)
+        if not self._uses_spans:
+            self.fed_chunks.append(chunk)
+            self._buf.extend(chunk)
         if self._segmenter is not None and hasattr(self._segmenter, "feed"):
             try:
                 self._segmenter.feed(chunk)
@@ -140,13 +150,14 @@ class TranscribeSession:
                 self._segmenter.feed(chunk)
             except Exception as e:  # noqa: BLE001
                 logger.debug("Segmenter feed error during barge-in: %s", e)
-            return bool(getattr(self._segmenter, "is_speech_detected", False))
+            return self.is_speech_detected
         return False
 
     def cancel(self) -> None:
         self._finalized = True
         self._buf.clear()
         self._spans.clear()
+        self.fed_chunks.clear()
         if self._segmenter is not None and hasattr(self._segmenter, "reset"):
             self._segmenter.reset()
 
@@ -167,13 +178,14 @@ class TranscribeSession:
                 logger.debug("Segmenter flush error: %s", e)
         if self._spans:
             audio = b"".join(self._spans)
-        elif self._segmenter is None:
+        elif not self._uses_spans:
             audio = bytes(self._buf)
         else:
             audio = b""
         self._duration = (len(audio) // 2) / float(self.sample_rate) if self.sample_rate else 0.0
         self._buf.clear()
         self._spans.clear()
+        self.fed_chunks.clear()
         if not audio or len(audio) < 2400:  # < 150ms
             return ""
         return await asyncio.to_thread(self._stt.transcribe, audio, self.sample_rate)

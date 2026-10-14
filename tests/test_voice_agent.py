@@ -351,6 +351,7 @@ async def test_voice_agent_preserves_already_delivered_speech_on_limit_exit():
         lambda a: ToolResult("ok"),
     )
 
+    # First turn streams speech + tool call; second step in same turn hits step_limit
     config = VoiceConfig(step_limit=1, turn_scoped_limits=True)
     agent = VoiceAgent(model=mock_model, tools=tools, config=config)
     events = [e async for e in agent.step_stream("check")]
@@ -360,6 +361,43 @@ async def test_voice_agent_preserves_already_delivered_speech_on_limit_exit():
     assert tc.is_error is True
     assert "LimitsExceeded" not in tc.final_text
     assert "I checked your workspace right now." in tc.final_text
+
+    # Multi-step case: step 1 streams speech + tool call; step 2 emits only a tool call,
+    # then step 3 hits step_limit=2. Step 1's delivered speech must STILL be preserved!
+    step_num = 0
+
+    async def two_step_stream(messages, tools=None, **kw):
+        nonlocal step_num
+        step_num += 1
+        if step_num == 1:
+            yield TextDelta(text="First step spoken sentence. ")
+            yield TextDelta(text="More text.")
+            yield ToolCallDelta(index=0, call_id="c1", name="spawn", arguments_delta='{"objective":"a"}')
+        else:
+            yield ToolCallDelta(index=0, call_id="c2", name="spawn", arguments_delta='{"objective":"b"}')
+
+    mock_model2 = MagicMock()
+    mock_model2.query_stream = two_step_stream
+    tools.register(
+        "spawn",
+        {"type": "function", "function": {"name": "spawn"}},
+        lambda a: ToolResult("started"),
+    )
+    agent2 = VoiceAgent(
+        model=mock_model2,
+        tools=tools,
+        config=VoiceConfig(step_limit=2, turn_scoped_limits=True),
+    )
+    events2 = [e async for e in agent2.step_stream("multi")]
+    tc2 = [e for e in events2 if isinstance(e, TurnComplete)][-1]
+    assert tc2.exit_reason == "limits_exceeded"
+    assert "First step spoken sentence." in tc2.final_text
+    assert "Sorry" not in tc2.final_text
+    assert agent2.messages[1]["role"] == "assistant"
+    assert "First step spoken sentence." in agent2.messages[1]["content"]
+    assert agent2.messages[3]["role"] == "assistant"
+    assert agent2.messages[3]["content"] is None
+
 
 
 @pytest.mark.asyncio

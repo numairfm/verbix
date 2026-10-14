@@ -34,3 +34,12 @@ def test_tool_call_events():
 def test_turn_complete():
     turn = TurnComplete(final_text="I spawned the build task.")
     assert turn.final_text == "I spawned the build task."
+    assert turn.exit_reason == "ok"
+    assert turn.is_error is False
+
+    err_turn = TurnComplete(
+        final_text="", exit_reason="repeated_tool_call", is_error=True
+    )
+    assert err_turn.exit_reason == "repeated_tool_call"
+    assert err_turn.is_error is True
+

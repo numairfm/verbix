@@ -164,4 +164,12 @@ async def test_transcribe_session_drops_pre_speech_noise_outside_vad_spans():
     res = await sess.finalize()
     assert res == "hey what's up"
     assert transcribed_buffers == [speech_span]
+    assert len(sess._buf) == 0
+    assert len(sess.fed_chunks) == 0
+
+    # TranscribeSession also exposes is_speech_detected delegating to segmenter
+    fake_seg.is_speech_detected = True
+    sess2 = TranscribeSession(stt=fake_stt, segmenter=fake_seg, sample_rate=16000)
+    assert sess2.is_speech_detected is True
+
 

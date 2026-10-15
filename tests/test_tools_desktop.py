@@ -477,6 +477,83 @@ async def test_timer_tool_set_list_cancel_and_fires_announcement(tmp_path: Path)
     assert "No active timers" in r_list_after.observation
 
 
+@pytest.mark.asyncio
+async def test_memory_tool_remember_list_forget_dedup_and_security(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from verbix.config import (
+        ensure_global_scaffold,
+        memory_file,
+        prune_state,
+        read_memory,
+    )
+    from verbix.tools.memory import MemoryTool
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    # Pre-existing .scaffolded install still gets MEMORY.md created on ensure_global_scaffold()
+    root = tmp_path / ".verbix"
+    root.mkdir(parents=True)
+    (root / ".scaffolded").touch()
+    (root / "config.yaml").write_text("# cfg\n", encoding="utf-8")
+    (root / "PERSONA.md").write_text("<!-- p -->\n", encoding="utf-8")
+    ensure_global_scaffold()
+    assert memory_file().is_file()
+    assert read_memory() == ""
+
+    tool = MemoryTool()
+    ctx = ToolContext(workspace=tmp_path)
+
+    # 1. Empty list
+    r0 = await tool.execute({"action": "list"}, ctx)
+    assert r0.observation == "(memory is empty)"
+
+    # 2. Remember normalizes whitespace and strips leading '#' / '['
+    r1 = await tool.execute(
+        {"action": "remember", "text": "  # Door code\n is 4812  "}, ctx
+    )
+    assert not r1.is_error
+    assert "Door code is 4812" in r1.observation
+    assert "- Door code is 4812" in read_memory()
+
+    # 3. Case-insensitive deduplication
+    r_dup = await tool.execute(
+        {"action": "remember", "text": "door code is 4812"}, ctx
+    )
+    assert not r_dup.is_error
+    assert "Already in memory" in r_dup.observation
+    assert read_memory().splitlines() == ["- Door code is 4812"]
+
+    # 4. prune_state never deletes MEMORY.md even when mtime is old
+    old_ts = 1000.0
+    os.utime(memory_file(), (old_ts, old_ts))
+    prune_state(retention_days=14)
+    assert memory_file().is_file()
+    assert "- Door code is 4812" in read_memory()
+
+    # 5. Rejects secrets and oversized (>500 chars) entries
+    r_sec = await tool.execute(
+        {"action": "remember", "text": "OPENROUTER_API_KEY=sk-secret123"}, ctx
+    )
+    assert r_sec.is_error
+    r_long = await tool.execute({"action": "remember", "text": "x" * 501}, ctx)
+    assert r_long.is_error
+
+    # 6. Forget removes matching entry and preserves HTML comment header
+    r_forget = await tool.execute({"action": "forget", "text": "door code"}, ctx)
+    assert not r_forget.is_error
+    assert read_memory() == ""
+    assert "<!--" in memory_file().read_text(encoding="utf-8")
+
+    # 7. Refuses symlinked MEMORY.md
+    memory_file().unlink()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("- secret", encoding="utf-8")
+    memory_file().symlink_to(outside)
+    assert read_memory() == ""
+    r_sym = await tool.execute({"action": "list"}, ctx)
+    assert r_sym.is_error
+
+
 def test_app_catalog_discovers_linux_xdg_desktop_entries_and_filters_hidden_or_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

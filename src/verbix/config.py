@@ -30,6 +30,11 @@ _PERSONA_TEMPLATE = """\
 
 """
 
+_MEMORY_TEMPLATE = """\
+<!-- Memory notes: durable facts and user preferences saved across sessions. This comment is stripped; the rest is appended to the system prompt under "# USER MEMORY". -->
+
+"""
+
 
 def _read_config_file(path: Path) -> dict:
     try:
@@ -114,13 +119,35 @@ def fill_persona_slot(template: str, persona: str) -> str:
     return template.replace("{{persona}}", text if text else "(none)")
 
 
+def memory_file() -> Path:
+    """Returns the canonical path to ~/.verbix/MEMORY.md."""
+    return Path.home() / ".verbix" / "MEMORY.md"
+
+
+def read_memory() -> str:
+    """Reads ~/.verbix/MEMORY.md with guidance block stripped, refusing symlinks."""
+    path = memory_file()
+    try:
+        if path.parent.is_symlink() or path.is_symlink() or not path.is_file():
+            return ""
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    body = _GUIDANCE_BLOCK.sub("", raw, count=1).strip()
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    return "\n".join(lines)[:8000]
+
+
 def ensure_global_scaffold() -> None:
     """Create ~/.verbix/ with commented templates on first run only."""
     root = Path.home() / ".verbix"
     marker = root / ".scaffolded"
     cfg_file = root / "config.yaml"
     persona_file = root / "PERSONA.md"
+    mem_file = root / "MEMORY.md"
     if marker.is_file():
+        if not mem_file.exists():
+            mem_file.write_text(_MEMORY_TEMPLATE, encoding="utf-8")
         if not cfg_file.is_file() or not persona_file.is_file():
             logger.warning(
                 "Verbix global config files missing under %s; see README.md Configuration.",
@@ -132,6 +159,8 @@ def ensure_global_scaffold() -> None:
         cfg_file.write_text(_CONFIG_TEMPLATE, encoding="utf-8")
     if not persona_file.is_file():
         persona_file.write_text(_PERSONA_TEMPLATE, encoding="utf-8")
+    if not mem_file.is_file():
+        mem_file.write_text(_MEMORY_TEMPLATE, encoding="utf-8")
     marker.touch(exist_ok=True)
 
 

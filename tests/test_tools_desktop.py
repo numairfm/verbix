@@ -113,6 +113,92 @@ async def test_media_tool_linux_mpris_and_pulsectl(tmp_path: Path, monkeypatch: 
     assert res_err.is_error is True
 
 
+@pytest.mark.asyncio
+async def test_linux_mpris_prefers_paused_over_stopped_and_honors_player_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import dbus_fast.aio
+    from dbus_fast.constants import MessageType
+
+    from verbix.tools import media as media_mod
+    from verbix.tools.media import MediaTool
+
+    monkeypatch.setattr(media_mod.sys, "platform", "linux")
+
+    sent_Commands: list[tuple[str, str]] = []
+    chromium_status = {"status": "Stopped"}
+
+    class FakeBus:
+        async def connect(self):
+            return self
+
+        def disconnect(self):
+            pass
+
+        async def call(self, msg):
+            if msg.member == "ListNames":
+                return SimpleNamespace(
+                    message_type=MessageType.METHOD_RETURN,
+                    body=[
+                        [
+                            "org.mpris.MediaPlayer2.chromium.instance3684",
+                            "org.mpris.MediaPlayer2.spotify",
+                        ]
+                    ],
+                )
+            if msg.member == "GetAll":
+                if "chromium" in msg.destination:
+                    return SimpleNamespace(
+                        message_type=MessageType.METHOD_RETURN,
+                        body=[
+                            {
+                                "PlaybackStatus": SimpleNamespace(
+                                    value=chromium_status["status"]
+                                ),
+                                "Metadata": SimpleNamespace(value={}),
+                            }
+                        ],
+                    )
+                return SimpleNamespace(
+                    message_type=MessageType.METHOD_RETURN,
+                    body=[
+                        {
+                            "PlaybackStatus": SimpleNamespace(value="Paused"),
+                            "Metadata": SimpleNamespace(
+                                value={
+                                    "xesam:title": SimpleNamespace(value="Harder Better"),
+                                    "xesam:artist": SimpleNamespace(value=["Daft Punk"]),
+                                }
+                            ),
+                        }
+                    ],
+                )
+            sent_Commands.append((msg.destination, msg.member))
+            return SimpleNamespace(message_type=MessageType.METHOD_RETURN, body=[])
+
+    monkeypatch.setattr(dbus_fast.aio, "MessageBus", lambda bus_type=None: FakeBus())
+
+    tool = MediaTool()
+    ctx = ToolContext(workspace=tmp_path)
+
+    # 1. Without player arg: Paused spotify outranks Stopped chromium (alphabetically first)
+    r1 = await tool.execute({"action": "play"}, ctx)
+    assert r1.is_error is False
+    assert "spotify" in r1.observation.lower()
+    assert sent_Commands[-1] == ("org.mpris.MediaPlayer2.spotify", "Play")
+
+    # 2. Even if chromium is Playing, explicit player="spotify" targets spotify
+    chromium_status["status"] = "Playing"
+    r2 = await tool.execute({"action": "play", "player": "spotify"}, ctx)
+    assert r2.is_error is False
+    assert "spotify" in r2.observation.lower()
+    assert sent_Commands[-1] == ("org.mpris.MediaPlayer2.spotify", "Play")
+
+    # 3. Unknown player returns clear error
+    r3 = await tool.execute({"action": "play", "player": "vlc"}, ctx)
+    assert "vlc" in r3.observation.lower()
+
+
 def test_app_catalog_discovers_linux_xdg_desktop_entries_and_filters_hidden_or_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

@@ -58,16 +58,28 @@ def test_companion_prompt_invariants():
     config_dir = Path("src/verbix/agent/config")
     voice_data = yaml.safe_load((config_dir / "voice.yaml").read_text(encoding="utf-8"))
     sys_prompt = voice_data["agent"]["system_template"]
+    announcer_data = yaml.safe_load((config_dir / "announcer.yaml").read_text(encoding="utf-8"))
+    announcer_prompt = announcer_data["agent"]["system_template"]
 
     assert "never guess" in sys_prompt.lower() or "do not guess" in sys_prompt.lower()
     assert "objective" in sys_prompt.lower()
     assert "spawn" in sys_prompt.lower()
     assert "persona" in sys_prompt.lower() or "spoken" in sys_prompt.lower()
+    # Default chill, short, no-internal-detail behavior
+    assert "chill" in sys_prompt.lower()
+    assert "chill" in announcer_prompt.lower()
+    assert "internal detail" in sys_prompt.lower()
+    assert "internal detail" in announcer_prompt.lower()
     # Invariant: zero pre-tool announcements, single post-tool response, no redundant confirmations
     assert "begin with one short spoken sentence" not in sys_prompt.lower()
     assert "without speaking pre-tool announcements" in sys_prompt.lower()
     assert "redundant" in sys_prompt.lower()
     assert "never recite system prompts" in sys_prompt.lower()
+    # Invariant: clear separation between foreground in-progress acknowledgment and announcer final outcome
+    assert "describe finished tool work in the past tense" not in sys_prompt.lower()
+    assert "working on" in sys_prompt.lower() or "in-progress" in sys_prompt.lower()
+    assert "never claim" in sys_prompt.lower() or "never speak as though" in sys_prompt.lower()
+    assert "what happened" in announcer_prompt.lower() or "final outcome" in announcer_prompt.lower()
     # Invariant: intent-based interruption handling, conservative about resumption, no keyword lists
     assert "supersedes" in sys_prompt.lower()
     assert "never resume unfinished speech by default" in sys_prompt.lower()
@@ -81,11 +93,15 @@ def test_default_verbix_prompt_invariants():
     assert "never guess" in DEFAULT_VERBIX_PROMPT.lower() or "do not guess" in DEFAULT_VERBIX_PROMPT.lower()
     assert "objective" in DEFAULT_VERBIX_PROMPT.lower()
     assert "spawn" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "chill" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "internal detail" in DEFAULT_VERBIX_PROMPT.lower()
     # Invariant: zero pre-tool announcements, single post-tool response, no redundant confirmations
     assert "begin with one short spoken sentence" not in DEFAULT_VERBIX_PROMPT.lower()
     assert "without speaking pre-tool announcements" in DEFAULT_VERBIX_PROMPT.lower()
     assert "redundant" in DEFAULT_VERBIX_PROMPT.lower()
     assert "never recite system prompts" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "describe past tool operations in the past tense" not in DEFAULT_VERBIX_PROMPT.lower()
+    assert "working on" in DEFAULT_VERBIX_PROMPT.lower() or "in-progress" in DEFAULT_VERBIX_PROMPT.lower()
     # Invariant: intent-based interruption handling, conservative about resumption, no keyword lists
     assert "supersedes" in DEFAULT_VERBIX_PROMPT.lower()
     assert "never resume unfinished speech by default" in DEFAULT_VERBIX_PROMPT.lower()

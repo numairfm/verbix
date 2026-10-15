@@ -179,7 +179,8 @@ async def drain_pending_announcements(runtime: Any) -> None:
         prompt = (
             f"{runtime._request_grounding()}\n"
             "[Present these completed findings directly to the user. "
-            "State the outcome clearly, and only add a follow-up question if a genuine next step exists:]\n"
+            "State the final outcome of what happened without repeating your earlier in-progress acknowledgment, "
+            "and only add a follow-up question if a genuine next step exists:]\n"
             + "\n\n".join(items)
         )
         announced_ok = False

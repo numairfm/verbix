@@ -20,7 +20,7 @@ _MPRIS_METHODS = {
 }
 
 
-async def _linux_mpris_action(action: str) -> str:
+async def _linux_mpris_action(action: str, player: str | None = None) -> str:
     """Talks directly to org.mpris.MediaPlayer2.Player on the session DBus via dbus-fast."""
     from dbus_fast.aio import MessageBus
     from dbus_fast.constants import BusType, MessageType
@@ -43,9 +43,8 @@ async def _linux_mpris_action(action: str) -> str:
         if not players:
             return "No active media players found on the session bus."
 
-        # Prefer a player whose PlaybackStatus is "Playing"
-        chosen = players[0]
         statuses: list[str] = []
+        candidates: list[tuple[int, str, str]] = []
         for p in players:
             short = p.removeprefix("org.mpris.MediaPlayer2.")
             prop_reply = await bus.call(
@@ -63,8 +62,6 @@ async def _linux_mpris_action(action: str) -> str:
             props = prop_reply.body[0]
             status_var = props.get("PlaybackStatus")
             status_str = getattr(status_var, "value", str(status_var or "Unknown"))
-            if status_str == "Playing":
-                chosen = p
             meta_var = props.get("Metadata")
             meta = getattr(meta_var, "value", {}) if meta_var else {}
             title_var = meta.get("xesam:title") if isinstance(meta, dict) else None
@@ -72,12 +69,35 @@ async def _linux_mpris_action(action: str) -> str:
             artist_var = meta.get("xesam:artist") if isinstance(meta, dict) else None
             artists = getattr(artist_var, "value", []) if artist_var else []
             artist = ", ".join(str(a) for a in artists) if isinstance(artists, list) else str(artists or "")
-            track = f"{artist} - {title}".strip(" -") or "(unknown track)"
+            raw_track = f"{artist} - {title}".strip(" -")
+            track = raw_track or "(unknown track)"
             statuses.append(f"{status_str}: {track} ({short})")
+
+            if status_str == "Playing":
+                rank = 3
+            elif status_str == "Paused" and raw_track:
+                rank = 2
+            elif status_str == "Paused":
+                rank = 1
+            else:
+                rank = 0
+            candidates.append((rank, p, short))
 
         if action == "status":
             return "\n".join(statuses) if statuses else "No active media player metadata available."
 
+        if not candidates:
+            candidates = [(0, p, p.removeprefix("org.mpris.MediaPlayer2.")) for p in players]
+
+        if player and player.strip():
+            needle = player.strip().lower()
+            filtered = [c for c in candidates if needle in c[2].lower()]
+            if not filtered:
+                avail = ", ".join(c[2] for c in candidates)
+                return f"No active media player matching '{player}' found (available: {avail})."
+            candidates = filtered
+
+        chosen = max(candidates, key=lambda c: c[0])[1]
         method = _MPRIS_METHODS[action]
         call_reply = await bus.call(
             Message(
@@ -202,6 +222,10 @@ class MediaTool:
                     "maximum": 100,
                     "description": "Target volume percentage (0-100) when action='volume_set'.",
                 },
+                "player": {
+                    "type": "string",
+                    "description": "Optional target player name (e.g. 'spotify', 'chromium', 'firefox').",
+                },
             },
             "required": ["action"],
         }
@@ -214,6 +238,8 @@ class MediaTool:
                 is_error=True,
             )
         level = args.get("level")
+        player = args.get("player")
+        player_str = str(player).strip() if isinstance(player, str) and player.strip() else None
         if action == "volume_set":
             if level is None or isinstance(level, bool):
                 return ToolResult(
@@ -231,7 +257,11 @@ class MediaTool:
         try:
             if sys.platform.startswith("linux"):
                 if action in _PLAYBACK_ACTIONS:
-                    obs = await _linux_mpris_action(action)
+                    obs = (
+                        await _linux_mpris_action(action, player=player_str)
+                        if player_str is not None
+                        else await _linux_mpris_action(action)
+                    )
                     return ToolResult(obs)
                 obs = await asyncio.to_thread(_linux_pulse_volume, action, level)
                 return ToolResult(obs)

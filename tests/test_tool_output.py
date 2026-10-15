@@ -1,3 +1,13 @@
+from pathlib import Path
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+
+
 def test_tool_result_carries_attachments_default_empty():
     from verbix.tools.base import FileAttachment, ToolResult
     res = ToolResult("hi", attachments=(FileAttachment(data=b"x", mime="image/jpeg", name="a.jpg"),))

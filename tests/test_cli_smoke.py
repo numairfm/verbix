@@ -15,6 +15,79 @@ def test_build_runtime(tmp_path, monkeypatch):
     assert runtime.workspace == tmp_path.resolve()
 
 
+def test_default_workspace_is_dedicated_directory(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from verbix.config import default_workspace
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-123")
+
+    expected = (home / ".verbix" / "workspace").resolve()
+    assert default_workspace() == expected
+
+    args = build_parser().parse_args([])
+    runtime = build_runtime(args)
+    assert runtime.workspace == expected
+    assert expected.is_dir()
+
+
+def test_refuses_home_and_root_workspace_without_explicit_override(tmp_path, monkeypatch):
+    from argparse import Namespace
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from verbix.config import resolve_workspace
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+
+    with pytest.raises(ValueError, match="(?i)(home|unsafe|refus)"):
+        resolve_workspace(home)
+
+    with pytest.raises(ValueError, match="(?i)(root|unsafe|refus)"):
+        resolve_workspace(Path("/"))
+
+    with pytest.raises(ValueError, match="(?i)(home|unsafe|refus)"):
+        Runtime(workspace=home, provider=MagicMock())
+
+    with pytest.raises(ValueError, match="(?i)(root|unsafe|refus)"):
+        Runtime(workspace=Path("/"), provider=MagicMock())
+
+    with pytest.raises(ValueError, match="(?i)(home|unsafe|refus)"):
+        build_runtime(Namespace(workspace=home, model="test/model"))
+
+
+def test_explicit_workspace_override_allows_custom_and_home(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    home = tmp_path / "home"
+    home.mkdir()
+    custom = tmp_path / "custom_project"
+    custom.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-123")
+
+    # Explicit custom project workspace
+    args_custom = build_parser().parse_args(["--workspace", str(custom)])
+    rt_custom = build_runtime(args_custom)
+    assert rt_custom.workspace == custom.resolve()
+
+    # Explicit override to $HOME via --workspace flag
+    args_home = build_parser().parse_args(["--workspace", str(home)])
+    rt_home = build_runtime(args_home)
+    assert rt_home.workspace == home.resolve()
+
+    # Non-existent explicit workspace still raises ValueError
+    missing = tmp_path / "does_not_exist"
+    args_missing = build_parser().parse_args(["--workspace", str(missing)])
+    with pytest.raises(ValueError, match="does not exist"):
+        build_runtime(args_missing)
+
+
 @pytest.mark.asyncio
 async def test_cli_printer_renders_standalone_turn_complete(capsys):
     printer = CliPrinter()

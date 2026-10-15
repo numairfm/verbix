@@ -91,6 +91,7 @@ def build_registry(
     from dataclasses import replace
 
     from verbix.agent.tools.registry import ToolRegistry
+    from verbix.config import default_workspace
 
     unknown = [name for name in names if name not in TOOL_CATALOG]
     if unknown:
@@ -98,7 +99,7 @@ def build_registry(
     if output_limits is None:
         output_limits = (2000, 51200)
     max_lines, max_bytes = output_limits
-    ws = Path.cwd() if workspace is None else Path(workspace)
+    ws = default_workspace() if workspace is None else Path(workspace)
     ctx = ToolContext(workspace=ws)
     spill_dir = Path.home() / ".verbix" / "logs"
     registry = ToolRegistry()

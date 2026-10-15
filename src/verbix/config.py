@@ -94,3 +94,32 @@ def ensure_global_scaffold() -> None:
     if not persona_file.is_file():
         persona_file.write_text(_PERSONA_TEMPLATE, encoding="utf-8")
     marker.touch(exist_ok=True)
+
+
+def default_workspace() -> Path:
+    """Returns Verbix's dedicated default workspace directory (~/.verbix/workspace)."""
+    return (Path.home() / ".verbix" / "workspace").resolve()
+
+
+def resolve_workspace(workspace: Path | None = None, *, explicit: bool = False) -> Path:
+    """Resolves and validates the workspace directory, refusing $HOME and / unless explicit."""
+    if workspace is None:
+        ws = default_workspace()
+        ws.mkdir(parents=True, exist_ok=True)
+        return ws
+
+    ws = Path(workspace).expanduser().resolve()
+    home_resolved = Path.home().resolve()
+    root_resolved = Path(ws.anchor).resolve() if ws.anchor else Path("/").resolve()
+    if not explicit:
+        if ws == home_resolved:
+            raise ValueError(
+                f"Refusing to use home directory '{ws}' as workspace without an explicit --workspace override."
+            )
+        if ws == root_resolved:
+            raise ValueError(
+                f"Refusing to use filesystem root '{ws}' as workspace without an explicit --workspace override."
+            )
+    if not ws.is_dir():
+        raise ValueError(f"Workspace directory '{ws}' does not exist.")
+    return ws

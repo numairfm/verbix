@@ -12,7 +12,7 @@ from typing import Any
 
 from verbix.agent.models.litellm_model import LitellmModel, LitellmModelConfig
 from verbix.auth import resolve_provider
-from verbix.config import ensure_global_scaffold, load_config
+from verbix.config import ensure_global_scaffold, load_config, resolve_workspace
 from verbix.core.events import (
     AgentEvent,
     TextDelta,
@@ -53,6 +53,18 @@ def load_env(env_path: Path | None = None) -> None:
                 pass
 
 
+class _WorkspaceAction(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Any,
+        option_string: str | None = None,
+    ) -> None:
+        setattr(namespace, self.dest, Path(values))
+        namespace._workspace_explicit = True
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="verbix",
@@ -90,8 +102,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workspace",
         type=Path,
-        default=Path.cwd(),
-        help="Workspace root path (default: current working directory)",
+        default=None,
+        action=_WorkspaceAction,
+        help="Workspace root path (default: ~/.verbix/workspace)",
     )
     parser.add_argument(
         "--max-tokens",
@@ -180,9 +193,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def build_runtime(args: argparse.Namespace) -> Runtime:
     """Builds and initializes the Runtime from parsed command-line arguments."""
-    workspace = args.workspace.resolve()
-    if not workspace.is_dir():
-        raise ValueError(f"Workspace directory '{workspace}' does not exist.")
+    explicit_ws = bool(getattr(args, "_workspace_explicit", False))
+    workspace = resolve_workspace(getattr(args, "workspace", None), explicit=explicit_ws)
 
     model_kwargs: dict[str, Any] = {}
     if getattr(args, "max_tokens", None):
@@ -243,6 +255,7 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
         worker_echo=bool(getattr(args, "show_worker_turns", False))
         or os.environ.get("VERBIX_WORKER_ECHO") == "1",
         system_prompt=system_prompt,
+        allow_unsafe_workspace=explicit_ws,
     )
 
 

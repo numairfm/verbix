@@ -93,15 +93,19 @@ class Runtime:
 
     def __init__(
         self,
-        workspace: Path,
+        workspace: Path | None,
         provider: Any,
         system_prompt: str | None = None,
         worker_system_prompt: str | None = None,
         on_wake: Callable[[str], Coroutine[Any, Any, None] | None] | None = None,
         worker_model: Any = None,
         worker_echo: bool = False,
+        *,
+        allow_unsafe_workspace: bool = False,
     ) -> None:
-        self.workspace = Path(workspace).resolve()
+        from verbix.config import resolve_workspace
+
+        self.workspace = resolve_workspace(workspace, explicit=allow_unsafe_workspace)
         self.provider = provider
         self.worker_model = worker_model
         self.worker_echo = worker_echo

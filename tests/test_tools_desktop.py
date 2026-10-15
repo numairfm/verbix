@@ -198,6 +198,48 @@ async def test_linux_mpris_prefers_paused_over_stopped_and_honors_player_target(
     r3 = await tool.execute({"action": "play", "player": "vlc"}, ctx)
     assert "vlc" in r3.observation.lower()
 
+    # 4. 'stop' falls back to Pause when a streaming player (like Spotify) ignores Stop and stays Playing
+    spotify_state = {"status": "Playing"}
+
+    class StreamingStopBus(FakeBus):
+        async def call(self, msg):
+            if msg.member == "ListNames":
+                return SimpleNamespace(
+                    message_type=MessageType.METHOD_RETURN,
+                    body=[["org.mpris.MediaPlayer2.spotify"]],
+                )
+            if msg.member == "GetAll":
+                return SimpleNamespace(
+                    message_type=MessageType.METHOD_RETURN,
+                    body=[
+                        {
+                            "PlaybackStatus": SimpleNamespace(
+                                value=spotify_state["status"]
+                            ),
+                            "Metadata": SimpleNamespace(
+                                value={
+                                    "xesam:title": SimpleNamespace(value="Track 1"),
+                                    "xesam:artist": SimpleNamespace(value=["Artist"]),
+                                }
+                            ),
+                        }
+                    ],
+                )
+            sent_Commands.append((msg.destination, msg.member))
+            if msg.member == "Pause":
+                spotify_state["status"] = "Paused"
+            return SimpleNamespace(message_type=MessageType.METHOD_RETURN, body=[])
+
+    monkeypatch.setattr(
+        dbus_fast.aio, "MessageBus", lambda bus_type=None: StreamingStopBus()
+    )
+    sent_Commands.clear()
+    r4 = await tool.execute({"action": "stop"}, ctx)
+    assert r4.is_error is False
+    assert ("org.mpris.MediaPlayer2.spotify", "Stop") in sent_Commands
+    assert ("org.mpris.MediaPlayer2.spotify", "Pause") in sent_Commands
+    assert "Paused" in r4.observation
+
 
 def test_app_catalog_discovers_linux_xdg_desktop_entries_and_filters_hidden_or_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

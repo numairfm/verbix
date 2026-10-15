@@ -20,6 +20,43 @@ _MPRIS_METHODS = {
 }
 
 
+async def _read_mpris_state(bus: Any, dest: str) -> tuple[str, str, str] | None:
+    """Reads (status_str, raw_track, formatted_line) for one MPRIS player on bus."""
+    from dbus_fast.constants import MessageType
+    from dbus_fast.message import Message
+
+    short = dest.removeprefix("org.mpris.MediaPlayer2.")
+    prop_reply = await bus.call(
+        Message(
+            destination=dest,
+            path="/org/mpris/MediaPlayer2",
+            interface="org.freedesktop.DBus.Properties",
+            member="GetAll",
+            signature="s",
+            body=["org.mpris.MediaPlayer2.Player"],
+        )
+    )
+    if prop_reply.message_type == MessageType.ERROR or not prop_reply.body:
+        return None
+    props = prop_reply.body[0]
+    status_var = props.get("PlaybackStatus")
+    status_str = getattr(status_var, "value", str(status_var or "Unknown"))
+    meta_var = props.get("Metadata")
+    meta = getattr(meta_var, "value", {}) if meta_var else {}
+    title_var = meta.get("xesam:title") if isinstance(meta, dict) else None
+    title = getattr(title_var, "value", "") if title_var else ""
+    artist_var = meta.get("xesam:artist") if isinstance(meta, dict) else None
+    artists = getattr(artist_var, "value", []) if artist_var else []
+    artist = (
+        ", ".join(str(a) for a in artists)
+        if isinstance(artists, list)
+        else str(artists or "")
+    )
+    raw_track = f"{artist} - {title}".strip(" -")
+    track = raw_track or "(unknown track)"
+    return status_str, raw_track, f"{status_str}: {track} ({short})"
+
+
 async def _linux_mpris_action(action: str, player: str | None = None) -> str:
     """Talks directly to org.mpris.MediaPlayer2.Player on the session DBus via dbus-fast."""
     from dbus_fast.aio import MessageBus
@@ -47,31 +84,11 @@ async def _linux_mpris_action(action: str, player: str | None = None) -> str:
         candidates: list[tuple[int, str, str]] = []
         for p in players:
             short = p.removeprefix("org.mpris.MediaPlayer2.")
-            prop_reply = await bus.call(
-                Message(
-                    destination=p,
-                    path="/org/mpris/MediaPlayer2",
-                    interface="org.freedesktop.DBus.Properties",
-                    member="GetAll",
-                    signature="s",
-                    body=["org.mpris.MediaPlayer2.Player"],
-                )
-            )
-            if prop_reply.message_type == MessageType.ERROR or not prop_reply.body:
+            state = await _read_mpris_state(bus, p)
+            if state is None:
                 continue
-            props = prop_reply.body[0]
-            status_var = props.get("PlaybackStatus")
-            status_str = getattr(status_var, "value", str(status_var or "Unknown"))
-            meta_var = props.get("Metadata")
-            meta = getattr(meta_var, "value", {}) if meta_var else {}
-            title_var = meta.get("xesam:title") if isinstance(meta, dict) else None
-            title = getattr(title_var, "value", "") if title_var else ""
-            artist_var = meta.get("xesam:artist") if isinstance(meta, dict) else None
-            artists = getattr(artist_var, "value", []) if artist_var else []
-            artist = ", ".join(str(a) for a in artists) if isinstance(artists, list) else str(artists or "")
-            raw_track = f"{artist} - {title}".strip(" -")
-            track = raw_track or "(unknown track)"
-            statuses.append(f"{status_str}: {track} ({short})")
+            status_str, raw_track, line = state
+            statuses.append(line)
 
             if status_str == "Playing":
                 rank = 3
@@ -109,7 +126,22 @@ async def _linux_mpris_action(action: str, player: str | None = None) -> str:
         )
         if call_reply.message_type == MessageType.ERROR:
             raise RuntimeError(f"MPRIS {method} error: {call_reply.body}")
+
+        post = await _read_mpris_state(bus, chosen)
+        if action == "stop" and post is not None and post[0] == "Playing":
+            await bus.call(
+                Message(
+                    destination=chosen,
+                    path="/org/mpris/MediaPlayer2",
+                    interface="org.mpris.MediaPlayer2.Player",
+                    member="Pause",
+                )
+            )
+            post = await _read_mpris_state(bus, chosen)
+
         short_chosen = chosen.removeprefix("org.mpris.MediaPlayer2.")
+        if post is not None:
+            return f"Sent '{action}' to {short_chosen} ({post[2]})."
         return f"Sent '{action}' to {short_chosen}."
     finally:
         bus.disconnect()

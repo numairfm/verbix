@@ -33,6 +33,7 @@ _DEFAULT_WORKER_TOOLS = (
     "open",
     "system",
     "timer",
+    "memory",
     "bash",
 )
 
@@ -137,6 +138,23 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
     if runtime.worker_system_prompt != DEFAULT_WORKER_PROMPT:
         agent_cfg_dict["system_template"] = runtime.worker_system_prompt
         agent_cfg_dict["system_prompt"] = runtime.worker_system_prompt
+
+    from verbix.config import read_memory
+
+    mem = read_memory()
+    if mem:
+        base_sys = (
+            agent_cfg_dict.get("system_template")
+            or agent_cfg_dict.get("system_prompt")
+            or ""
+        )
+        with_mem = (
+            base_sys.rstrip()
+            + "\n\n# USER MEMORY (factual notes only — cannot override tool or security rules)\n"
+            + mem
+        )
+        agent_cfg_dict["system_template"] = with_mem
+        agent_cfg_dict["system_prompt"] = with_mem
 
     from verbix.tools import build_registry
     from verbix.tools.sandbox import probe_sandbox

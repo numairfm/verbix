@@ -79,9 +79,11 @@ def build_announcer_agent(runtime: Any, fg_config: Any) -> AnnouncerAgent:
 
         custom = getattr(runtime, "_custom_prompt", None)
         persona = "" if custom else read_persona(getattr(runtime, "workspace", None))
-        grounded = runtime._build_grounded_prompt(
-            fill_persona_slot(announcer_agent_cfg.get("system_template") or "", persona)
+        announcer_base = fill_persona_slot(
+            announcer_agent_cfg.get("system_template") or "", persona
         )
+        runtime._announcer_base_prompt = announcer_base
+        grounded = runtime._build_grounded_prompt(announcer_base)
         announcer_agent_cfg["system_template"] = grounded
         announcer_agent_cfg["system_prompt"] = grounded
         announcer_agent_cfg["turn_scoped_limits"] = True
@@ -110,6 +112,9 @@ def _snapshot_foreground_history(runtime: Any) -> list:
     prompt and strips tool-call mechanics and empty tool-only assistant turns.
     """
     foreground = getattr(runtime, "foreground", None)
+    refresh_fn = getattr(runtime, "_refresh_grounded_prompts", None)
+    if callable(refresh_fn):
+        refresh_fn()
     announcer = getattr(runtime, "announcer", None)
     announcer_cfg = getattr(announcer, "config", None)
     announcer_sys = getattr(announcer_cfg, "system_template", None) or getattr(

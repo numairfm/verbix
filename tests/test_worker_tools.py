@@ -22,6 +22,7 @@ def test_worker_registry_has_main_tools():
         "open",
         "system",
         "timer",
+        "memory",
     }
     if probe_sandbox().available:
         expected.add("bash")

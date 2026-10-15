@@ -554,6 +554,46 @@ async def test_memory_tool_remember_list_forget_dedup_and_security(
     assert r_sym.is_error
 
 
+@pytest.mark.asyncio
+async def test_runtime_dynamically_grounds_memory_across_foreground_announcer_and_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from verbix.runtime.announcer import _snapshot_foreground_history
+    from verbix.runtime.runtime import Runtime
+    from verbix.tools.memory import MemoryTool
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    rt = Runtime(workspace=ws, provider=MagicMock())
+    fg_defs = rt.foreground.get_tool_definitions() or []
+    fg_tool_names = {d["function"]["name"] for d in fg_defs}
+    assert "memory" in fg_tool_names
+    assert "memory" in rt.worker_tool_names
+    assert "# USER MEMORY" not in rt.system_prompt
+
+    # Save a memory mid-session via MemoryTool
+    await MemoryTool().execute(
+        {"action": "remember", "text": "Preferred browser is Helium"},
+        ToolContext(workspace=ws),
+    )
+
+    # Refresh grounding as _step_inner and _snapshot_foreground_history do
+    rt._refresh_grounded_prompts()
+    assert "# USER MEMORY" in rt.system_prompt
+    assert "Preferred browser is Helium" in rt.system_prompt
+
+    rt.foreground.messages = [
+        {"role": "system", "content": "old"},
+        {"role": "user", "content": "hi"},
+    ]
+    rt._refresh_grounded_prompts()
+    assert "Preferred browser is Helium" in rt.foreground.messages[0]["content"]
+    snap = _snapshot_foreground_history(rt)
+    assert "Preferred browser is Helium" in snap[0]["content"]
+
+
 def test_app_catalog_discovers_linux_xdg_desktop_entries_and_filters_hidden_or_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

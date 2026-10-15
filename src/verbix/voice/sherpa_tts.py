@@ -182,6 +182,5 @@ class SherpaTTS:
 
     async def aclose(self) -> None:
         """Cleans up resources."""
-        async with self._lock:
-            self._tts = None
-            self._loaded = False
+        self._tts = None
+        self._loaded = False

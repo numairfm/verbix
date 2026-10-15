@@ -264,6 +264,27 @@ def drain_stdin() -> None:
         pass
 
 
+async def read_stdin_line() -> str:
+    """Reads a line from stdin on a daemon thread so ThreadPoolExecutor never hangs on Ctrl-C."""
+    import threading
+
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[str] = loop.create_future()
+
+    def _reader() -> None:
+        try:
+            line = sys.stdin.readline()
+        except Exception as exc:  # noqa: BLE001
+            if not fut.done():
+                loop.call_soon_threadsafe(fut.set_exception, exc)
+            return
+        if not fut.done():
+            loop.call_soon_threadsafe(fut.set_result, line)
+
+    threading.Thread(target=_reader, name="verbix-stdin", daemon=True).start()
+    return await fut
+
+
 def _note_turn_failed(task: asyncio.Task) -> None:
     """Logs background voice-turn failures; cancellations are routine."""
     try:
@@ -489,14 +510,13 @@ async def async_main(args: argparse.Namespace) -> int:
             )
         sys.stdout.flush()
 
-        loop = asyncio.get_running_loop()
         try:
             while True:
                 now_str = datetime.now().astimezone().strftime("%H:%M:%S")
                 sys.stdout.write(f"[{now_str}] you> ")
                 sys.stdout.flush()
-                await loop.run_in_executor(None, drain_stdin)
-                line = await loop.run_in_executor(None, sys.stdin.readline)
+                drain_stdin()
+                line = await read_stdin_line()
                 if not line:
                     break
                 text = line.strip()
@@ -532,8 +552,8 @@ async def async_main(args: argparse.Namespace) -> int:
                                 "[Recording mic... Press Enter when done speaking]\n"
                             )
                             sys.stdout.flush()
-                            await loop.run_in_executor(None, drain_stdin)
-                            await loop.run_in_executor(None, sys.stdin.readline)
+                            drain_stdin()
+                            await read_stdin_line()
                             sys.stdout.write("[Capture stopped. Earcon cue playing...]\n")
                             sys.stdout.flush()
                             stop_res = await pipeline.toggle()
@@ -619,8 +639,7 @@ async def async_main(args: argparse.Namespace) -> int:
             now_str = datetime.now().astimezone().strftime("%H:%M:%S")
             sys.stdout.write(f"[{now_str}] you> ")
             sys.stdout.flush()
-            loop = asyncio.get_running_loop()
-            line = await loop.run_in_executor(None, sys.stdin.readline)
+            line = await read_stdin_line()
             if not line:
                 break
             prompt = line.strip()

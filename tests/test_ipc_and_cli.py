@@ -283,3 +283,61 @@ def test_drain_stdin_uses_msvcrt_on_windows(monkeypatch):
     assert select_called is False
     assert chars == []
 
+
+def test_voice_cli_sigint_exits_cleanly_without_threadpool_hang_or_traceback(tmp_path):
+    import signal
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "from unittest.mock import AsyncMock, MagicMock\n"
+        "import verbix.cli as cli_mod\n"
+        "fake_rt = MagicMock()\n"
+        "fake_rt.workspace = " + repr(str(tmp_path)) + "\n"
+        "fake_rt.aclose = AsyncMock()\n"
+        "fake_pipe = MagicMock()\n"
+        "fake_pipe.is_continuous_active = False\n"
+        "fake_pipe._active_voice_task = None\n"
+        "fake_tts = MagicMock()\n"
+        "fake_tts.aclose = AsyncMock()\n"
+        "fake_sink = MagicMock()\n"
+        "cli_mod.build_runtime = lambda args: fake_rt\n"
+        "cli_mod._build_voice_pipeline = lambda rt, args, printer=None: (fake_pipe, fake_tts, fake_sink)\n"
+        "cli_mod.main(['--voice', '--workspace', " + repr(str(tmp_path)) + "])\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", code],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        # Read until prompt appears so we know it is blocked waiting on stdin
+        buf = ""
+        assert proc.stdout is not None
+        while "you>" not in buf:
+            ch = proc.stdout.read(1)
+            if not ch:
+                break
+            buf += ch
+        assert "you>" in buf
+        import time
+
+        time.sleep(0.1)
+
+        # Send a single SIGINT while stdin pipe stays open (just like a terminal)
+        proc.send_signal(signal.SIGINT)
+        proc.wait(timeout=1.5)
+        stderr = proc.stderr.read() if proc.stderr else ""
+        assert "Traceback" not in stderr
+        assert "RuntimeWarning" not in stderr
+        assert "_python_exit" not in stderr
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        if proc.stdin:
+            proc.stdin.close()
+
+

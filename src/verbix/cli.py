@@ -220,13 +220,27 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
     from verbix.agent.models.litellm_model import LitellmModel, LitellmModelConfig
     from verbix.runtime.runtime import Runtime
 
-    explicit_ws = bool(getattr(args, "_workspace_explicit", False))
-    workspace = resolve_workspace(getattr(args, "workspace", None), explicit=explicit_ws)
+    cfg = load_config(None, args)
+    raw_ws = getattr(args, "workspace", None) or cfg.get("workspace")
+    explicit_ws = bool(
+        getattr(args, "_workspace_explicit", False) or cfg.get("workspace")
+    )
+    workspace = resolve_workspace(raw_ws, explicit=explicit_ws)
+    cfg = load_config(workspace, args)
 
     model_kwargs: dict[str, Any] = {}
-    if getattr(args, "max_tokens", None):
-        model_kwargs["max_tokens"] = args.max_tokens
-    provider_name = load_config(workspace, args).get("provider")
+    default_max_tokens = int(os.environ.get("VERBIX_MAX_TOKENS", "2048"))
+    arg_max_tokens = getattr(args, "max_tokens", None)
+    if (
+        arg_max_tokens == default_max_tokens
+        and not os.environ.get("VERBIX_MAX_TOKENS")
+        and cfg.get("max_tokens")
+    ):
+        model_kwargs["max_tokens"] = int(cfg["max_tokens"])
+    elif arg_max_tokens:
+        model_kwargs["max_tokens"] = arg_max_tokens
+
+    provider_name = cfg.get("provider")
     entry = resolve_provider(provider_name) if provider_name else None
     if getattr(args, "base_url", None):
         model_kwargs["api_base"] = args.base_url
@@ -241,19 +255,40 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
         "VERBIX_MODEL",
         os.environ.get("OPENROUTER_MODEL", "openrouter/google/gemini-3.5-flash-lite"),
     )
-    if entry and entry.get("model") and args.model == default_model:
+    if (
+        args.model == default_model
+        and not os.environ.get("VERBIX_MODEL")
+        and not os.environ.get("OPENROUTER_MODEL")
+    ):
+        if cfg.get("model"):
+            args.model = str(cfg["model"])
+        elif entry and entry.get("model"):
+            args.model = entry["model"]
+    elif entry and entry.get("model") and args.model == default_model:
         args.model = entry["model"]
-    receptionist_model_name = getattr(args, "receptionist_model", None) or args.model
+
+    receptionist_model_name = (
+        getattr(args, "receptionist_model", None)
+        or cfg.get("receptionist_model")
+        or args.model
+    )
     fg_config = LitellmModelConfig(
         model_name=receptionist_model_name,
         model_kwargs=model_kwargs,
     )
     foreground_model = LitellmModel(config_class=lambda **kw: fg_config)
 
-    worker_model_name = getattr(args, "worker_model", None) or args.model
+    worker_model_name = (
+        getattr(args, "worker_model", None)
+        or cfg.get("worker_model")
+        or args.model
+    )
     worker_model_kwargs = dict(model_kwargs)
-    if getattr(args, "worker_max_tokens", None):
-        worker_model_kwargs["max_tokens"] = args.worker_max_tokens
+    worker_max_tok = getattr(args, "worker_max_tokens", None) or cfg.get(
+        "worker_max_tokens"
+    )
+    if worker_max_tok:
+        worker_model_kwargs["max_tokens"] = int(worker_max_tok)
     else:
         worker_model_kwargs.pop("max_tokens", None)
 
@@ -265,6 +300,9 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
 
     flag_prompt = getattr(args, "system_prompt", None)
     system_prompt = flag_prompt.strip() if flag_prompt and flag_prompt.strip() else None
+
+    if cfg.get("show_thoughts") and not getattr(args, "show_thoughts", False):
+        args.show_thoughts = True
 
     from verbix.tools.sandbox import probe_sandbox
 
@@ -279,8 +317,11 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
         workspace=workspace,
         provider=foreground_model,
         worker_model=worker_model,
-        worker_echo=bool(getattr(args, "show_worker_turns", False))
-        or os.environ.get("VERBIX_WORKER_ECHO") == "1",
+        worker_echo=bool(
+            getattr(args, "show_worker_turns", False)
+            or cfg.get("show_worker_turns", False)
+            or os.environ.get("VERBIX_WORKER_ECHO") == "1"
+        ),
         system_prompt=system_prompt,
         allow_unsafe_workspace=explicit_ws,
         retention_days=resolve_retention_days(workspace, args),

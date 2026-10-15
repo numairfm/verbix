@@ -63,13 +63,22 @@ Verbix separates its machine-global state under `~/.verbix/` from project worksp
   - `voice/stt/models/`: user-managed speech-to-text (STT) GGUF models, organized by model ID (default `~/.verbix/voice/stt/models/nemotron-gguf/`), created lazily when provisioned or migrated.
 - **Retention policy**: At startup, Verbix deletes entries under `~/.verbix/logs/` and `~/.verbix/screenshots/` older than `retention_days` (default `14` days; configurable via `retention_days` in `~/.verbix/config.yaml`, `VERBIX_RETENTION_DAYS`, or `--retention-days`). Retention cleanup never touches `config.yaml`, `PERSONA.md`, `MEMORY.md`, `auth.json`, workspace contents, or voice models.
 
-Config precedence: builtin defaults < `~/.verbix/config.yaml` < env < CLI flags. `config.yaml` is optional and accepts `provider`, `stt_model`, `tts_voice`, `tts_speed`, and `retention_days`:
+Config precedence: builtin defaults < `~/.verbix/config.yaml` < env < CLI flags. `config.yaml` is optional and scaffolds with all available options commented out (`provider`, `model`, `receptionist_model`, `worker_model`, `max_tokens`, `worker_max_tokens`, `workspace`, `stt_model`, `tts_voice`, `tts_speed`, `retention_days`, `show_thoughts`, `show_worker_turns`):
 
 ```yaml
+# provider: openrouter
+# model: openrouter/google/gemini-3.5-flash-lite
+# receptionist_model: openrouter/google/gemini-3.5-flash-lite
+# worker_model: openrouter/google/gemini-3.5-flash-lite
+# max_tokens: 2048
+# worker_max_tokens: 8192
+# workspace: ~/.verbix/workspace
+# retention_days: 14
 # stt_model: /path/to/model.gguf
 # tts_voice: M1
 # tts_speed: 1.0
-# retention_days: 14
+# show_thoughts: false
+# show_worker_turns: false
 ```
 
 First run scaffolds `~/.verbix/` with a commented `config.yaml`, an empty `PERSONA.md`, and an empty `MEMORY.md`.

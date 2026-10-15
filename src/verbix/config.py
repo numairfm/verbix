@@ -13,20 +13,61 @@ import yaml
 logger = logging.getLogger(__name__)
 
 DEFAULT_RETENTION_DAYS = 14
-_ALLOWED_KEYS = ("provider", "stt_model", "retention_days", "tts_voice", "tts_speed")
+_ALLOWED_KEYS = (
+    "provider",
+    "model",
+    "receptionist_model",
+    "worker_model",
+    "max_tokens",
+    "worker_max_tokens",
+    "workspace",
+    "stt_model",
+    "tts_voice",
+    "tts_speed",
+    "retention_days",
+    "show_thoughts",
+    "show_worker_turns",
+)
+_CLI_OVERRIDE_KEYS = ("provider", "stt_model", "retention_days", "tts_voice", "tts_speed")
 _VALID_TTS_VOICES = frozenset({"M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5"})
 _GUIDANCE_BLOCK = re.compile(r"\A\s*<!--.*?-->\s*", re.DOTALL)
 
 _CONFIG_TEMPLATE = """\
 # Verbix global config (~/.verbix/config.yaml).
-# VERBIX_PROVIDER env and CLI flags win over this file.
-# Uncomment and edit to set a default speech-to-text model:
-# stt_model: /path/to/model.gguf
-# Supertonic TTS voice (M1-M5 or F1-F5, default: M1) and speed (default: 1.0):
-# tts_voice: M1
-# tts_speed: 1.0
-# Days to retain old tool logs and screenshots (default: 14):
+# Precedence: builtin defaults < this file < environment variables < CLI flags.
+
+# --- Provider & Models ---
+# Named provider entry from ~/.verbix/auth.json:
+# provider: openrouter
+# Default model for both foreground voice and background workers:
+# model: openrouter/google/gemini-3.5-flash-lite
+# Override model for the foreground/announcer voice agent only:
+# receptionist_model: openrouter/google/gemini-3.5-flash-lite
+# Override model for autonomous background workers only:
+# worker_model: openrouter/google/gemini-3.5-flash-lite
+# Maximum completion tokens per turn (foreground default: 2048, worker default: uncapped):
+# max_tokens: 2048
+# worker_max_tokens: 8192
+
+# --- Workspace & Storage ---
+# Default workspace directory exposed to background workers (default: ~/.verbix/workspace):
+# workspace: ~/.verbix/workspace
+# Days to retain old tool logs and screenshots under ~/.verbix/ (default: 14):
 # retention_days: 14
+
+# --- Voice (STT & TTS) ---
+# Path to a custom GGUF speech-to-text model (default: auto-discover under ~/.verbix/voice/stt/models/):
+# stt_model: /path/to/model.gguf
+# Supertonic TTS voice ID (M1-M5 male, F1-F5 female; default: M1):
+# tts_voice: M1
+# Supertonic TTS speaking speed multiplier (0.25-3.0; default: 1.0):
+# tts_speed: 1.0
+
+# --- Diagnostics ---
+# Print model reasoning/thought deltas to stderr (default: false):
+# show_thoughts: false
+# Print background worker tool calls and turns tagged by task ID (default: false):
+# show_worker_turns: false
 """
 
 _PERSONA_TEMPLATE = """\
@@ -117,7 +158,7 @@ def load_config(
                 f"Invalid VERBIX_TTS_SPEED='{env_speed}': expected a number between 0.25 and 3.0"
             ) from e
     if args is not None:
-        for key in _ALLOWED_KEYS:
+        for key in _CLI_OVERRIDE_KEYS:
             value = getattr(args, key, None)
             if value is not None:
                 if key == "retention_days" and (

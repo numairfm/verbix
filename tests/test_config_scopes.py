@@ -379,6 +379,70 @@ def test_tts_voice_and_speed_config_env_cli_precedence_and_validation(
         load_config(ws)
 
 
+def test_config_template_documents_all_options_and_build_runtime_honors_them(
+    tmp_path, monkeypatch
+):
+    from verbix.cli import build_parser, build_runtime
+    from verbix.config import _CONFIG_TEMPLATE, load_config
+
+    home = tmp_path / "home"
+    custom_ws = tmp_path / "custom_ws"
+    custom_ws.mkdir(parents=True)
+    _patch_home(monkeypatch, home)
+    for k in (
+        "VERBIX_PROVIDER",
+        "VERBIX_MODEL",
+        "OPENROUTER_MODEL",
+        "VERBIX_MAX_TOKENS",
+        "VERBIX_WORKER_MAX_TOKENS",
+    ):
+        monkeypatch.delenv(k, raising=False)
+
+    for key in (
+        "provider:",
+        "model:",
+        "receptionist_model:",
+        "worker_model:",
+        "max_tokens:",
+        "worker_max_tokens:",
+        "workspace:",
+        "stt_model:",
+        "tts_voice:",
+        "tts_speed:",
+        "retention_days:",
+        "show_thoughts:",
+        "show_worker_turns:",
+    ):
+        assert f"# {key}" in _CONFIG_TEMPLATE
+
+    _write(
+        home / ".verbix" / "config.yaml",
+        f"model: openrouter/qwen/qwen-max\n"
+        f"worker_model: openrouter/deepseek/deepseek-v3\n"
+        f"max_tokens: 4096\n"
+        f"worker_max_tokens: 8192\n"
+        f"workspace: {custom_ws}\n"
+        f"show_thoughts: true\n"
+        f"show_worker_turns: true\n",
+    )
+    cfg = load_config()
+    assert cfg["model"] == "openrouter/qwen/qwen-max"
+    assert cfg["worker_model"] == "openrouter/deepseek/deepseek-v3"
+    assert cfg["max_tokens"] == 4096
+    assert cfg["worker_max_tokens"] == 8192
+    assert cfg["show_thoughts"] is True
+    assert cfg["show_worker_turns"] is True
+
+    args = build_parser().parse_args([])
+    rt = build_runtime(args)
+    assert rt.workspace == custom_ws.resolve()
+    assert rt.worker_echo is True
+    assert rt.provider.config.model_name == "openrouter/qwen/qwen-max"
+    assert rt.provider.config.model_kwargs["max_tokens"] == 4096
+    assert rt.worker_model.config.model_name == "openrouter/deepseek/deepseek-v3"
+    assert rt.worker_model.config.model_kwargs["max_tokens"] == 8192
+
+
 def test_startup_retention_prunes_old_state_and_preserves_current_and_user_data(
     tmp_path, monkeypatch
 ):

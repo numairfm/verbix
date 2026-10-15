@@ -379,7 +379,10 @@ def build_foreground_agent(
         agent_cfg_dict.get("system_template") or DEFAULT_VERBIX_PROMPT,
         "" if runtime._custom_prompt else read_persona(runtime.workspace),
     )
-    from verbix.runtime.workers import describe_worker_tools
+    from verbix.runtime.workers import describe_worker_tools, generate_run_id
+
+    if not getattr(runtime, "run_id", None):
+        runtime.run_id = generate_run_id()
 
     runtime.worker_tool_names, runtime.worker_capabilities = describe_worker_tools(
         runtime.workspace

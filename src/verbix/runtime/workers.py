@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -119,12 +121,22 @@ def fail_runtime_task(runtime: Any, task_id: str, result: str) -> None:
             pass
 
 
+def generate_run_id() -> str:
+    """Generates a unique per-run ID from the run's start time and a random hex suffix."""
+    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    return f"{ts}_{secrets.token_hex(4)}"
+
+
 async def spawn_worker(runtime: Any, objective: str) -> str:
     """Spawns an independent background worker with full workspace tools."""
     prune_spills(Path.home() / ".verbix" / "logs")
+    run_id = getattr(runtime, "run_id", None)
+    if not run_id:
+        run_id = generate_run_id()
+        runtime.run_id = run_id
     runtime._task_counter += 1
     task_id = f"task-{runtime._task_counter}"
-    scratch_dir = Path.home() / ".verbix" / "tasks" / task_id
+    scratch_dir = Path.home() / ".verbix" / "tasks" / run_id / task_id
     scratch_dir.mkdir(parents=True, exist_ok=True)
 
     raw_worker_cfg = _load_worker_yaml_dict()

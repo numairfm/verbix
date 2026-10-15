@@ -137,9 +137,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--voice-mode",
-        choices=("continuous", "ptt"),
-        default="continuous",
-        help="Voice interaction mode (default: continuous — hands-free conversation; ptt — push-to-talk).",
+        choices=("ptt", "continuous"),
+        default="ptt",
+        help="Voice interaction mode (default: ptt — push-to-talk; continuous — experimental hands-free mode, headset recommended).",
     )
     parser.add_argument(
         "--stt-model",
@@ -492,7 +492,7 @@ async def async_main(args: argparse.Namespace) -> int:
         printer = CliPrinter(show_thoughts=getattr(args, "show_thoughts", False))
         pipeline, tts, sink = _build_voice_pipeline(runtime, args, printer=printer)
 
-        voice_mode = getattr(args, "voice_mode", "continuous")
+        voice_mode = getattr(args, "voice_mode", "ptt")
         sys.stdout.write(
             f"verbix voice mode: {voice_mode} (model: {args.model}, workspace: {runtime.workspace})\n"
         )
@@ -504,6 +504,7 @@ async def async_main(args: argparse.Namespace) -> int:
             )
         else:
             sys.stdout.write(
+                "Note: A headset or headphones are recommended in continuous mode to avoid speaker bleed.\n"
                 "Continuous Mode: Press [Enter] once to start hands-free session, then speak.\n"
                 "Verbix replies and automatically listens for your next turn.\n"
                 "Press [Enter] again to close session. Type 'exit' or 'quit' to end.\n\n"

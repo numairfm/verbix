@@ -22,11 +22,16 @@ receptionist and background workers. [spoken when idle]
 ```bash
 uv run verbix                          # interactive text REPL
 uv run verbix "do X in background"      # one-shot (waits for workers, then exits)
-uv run verbix --voice                   # push-to-talk voice loop (Enter to record)
+uv run verbix --voice                   # push-to-talk voice mode (default; Enter to start/stop)
+uv run verbix --voice --voice-mode continuous  # experimental hands-free voice mode (headset recommended)
 uv run verbix --serve                   # daemon on ~/.local/share/verbix/verbix.sock
 uv run verbix --serve --voice           # daemon with voice pipeline attached
 uv run verbix --toggle                  # send mic toggle to a running daemon
 ```
+
+Voice modes (`--voice-mode`):
+- **`ptt` (default, primary)**: Push-to-talk. Press Enter (or run `verbix --toggle`) to start recording, speak, and press Enter again to transcribe and submit. Pressing Enter while Verbix is speaking interrupts playback immediately and starts recording; interrupted announcements are never re-spoken automatically and fold into your next turn's context.
+- **`continuous` (experimental, frozen)**: Hands-free VAD-driven listening with WebRTC acoustic echo cancellation (`pywebrtc-audio`) and Silero VAD endpointing. Because open speakers and background media can bleed into the microphone, a headset or headphones are recommended.
 
 Useful flags: `--model`, `--receptionist-model`, `--worker-model`, `--workspace`,
 `--max-tokens`, `--show-thoughts`, `--system-prompt`, `--socket-path`.

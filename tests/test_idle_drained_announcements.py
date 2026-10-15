@@ -227,3 +227,112 @@ async def test_status_tool_marks_only_inspected_completed_task_heard(tmp_path):
     assert rt.ledger.get("task-1").delivery == "heard"
     assert rt.ledger.get("task-2").delivery == "pending"
 
+
+@pytest.mark.asyncio
+async def test_ptt_interrupted_announcement_with_short_capture_is_not_retried_and_folds_into_next_turn(
+    tmp_path,
+):
+    from verbix.voice.base import MockAudioSink, MockTextToSpeech
+    from verbix.voice.pipeline import VoicePipeline
+    from verbix.voice.player import AudioPlayer
+
+    announcer_calls = 0
+    seen_fg_prompts: list[str] = []
+    provider = MagicMock()
+
+    async def fake_stream(messages, tools=None, **kw):
+        nonlocal announcer_calls
+        last_msg = messages[-1].content if messages else ""
+        if "[Present these completed findings" in last_msg:
+            announcer_calls += 1
+            yield ProviderTextDelta(
+                text="Long announcement sentence one. Long announcement sentence two."
+            )
+            yield ProviderFinish(reason="stop")
+        else:
+            seen_fg_prompts.append(last_msg)
+            yield ProviderTextDelta(text="Here is the folded result and your answer.")
+            yield ProviderFinish(reason="stop")
+
+    provider.stream = fake_stream
+    rt = Runtime(workspace=tmp_path, provider=provider)
+    sink = MockAudioSink(playback_delay=0.25)
+    player = AudioPlayer(tts=MockTextToSpeech(), sink=sink)
+
+    class ShortThenRealSTT:
+        def __init__(self):
+            self.Transcripts = ["", "", "", "", "What did it find?"]
+
+        async def transcribe(self, audio_bytes: bytes) -> str:
+            return self.Transcripts.pop(0) if self.Transcripts else ""
+
+    class FakePTTCapture:
+        sample_rate = 16000
+        is_recording = False
+        on_chunk = None
+
+        async def start_recording(self):
+            self.is_recording = True
+
+        async def stop_recording(self) -> bytes:
+            self.is_recording = False
+            return b"\x01\x00" * 1600
+
+    pipeline = VoicePipeline(
+        runtime=rt,
+        stt=ShortThenRealSTT(),
+        player=player,
+        capture=FakePTTCapture(),
+    )
+
+    # PTT-only pipeline must not initialize continuous-only EchoCanceller
+    assert pipeline._aec is None
+
+    # 1. Task finishes while idle -> announcement starts playing
+    rt.ledger.register_task("task-1", "Check workspace")
+    rt._on_task_finished("task-1", "Workspace has 5 files.")
+    for _ in range(30):
+        if pipeline.turn_output.is_playing:
+            break
+        await asyncio.sleep(0.01)
+    assert pipeline.turn_output.is_playing is True
+    assert announcer_calls == 1
+
+    # 2. User presses Enter to interrupt announcement -> starts PTT recording
+    r1 = await pipeline.toggle()
+    assert r1["action"] == "interrupted_and_recording"
+    assert pipeline.turn_output.is_playing is False
+
+    # 3. User presses Enter immediately -> capture too short ("No speech detected"), floor goes IDLE.
+    # Repeat 3 more times (4 empty captures total). Announcement MUST NOT replay!
+    r2 = await pipeline.toggle()
+    assert r2["action"] == "idle"
+    await asyncio.sleep(0.05)
+    assert announcer_calls == 1
+
+    for _ in range(3):
+        await pipeline.toggle()  # start recording
+        res_stop = await pipeline.toggle()  # stop recording -> empty transcript -> IDLE
+        assert res_stop["action"] == "idle"
+        await asyncio.sleep(0.05)
+
+    assert announcer_calls == 1
+    assert rt.ledger.get("task-1").announce_attempts == 1
+    assert rt.ledger.get("task-1").delivery == "pending"
+
+    # 4. Next real PTT turn folds the interrupted announcement's result into foreground context and marks it heard!
+    sink.playback_delay = 0.01
+    await pipeline.toggle()  # start recording
+    r_real = await pipeline.toggle()  # stop recording -> "What did it find?"
+    assert r_real["action"] == "processing"
+    if pipeline._active_voice_task:
+        await pipeline._active_voice_task
+
+    assert len(seen_fg_prompts) == 1
+    assert "Workspace has 5 files." in seen_fg_prompts[0]
+    assert rt.ledger.get("task-1").delivery == "heard"
+    assert announcer_calls == 1
+    assert pipeline._aec is None
+    await rt.aclose()
+
+

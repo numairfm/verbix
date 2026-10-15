@@ -341,3 +341,11 @@ def test_voice_cli_sigint_exits_cleanly_without_threadpool_hang_or_traceback(tmp
             proc.stdin.close()
 
 
+def test_cli_voice_mode_defaults_to_ptt():
+    from verbix.cli import build_parser
+
+    args = build_parser().parse_args(["--voice"])
+    assert args.voice_mode == "ptt"
+
+
+

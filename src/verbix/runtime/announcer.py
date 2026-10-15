@@ -150,13 +150,17 @@ async def drain_pending_announcements(runtime: Any) -> None:
         batch: list[tuple[str, str, str]] = []
         for tid, res in list(runtime._pending_announcements):
             entry = ledger.get(tid) if ledger is not None else None
-            if entry is not None and entry.delivery != "pending":
+            if entry is not None and (
+                entry.delivery != "pending" or getattr(entry, "announce_attempts", 0) >= 1
+            ):
                 runtime._pending_announcements[:] = [
                     (t, r) for t, r in runtime._pending_announcements if t != tid
                 ]
                 continue
             status = entry.status if entry is not None else "completed"
             if res.strip():
+                if entry is not None:
+                    entry.announce_attempts = getattr(entry, "announce_attempts", 0) + 1
                 batch.append((tid, res.strip(), status))
             else:
                 runtime._pending_announcements[:] = [
@@ -179,35 +183,26 @@ async def drain_pending_announcements(runtime: Any) -> None:
             + "\n\n".join(items)
         )
         announced_ok = False
-        final_text = ""
-        try:
-            final_text = await runtime.submit(prompt, runtime.wake_output, agent=runtime.announcer)
-            last_handle = getattr(runtime, "_last_turn_handle", None)
-            turn_completed = (
-                getattr(last_handle, "completed", True) if last_handle is not None else True
-            )
-            was_interrupted = (
-                bool(getattr(runtime.floor, "interrupt_requested", False))
-                or bool(getattr(runtime.floor, "user_speaking", False))
-                or not turn_completed
-            )
-            if final_text and not was_interrupted:
-                announced_ok = True
-                if ledger is not None:
-                    for task_id, _, _ in batch:
-                        ledger.mark_heard(task_id)
-                for task_id, res, status in batch:
-                    runtime.foreground.messages.append(
-                        {"role": "user", "content": f"[Task '{task_id}' {status}]: {res}"}
-                    )
-                runtime.foreground.messages.append({"role": "assistant", "content": final_text})
-        finally:
-            if not announced_ok:
-                existing_ids = {t for t, _ in runtime._pending_announcements}
-                for tid, res, _ in reversed(batch):
-                    entry = ledger.get(tid) if ledger is not None else None
-                    if (entry is None or entry.delivery == "pending") and tid not in existing_ids:
-                        runtime._pending_announcements.insert(0, (tid, res))
+        final_text = await runtime.submit(prompt, runtime.wake_output, agent=runtime.announcer)
+        last_handle = getattr(runtime, "_last_turn_handle", None)
+        turn_completed = (
+            getattr(last_handle, "completed", True) if last_handle is not None else True
+        )
+        was_interrupted = (
+            bool(getattr(runtime.floor, "interrupt_requested", False))
+            or bool(getattr(runtime.floor, "user_speaking", False))
+            or not turn_completed
+        )
+        if final_text and not was_interrupted:
+            announced_ok = True
+            if ledger is not None:
+                for task_id, _, _ in batch:
+                    ledger.mark_heard(task_id)
+            for task_id, res, status in batch:
+                runtime.foreground.messages.append(
+                    {"role": "user", "content": f"[Task '{task_id}' {status}]: {res}"}
+                )
+            runtime.foreground.messages.append({"role": "assistant", "content": final_text})
 
         if announced_ok and runtime.on_wake:
             wake_res = runtime.on_wake(final_text)

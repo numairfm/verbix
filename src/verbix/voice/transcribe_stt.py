@@ -351,11 +351,13 @@ class TranscribeSTT:
         sample_rate: int = 16000,
         on_endpoint: Any | None = None,
     ) -> TranscribeSession:
-        """Opens an incremental session that buffers audio and finalizes in one clean pass."""
-        from verbix.voice.sherpa_vad import SileroSegmenter
+        """Opens a transcription session (raw buffer for PTT; Silero VAD spans when on_endpoint is set)."""
+        seg = None
+        if on_endpoint is not None:
+            from verbix.voice.sherpa_vad import SileroSegmenter
 
-        seg = SileroSegmenter(sample_rate=sample_rate)
-        seg.ensure_loaded()
+            seg = SileroSegmenter(sample_rate=sample_rate)
+            seg.ensure_loaded()
         return TranscribeSession(
             stt=self,
             segmenter=seg,

@@ -13,6 +13,7 @@ class TaskEntry:
     finished_at: float | None = None
     result_summary: str = ""
     delivery: str = "pending"
+    announce_attempts: int = 0
 
 
 class TaskLedger:

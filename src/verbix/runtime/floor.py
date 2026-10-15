@@ -27,6 +27,7 @@ class FloorArbiter:
         self._lock = asyncio.Lock()
         self.interrupt_requested = False
         self.user_speaking = False
+        self.continuous_mode = False
         self.on_change = on_change
 
     @property
@@ -87,7 +88,9 @@ class FloorArbiter:
             try:
                 yield self
             finally:
-                if prev == FloorState.LISTENING or self._state == FloorState.LISTENING:
+                if (
+                    prev == FloorState.LISTENING or self._state == FloorState.LISTENING
+                ) and not self.user_speaking:
                     self.set_state(FloorState.LISTENING)
                 else:
                     self.set_state(FloorState.IDLE)

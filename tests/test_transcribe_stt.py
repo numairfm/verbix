@@ -175,3 +175,22 @@ async def test_transcribe_session_drops_pre_speech_noise_outside_vad_spans():
     assert sess2.is_speech_detected is True
 
 
+def test_ptt_open_session_without_on_endpoint_does_not_initialize_silero_vad(
+    tmp_path, monkeypatch
+):
+    import verbix.voice.sherpa_vad as vad_mod
+    from verbix.voice.transcribe_stt import TranscribeSTT
+
+    def _forbid_vad(*a, **k):
+        raise AssertionError("SileroSegmenter must not be initialized for PTT open_session(on_endpoint=None)")
+
+    monkeypatch.setattr(vad_mod, "SileroSegmenter", _forbid_vad)
+
+    stt = object.__new__(TranscribeSTT)
+    stt.sample_rate = 16000
+    sess = stt.open_session(sample_rate=16000, on_endpoint=None)
+    assert sess._segmenter is None
+    assert sess._uses_spans is False
+
+
+

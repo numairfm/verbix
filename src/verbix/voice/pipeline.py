@@ -40,12 +40,7 @@ class VoicePipeline:
         self.player = player
         self.capture = capture or PTTCapture()
         self.printer = printer
-        if aec is not None:
-            self.aec = aec
-        else:
-            from verbix.voice.aec import EchoCanceller
-
-            self.aec = EchoCanceller(stream_delay_ms=20)
+        self._aec = aec
         self._speech_output = SpeechOutput(
             player.tts,
             player.sink,
@@ -69,9 +64,25 @@ class VoicePipeline:
         self._dump_turn = 0
         self._dump_buf = bytearray()
 
+    @property
+    def aec(self) -> Any:
+        if self._aec is None:
+            from verbix.voice.aec import EchoCanceller
+
+            self._aec = EchoCanceller(stream_delay_ms=20)
+        return self._aec
+
+    @aec.setter
+    def aec(self, value: Any) -> None:
+        self._aec = value
+
     def _feed_speaker_reference(self, audio: bytes) -> None:
-        """Feeds outgoing speaker audio into AEC reference with explicit format parameters."""
-        if hasattr(self, "aec") and callable(getattr(self.aec, "feed_reference", None)):
+        """Feeds outgoing speaker audio into AEC reference when continuous AEC is active."""
+        if (
+            self._is_continuous_active
+            and self.aec is not None
+            and callable(getattr(self.aec, "feed_reference", None))
+        ):
             sink = getattr(self.player, "sink", None)
             rate = int(getattr(sink, "sample_rate", 24000) or 24000)
             fmt = str(getattr(sink, "audio_format", "f32") or "f32")
@@ -162,6 +173,7 @@ class VoicePipeline:
         if hasattr(self.runtime, "floor"):
             from verbix.runtime.floor import FloorState
 
+            self.runtime.floor.continuous_mode = True
             self.runtime.floor.set_state(FloorState.LISTENING)
 
         await self._setup_turn_listening()
@@ -206,6 +218,7 @@ class VoicePipeline:
         if hasattr(self.runtime, "floor"):
             from verbix.runtime.floor import FloorState
 
+            self.runtime.floor.continuous_mode = False
             if hasattr(self.runtime.floor, "set_user_speaking"):
                 self.runtime.floor.set_user_speaking(False)
             self.runtime.floor.set_state(FloorState.IDLE)
@@ -288,10 +301,15 @@ class VoicePipeline:
         self._gate_stt_feed = False
         self._dump_buf = bytearray()
 
-        if hasattr(self.runtime, "floor") and not getattr(
-            self.runtime.floor, "is_speaking", False
-        ):
-            self.runtime.floor.set_state(FloorState.LISTENING)
+        if self._is_continuous_active and self.aec is None:
+            from verbix.voice.aec import EchoCanceller
+
+            self.aec = EchoCanceller(stream_delay_ms=20)
+        if hasattr(self.runtime, "floor"):
+            if self._is_continuous_active:
+                self.runtime.floor.continuous_mode = True
+            if not getattr(self.runtime.floor, "is_speaking", False):
+                self.runtime.floor.set_state(FloorState.LISTENING)
 
         self._speech_endpoint_event.clear()
         if self._live_stt is not None:
@@ -515,8 +533,9 @@ class VoicePipeline:
             self.capture.on_chunk = self._live_stt.feed
 
         # Warm provider connection in background so TLS handshake is complete before speech ends
-        if hasattr(self.runtime, "provider") and hasattr(self.runtime.provider, "warm"):
-            asyncio.create_task(self.runtime.provider.warm())
+        warm_fn = getattr(getattr(self.runtime, "provider", None), "warm", None)
+        if asyncio.iscoroutinefunction(warm_fn):
+            asyncio.create_task(warm_fn())
 
         await self.capture.start_recording()
 
@@ -594,8 +613,8 @@ class VoicePipeline:
                 pass
             return await self.runtime.submit(user_text, self._speech_output)
         finally:
-            if hasattr(self, "aec") and callable(getattr(self.aec, "reset", None)):
-                self.aec.reset()
+            if self._aec is not None and callable(getattr(self._aec, "reset", None)):
+                self._aec.reset()
             if self.runtime is not None and hasattr(self.runtime, "floor"):
                 if self._is_continuous_active and not getattr(
                     self.runtime.floor, "is_speaking", False

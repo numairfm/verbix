@@ -106,22 +106,34 @@ build_announcer = build_announcer_agent
 def _snapshot_foreground_history(runtime: Any) -> list:
     """Copy foreground chat history for the tool-less announcer.
 
-    Same ordered prefix (cache-friendly), fresh objects (the announcer's
-    turn cannot mutate foreground entries mid-stream). Snapshot, never a
-    live alias: the foreground may append while the announcer streams.
-    Tool calls and tool-role messages are stripped: they are internal
-    mechanics, and their syntax is what a tool-less model imitates into
-    phantom tool use. User/assistant prose (including task findings)
-    passes through untouched.
+    Replaces the foreground system message with the announcer's own system
+    prompt and strips tool-call mechanics and empty tool-only assistant turns.
     """
     foreground = getattr(runtime, "foreground", None)
+    announcer = getattr(runtime, "announcer", None)
+    announcer_cfg = getattr(announcer, "config", None)
+    announcer_sys = getattr(announcer_cfg, "system_template", None) or getattr(
+        announcer_cfg, "system_prompt", None
+    )
+    render_fn = getattr(announcer, "_render_template", None)
+    if announcer_sys and callable(render_fn):
+        announcer_sys = render_fn(announcer_sys)
+
     messages = getattr(foreground, "messages", None) or []
     clean: list = []
     for m in messages:
         if not isinstance(m, dict):
             clean.append(m)
             continue
-        if m.get("role") == "tool":
+        role = m.get("role")
+        if role == "tool":
+            continue
+        if role == "system":
+            clean.append(
+                {"role": "system", "content": announcer_sys or m.get("content", "")}
+            )
+            continue
+        if role == "assistant" and not (m.get("content") or "").strip():
             continue
         c = dict(m)
         c.pop("tool_calls", None)

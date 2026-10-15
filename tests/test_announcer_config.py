@@ -239,3 +239,48 @@ async def test_drain_pending_announcements_marks_ledger_heard(tmp_path):
     await drain_pending_announcements(rt)
     assert rt.ledger.get("task-1").delivery == "heard"
 
+
+@pytest.mark.asyncio
+async def test_snapshot_uses_announcer_system_prompt_and_drops_empty_tool_call_assistant_turns():
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from verbix.runtime.announcer import drain_pending_announcements
+
+    foreground_messages = [
+        {"role": "system", "content": "FOREGROUND_ONLY_SYSTEM_PROMPT"},
+        {"role": "user", "content": "open einstein wiki"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "1", "function": {"name": "spawn", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "1", "content": "task-1 started in background."},
+        {"role": "assistant", "content": "Opening it up."},
+    ]
+    announcer = SimpleNamespace(
+        messages=[],
+        config=SimpleNamespace(system_template="ANNOUNCER_ONLY_SYSTEM_PROMPT"),
+    )
+    runtime = SimpleNamespace(
+        floor=SimpleNamespace(is_idle=True),
+        _drain_lock=asyncio.Lock(),
+        _pending_announcements=[("task-1", "Opened 'https://en.wikipedia.org/wiki/Albert_Einstein'.")],
+        _request_grounding=lambda: "[grounding]",
+        announcer=announcer,
+        foreground=SimpleNamespace(messages=foreground_messages),
+        wake_output=None,
+        on_wake=None,
+        submit=AsyncMock(return_value="Einstein's Wikipedia page is open."),
+    )
+    await drain_pending_announcements(runtime)
+    msgs = runtime.announcer.messages
+    assert msgs[0] == {"role": "system", "content": "ANNOUNCER_ONLY_SYSTEM_PROMPT"}
+    assert "FOREGROUND_ONLY_SYSTEM_PROMPT" not in [m.get("content") for m in msgs]
+    assert [m.get("content") for m in msgs] == [
+        "ANNOUNCER_ONLY_SYSTEM_PROMPT",
+        "open einstein wiki",
+        "Opening it up.",
+    ]
+

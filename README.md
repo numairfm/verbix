@@ -44,7 +44,7 @@ environment wins over file values (`cli.py:29`).
 | `VERBIX_MODEL` (`OPENROUTER_MODEL` fallback) | `openrouter/google/gemini-3.5-flash-lite` | foreground + default worker model |
 | `VERBIX_BASE_URL` | provider default | custom endpoint |
 | `VERBIX_MAX_TOKENS` | `2048` | per-turn completion cap |
-| `VERBIX_RETENTION_DAYS` | `14` | days to retain tool logs, screenshots, and task scratch directories |
+| `VERBIX_RETENTION_DAYS` | `14` | days to retain tool logs and screenshots |
 
 Agent tuning lives in `src/verbix/agent/config/`: `voice.yaml`
 (foreground), `worker.yaml` / `swe_worker.yaml` (background workers).
@@ -53,15 +53,13 @@ Agent tuning lives in `src/verbix/agent/config/`: `voice.yaml`
 
 Verbix separates its machine-global state under `~/.verbix/` from project workspaces:
 
-- **Workspace (`--workspace`, default `~/.verbix/workspace/`)**: The working directory exposed read-write to background workers (`read`, `write`, `edit`, `grep`, `glob`, and sandboxed `bash`). When `--workspace` is omitted, Verbix uses a dedicated `~/.verbix/workspace/` directory rather than the current working directory, and refuses `$HOME` or `/` unless explicitly overridden with `--workspace`. Project workspaces never receive a `.verbix/` subdirectory.
-- **Global state (`~/.verbix/`)**: Holds user configuration, persona, credentials, runtime scratch data, and user-managed STT models:
+- **Workspace (`--workspace`, default `~/.verbix/workspace/`)**: The working directory exposed read-write to background workers (`read`, `write`, `edit`, `grep`, `glob`, and sandboxed `bash`). When `--workspace` is omitted, Verbix uses a dedicated `~/.verbix/workspace/` directory rather than the current working directory, and refuses `$HOME` or `/` unless explicitly overridden with `--workspace`. Workers run directly in the configured workspace (with `HOME` inside `bwrap` also set to the workspace) and never create separate task or sandbox home folders.
+- **Global state (`~/.verbix/`)**: Holds user configuration, persona, credentials, runtime logs/screenshots, and user-managed STT models:
   - `config.yaml`, `PERSONA.md`, `auth.json`: global configuration, persona overlay, and provider credentials (never touched by retention cleanup).
-  - `tasks/<run-id>/<task-id>/`: per-run, per-task private scratch directories (`run-id` combines the run's UTC start timestamp and a random hex suffix, e.g. `20261015_143022_a1b2c3d4`, keeping logical IDs like `task-1` stable without cross-run collisions). Created lazily only when a worker writes to its scratch path.
   - `logs/`: spilled full outputs from truncated tool observations (`tool_<hex>`).
   - `screenshots/`: rolling PNG archive of captured desktop screenshots (`screenshot_<timestamp>.png`).
-  - `home/`: isolated scratch `HOME` mounted into `bwrap` for sandboxed `bash`, created lazily only when `bash` runs.
   - `voice/stt/models/`: user-managed speech-to-text (STT) GGUF models, organized by model ID (default `~/.verbix/voice/stt/models/nemotron-gguf/`), created lazily when provisioned or migrated.
-- **Retention policy**: At startup, Verbix deletes entries under `~/.verbix/logs/`, `~/.verbix/screenshots/`, and `~/.verbix/tasks/` (including empty task directories and legacy flat `tasks/task-*` directories) older than `retention_days` (default `14` days; configurable via `retention_days` in `~/.verbix/config.yaml`, `VERBIX_RETENTION_DAYS`, or `--retention-days`). The active run's `tasks/<run-id>/` directory is never deleted, and retention cleanup never touches `config.yaml`, `PERSONA.md`, `auth.json`, workspace contents, or voice models.
+- **Retention policy**: At startup, Verbix deletes entries under `~/.verbix/logs/` and `~/.verbix/screenshots/` older than `retention_days` (default `14` days; configurable via `retention_days` in `~/.verbix/config.yaml`, `VERBIX_RETENTION_DAYS`, or `--retention-days`). Retention cleanup never touches `config.yaml`, `PERSONA.md`, `auth.json`, workspace contents, or voice models.
 
 Config precedence: builtin defaults < `~/.verbix/config.yaml` < env < CLI flags. `config.yaml` is optional and accepts `provider`, `stt_model`, and `retention_days`:
 

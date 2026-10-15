@@ -127,7 +127,7 @@ class Runtime:
             on_wake=on_wake,
         )
         build_announcer(self, fg_config)
-        prune_state(retention_days=self.retention_days, current_run_id=self.run_id)
+        prune_state(retention_days=self.retention_days)
 
     @property
     def is_idle(self) -> bool:

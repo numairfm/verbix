@@ -99,7 +99,7 @@ def resolve_contained_path(path_str: str, workspace: Path) -> Path:
         raise ValueError(f"refusing to access secret file '{path_str}'")
     allowed_roots = [
         norm_workspace,
-        *((Path.home() / ".verbix" / sub).resolve() for sub in ("tasks", "logs", "screenshots")),
+        *((Path.home() / ".verbix" / sub).resolve() for sub in ("logs", "screenshots")),
     ]
     for root in allowed_roots:
         try:

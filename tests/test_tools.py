@@ -347,7 +347,7 @@ async def test_bash_tool_is_always_sandboxed_allowlists_env_and_masks_dotenv(
 
 
 @pytest.mark.asyncio
-async def test_sandbox_home_and_task_dirs_created_lazily(
+async def test_sandbox_targets_workspace_without_home_or_tasks_dirs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     from verbix.tools.sandbox import build_sandbox_env, probe_sandbox
@@ -357,27 +357,21 @@ async def test_sandbox_home_and_task_dirs_created_lazily(
     ws = tmp_path / "ws"
     ws.mkdir()
 
-    # Building the sandbox env dictionary alone does not create ~/.verbix/home
     env = build_sandbox_env(ws)
-    assert env["HOME"] == str(home / ".verbix" / "home")
+    assert env["HOME"] == str(ws.resolve())
     assert not (home / ".verbix" / "home").exists()
+    assert not (home / ".verbix" / "tasks").exists()
 
     status = probe_sandbox()
     if not status.available:
         pytest.skip(f"Sandbox unavailable: {status.reason}")
 
-    # Executing sandboxed bash creates ~/.verbix/home when needed, but not ~/.verbix/tasks
     cfg = SandboxConfig(workspace=ws, allow_network=False)
-    res = await execute_sandboxed("echo ok", cfg)
+    res = await execute_sandboxed("echo 'in-ws' > created.txt && pwd", cfg)
     assert res.exit_code == 0
-    assert (home / ".verbix" / "home").is_dir()
+    assert (ws / "created.txt").read_text(encoding="utf-8").strip() == "in-ws"
+    assert not (home / ".verbix" / "home").exists()
     assert not (home / ".verbix" / "tasks").exists()
-
-    # Writing to a task scratch path from bash lazily creates and binds that task dir
-    scratch = home / ".verbix" / "tasks" / "20261015_120000_abcdef01" / "task-1"
-    res2 = await execute_sandboxed(f"echo 'bash-scratch' > {scratch}/out.txt", cfg)
-    assert res2.exit_code == 0
-    assert (scratch / "out.txt").read_text(encoding="utf-8").strip() == "bash-scratch"
 
 
 def test_worker_registry_omits_bash_when_sandbox_unavailable(

@@ -21,7 +21,7 @@ _CONFIG_TEMPLATE = """\
 # VERBIX_PROVIDER env and CLI flags win over this file.
 # Uncomment and edit to set a default speech-to-text model:
 # stt_model: /path/to/model.gguf
-# Days to retain old tool logs, screenshots, and task directories (default: 14):
+# Days to retain old tool logs and screenshots (default: 14):
 # retention_days: 14
 """
 
@@ -202,9 +202,8 @@ def prune_state(
     verbix_root: Path | None = None,
     *,
     retention_days: float = DEFAULT_RETENTION_DAYS,
-    current_run_id: str | None = None,
 ) -> None:
-    """Deletes expired tool logs, screenshots, and task directories under ~/.verbix."""
+    """Deletes expired tool logs and screenshots under ~/.verbix."""
     try:
         root = (verbix_root or (Path.home() / ".verbix")).resolve()
         if not root.is_dir() or root.is_symlink():
@@ -214,7 +213,7 @@ def prune_state(
 
     cutoff = time.time() - (float(retention_days) * 86400.0)
 
-    for sub in ("logs", "screenshots", "tasks"):
+    for sub in ("logs", "screenshots"):
         target_dir = root / sub
         try:
             if not target_dir.is_dir() or target_dir.is_symlink():
@@ -224,8 +223,6 @@ def prune_state(
             continue
 
         for entry in entries:
-            if sub == "tasks" and current_run_id and entry.name == current_run_id:
-                continue
             mtime = _effective_mtime(entry)
             if mtime is not None and mtime < cutoff:
                 _remove_state_entry(entry, target_dir)

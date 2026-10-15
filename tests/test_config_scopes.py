@@ -371,38 +371,7 @@ def test_startup_retention_prunes_old_state_and_preserves_current_and_user_data(
     _age_tree(old_shot, old_ts)
     _age_tree(fresh_shot, fresh_ts)
 
-    # 3. Tasks: old per-run, old empty per-run, old flat task-1, old empty flat task-2,
-    #    malformed dir name, fresh per-run, and current run
-    old_run = vroot / "tasks" / "20260901_120000_deadbeef"
-    _write(old_run / "task-1" / "out.txt", "old run data")
-    _age_tree(old_run, old_ts)
-
-    old_empty_run = vroot / "tasks" / "20260902_120000_cafebabe" / "task-1"
-    old_empty_run.mkdir(parents=True)
-    _age_tree(old_empty_run.parent, old_ts)
-
-    old_flat_task = vroot / "tasks" / "task-1"
-    _write(old_flat_task / "flat.txt", "legacy flat task")
-    _age_tree(old_flat_task, old_ts)
-
-    old_empty_flat = vroot / "tasks" / "task-2"
-    old_empty_flat.mkdir(parents=True)
-    _age_tree(old_empty_flat, old_ts)
-
-    malformed_old = vroot / "tasks" / "not_a_valid_timestamp_$$$"
-    _write(malformed_old / "data.txt", "malformed")
-    _age_tree(malformed_old, old_ts)
-
-    fresh_run = vroot / "tasks" / "20261014_120000_11223344"
-    _write(fresh_run / "task-1" / "out.txt", "fresh run")
-    _age_tree(fresh_run, fresh_ts)
-
-    current_run_id = "20261015_120000_current1"
-    current_run_dir = vroot / "tasks" / current_run_id
-    _write(current_run_dir / "task-1" / "active.txt", "active")
-    _age_tree(current_run_dir, very_old_ts)
-
-    # 4. Protected user data (aged 60 days, must NEVER be deleted)
+    # 3. Protected user data (aged 60 days, must NEVER be deleted)
     cfg_file = _write(vroot / "config.yaml", "provider: openrouter\n")
     persona_file = _write(vroot / "PERSONA.md", "Calm voice.\n")
     auth_file = _write(vroot / "auth.json", "{}\n")
@@ -419,7 +388,7 @@ def test_startup_retention_prunes_old_state_and_preserves_current_and_user_data(
     ):
         _age_tree(protected, very_old_ts)
 
-    prune_state(vroot, retention_days=14, current_run_id=current_run_id)
+    prune_state(vroot, retention_days=14)
 
     assert not old_log_file.exists()
     assert not old_log_dir.exists()
@@ -428,14 +397,6 @@ def test_startup_retention_prunes_old_state_and_preserves_current_and_user_data(
 
     assert not old_shot.exists()
     assert fresh_shot.is_file()
-
-    assert not old_run.exists()
-    assert not old_empty_run.parent.exists()
-    assert not old_flat_task.exists()
-    assert not old_empty_flat.exists()
-    assert not malformed_old.exists()
-    assert (fresh_run / "task-1" / "out.txt").is_file()
-    assert (current_run_dir / "task-1" / "active.txt").is_file()
 
     assert cfg_file.is_file()
     assert persona_file.is_file()
@@ -447,7 +408,7 @@ def test_startup_retention_prunes_old_state_and_preserves_current_and_user_data(
     clean_home = tmp_path / "clean_home"
     _patch_home(monkeypatch, clean_home)
     rt = Runtime(workspace=ws, provider=MagicMock())
-    assert rt.run_id
+    assert rt.workspace == ws.resolve()
     assert not (clean_home / ".verbix" / "logs").exists()
     assert not (clean_home / ".verbix" / "screenshots").exists()
     assert not (clean_home / ".verbix" / "tasks").exists()

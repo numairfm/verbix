@@ -221,8 +221,7 @@ def test_worker_task_get_status_excludes_system_prompt_and_scaffolding():
 
 
 @pytest.mark.asyncio
-async def test_spawn_configures_scratch_dir_lazily_without_creating_empty_dirs(tmp_path, monkeypatch):
-    import re
+async def test_spawn_runs_in_workspace_without_tasks_or_home_dirs(tmp_path, monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace
 
@@ -230,8 +229,6 @@ async def test_spawn_configures_scratch_dir_lazily_without_creating_empty_dirs(t
     from verbix.runtime.ledger import TaskLedger
     from verbix.runtime.worker import WorkerTask
     from verbix.runtime.workers import spawn_worker
-    from verbix.tools.base import ToolContext
-    from verbix.tools.write import FileWriteTool
 
     started = []
     monkeypatch.setattr(WorkerTask, "start", lambda self: started.append(self.id))
@@ -252,14 +249,8 @@ async def test_spawn_configures_scratch_dir_lazily_without_creating_empty_dirs(t
     monkeypatch.setattr(Path, "home", lambda: home)
     task_id = await spawn_worker(runtime, "do stuff")
     assert task_id == "task-1"
-    assert hasattr(runtime, "run_id") and re.fullmatch(
-        r"\d{8}_\d{6}_[0-9a-f]{6,12}", runtime.run_id
-    )
-    scratch = home / ".verbix" / "tasks" / runtime.run_id / "task-1"
     worker_agent = runtime.tasks["task-1"].session
-    assert worker_agent.extra_template_vars["scratch_dir"] == str(scratch)
-    # Directories must not exist merely because a task or run was initialized
-    assert not scratch.exists()
+    assert "scratch_dir" not in worker_agent.extra_template_vars
     assert not (home / ".verbix" / "tasks").exists()
     assert not (home / ".verbix" / "home").exists()
     assert not (tmp_path / ".verbix").exists()
@@ -268,65 +259,8 @@ async def test_spawn_configures_scratch_dir_lazily_without_creating_empty_dirs(t
         (a[0], a[1]) for a in broadcasted
     ]
 
-    # Writing to scratch_dir lazily creates the directory
-    res = await FileWriteTool().execute(
-        {"path": str(scratch / "artifact.txt"), "content": "created on write"},
-        ToolContext(workspace=tmp_path),
-    )
-    assert not res.is_error
-    assert scratch.is_dir()
-    assert (scratch / "artifact.txt").read_text(encoding="utf-8") == "created on write"
 
-
-@pytest.mark.asyncio
-async def test_separate_runs_use_unique_per_run_task_directories(tmp_path, monkeypatch):
-    import re
-    from pathlib import Path
-
-    from verbix.runtime.runtime import Runtime
-    from verbix.runtime.worker import WorkerTask
-    from verbix.tools.base import ToolContext
-    from verbix.tools.write import FileWriteTool
-
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
-    monkeypatch.setattr(WorkerTask, "start", lambda self: None)
-
-    ws = tmp_path / "ws"
-    ws.mkdir()
-    rt1 = Runtime(workspace=ws, provider=MagicMock())
-    rt2 = Runtime(workspace=ws, provider=MagicMock())
-
-    assert rt1.run_id != rt2.run_id
-    assert re.fullmatch(r"\d{8}_\d{6}_[0-9a-f]{6,12}", rt1.run_id)
-    assert re.fullmatch(r"\d{8}_\d{6}_[0-9a-f]{6,12}", rt2.run_id)
-
-    t1 = await rt1.spawn("first run task")
-    t2 = await rt2.spawn("second run task")
-    assert t1 == "task-1"
-    assert t2 == "task-1"
-
-    scratch1 = Path(rt1.tasks["task-1"].session.extra_template_vars["scratch_dir"])
-    scratch2 = Path(rt2.tasks["task-1"].session.extra_template_vars["scratch_dir"])
-    assert scratch1 == tmp_path / "home" / ".verbix" / "tasks" / rt1.run_id / "task-1"
-    assert scratch2 == tmp_path / "home" / ".verbix" / "tasks" / rt2.run_id / "task-1"
-    assert scratch1 != scratch2
-
-    # Tools can write to both without collision
-    write_tool = FileWriteTool()
-    ctx = ToolContext(workspace=ws)
-    res1 = await write_tool.execute(
-        {"path": str(scratch1 / "out.txt"), "content": "from run 1"}, ctx
-    )
-    res2 = await write_tool.execute(
-        {"path": str(scratch2 / "out.txt"), "content": "from run 2"}, ctx
-    )
-    assert not res1.is_error
-    assert not res2.is_error
-    assert (scratch1 / "out.txt").read_text(encoding="utf-8") == "from run 1"
-    assert (scratch2 / "out.txt").read_text(encoding="utf-8") == "from run 2"
-
-
-def test_worker_instance_template_renders_scratch_dir(tmp_path):
+def test_worker_instance_template_renders_without_scratch_dir():
     import yaml
 
     from verbix.agent.worker import WorkerAgent, WorkerConfig
@@ -340,13 +274,13 @@ def test_worker_instance_template_renders_scratch_dir(tmp_path):
         / "worker.yaml"
     )
     agent_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["agent"]
+    assert "scratch_dir" not in agent_cfg["instance_template"]
     agent = WorkerAgent(
         model=None, env=None, tools=None, config=WorkerConfig(**agent_cfg)
     )
-    agent.extra_template_vars["scratch_dir"] = str(tmp_path)
     out = agent._render_template(agent_cfg["instance_template"], task="do stuff")
     assert "do stuff" in out
-    assert str(tmp_path) in out
+    assert "private scratch directory" not in out.lower()
 
 
 @pytest.mark.asyncio

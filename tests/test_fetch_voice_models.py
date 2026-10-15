@@ -138,3 +138,35 @@ def test_fetch_raises_on_checksum_mismatch(tmp_path):
         mod, "_download_file", side_effect=fake_download
     ), pytest.raises(RuntimeError, match="(?i)checksum mismatch"):
         mod.fetch_models(root=tmp_path)
+
+
+def test_fetch_bundled_tts_provisions_package_dir_only(tmp_path, monkeypatch):
+    import scripts.fetch_voice_models as mod
+
+    test_content = b"bundled tts asset"
+    test_sha = hashlib.sha256(test_content).hexdigest()
+    fake_tts_spec = {
+        "id": "supertonic-int8",
+        "license": "BigScience OpenRAIL-M",
+        "repo": "csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11",
+        "files": {
+            "tts.json": (test_sha, len(test_content)),
+            "voice.bin": (test_sha, len(test_content)),
+        },
+    }
+    dest = tmp_path / "pkg_tts"
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+
+    def fake_download(url, dest_path):
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(test_content)
+
+    with patch.object(mod, "BUNDLED_TTS_SPEC", fake_tts_spec), patch.object(
+        mod, "_download_file", side_effect=fake_download
+    ):
+        out = mod.fetch_bundled_tts(dest_dir=dest)
+        assert out == dest.resolve()
+        assert (dest / "tts.json").read_bytes() == test_content
+        assert (dest / "voice.bin").read_bytes() == test_content
+        assert not (home / ".verbix").exists()

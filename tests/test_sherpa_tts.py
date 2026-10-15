@@ -165,3 +165,27 @@ def test_bundled_tts_dir_resolves_package_resource_not_user_home(tmp_path, monke
     assert legacy_tts_file.is_file()
     assert legacy_tts_file.read_bytes() == b"legacy-user-file"
 
+
+def test_build_backend_rejects_missing_or_empty_bundled_tts_assets(tmp_path):
+    from verbix._build_backend import REQUIRED_TTS_FILES, verify_bundled_tts_assets
+
+    incomplete_dir = tmp_path / "tts" / "supertonic-int8"
+    incomplete_dir.mkdir(parents=True)
+    (incomplete_dir / "tts.json").write_text("{}", encoding="utf-8")
+    (incomplete_dir / "LICENSE").write_text("license", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="fetch_voice_models.py --bundle-tts") as exc:
+        verify_bundled_tts_assets(incomplete_dir)
+    assert "duration_predictor.int8.onnx" in str(exc.value)
+
+    # Empty (0-byte) file is also rejected
+    for fname in REQUIRED_TTS_FILES:
+        (incomplete_dir / fname).write_bytes(b"ok")
+    (incomplete_dir / "vocoder.int8.onnx").write_bytes(b"")
+    with pytest.raises(RuntimeError, match="vocoder.int8.onnx"):
+        verify_bundled_tts_assets(incomplete_dir)
+
+    # All files present and non-empty passes
+    (incomplete_dir / "vocoder.int8.onnx").write_bytes(b"ok")
+    verify_bundled_tts_assets(incomplete_dir)
+

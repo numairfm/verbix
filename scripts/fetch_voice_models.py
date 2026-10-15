@@ -175,14 +175,34 @@ def fetch_models(root: Path | None = None) -> dict[str, Path]:
 
 def fetch_bundled_tts(dest_dir: Path | None = None) -> Path:
     """Provisions the bundled Supertonic INT8 TTS assets into the application package resource tree."""
+    import shutil
+
     from verbix.voice.sherpa_tts import bundled_tts_dir
 
     target_dir = (dest_dir or bundled_tts_dir()).resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    # Seed from local legacy cache if verified, avoiding redundant network fetches on fresh checkouts
+    legacy_dir = default_root() / "models" / BUNDLED_TTS_SPEC["id"]
+    if dest_dir is None and legacy_dir.is_dir():
+        for filename, file_spec in BUNDLED_TTS_SPEC["files"].items():
+            expected_sha = (
+                file_spec["sha256"] if isinstance(file_spec, dict) else file_spec[0]
+            )
+            dest_file = target_dir / filename
+            legacy_file = legacy_dir / filename
+            if (
+                not (dest_file.is_file() and _verify_sha256(dest_file, expected_sha))
+                and legacy_file.is_file()
+                and _verify_sha256(legacy_file, expected_sha)
+            ):
+                shutil.copy2(legacy_file, dest_file)
+
     _ensure_spec_files(BUNDLED_TTS_SPEC, target_dir)
     return target_dir
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Fetch user-managed STT voice models (or provision bundled TTS assets) for Verbix"
     )
@@ -195,15 +215,21 @@ def main() -> int:
     parser.add_argument(
         "--bundle-tts",
         action="store_true",
-        help="Also verify/populate the bundled application TTS assets under src/verbix/voice/tts/supertonic-int8",
+        help="Provision only the bundled application TTS assets under src/verbix/voice/tts/supertonic-int8",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    root = (args.root or default_root()).resolve()
-    sys.stdout.write(f"Provisioning STT models into {root / 'stt' / 'models'} ...\n")
     try:
-        paths = fetch_models(root=root)
+        paths: dict[str, Path] = {}
         if args.bundle_tts:
+            sys.stdout.write("Provisioning bundled TTS assets ...\n")
+            paths["bundled_tts_dir"] = fetch_bundled_tts()
+        else:
+            root = (args.root or default_root()).resolve()
+            sys.stdout.write(
+                f"Provisioning STT models into {root / 'stt' / 'models'} ...\n"
+            )
+            paths = fetch_models(root=root)
             paths["bundled_tts_dir"] = fetch_bundled_tts()
         sys.stdout.write("Models provisioned successfully:\n")
         for k, p in paths.items():

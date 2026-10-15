@@ -96,11 +96,11 @@ def probe_sandbox(allow_network: bool = False) -> SandboxStatus:
 
 
 def build_sandbox_env(workspace: Path) -> dict[str, str]:
-    """Builds the child environment strictly from an allowlist (PATH, LANG, TERM + workspace HOME)."""
+    """Builds the child environment strictly from an allowlist (PATH, LANG, TERM + ephemeral /tmp HOME)."""
     env: dict[str, str] = {
         "PATH": "/usr/bin:/bin",
         "LANG": "C.UTF-8",
-        "HOME": str(workspace.resolve()),
+        "HOME": "/tmp",
         "TMPDIR": "/tmp",
         "HISTFILE": "/dev/null",
         "PAGER": "cat",

@@ -358,7 +358,7 @@ async def test_sandbox_targets_workspace_without_home_or_tasks_dirs(
     ws.mkdir()
 
     env = build_sandbox_env(ws)
-    assert env["HOME"] == str(ws.resolve())
+    assert env["HOME"] == "/tmp"
     assert not (home / ".verbix" / "home").exists()
     assert not (home / ".verbix" / "tasks").exists()
 
@@ -367,9 +367,13 @@ async def test_sandbox_targets_workspace_without_home_or_tasks_dirs(
         pytest.skip(f"Sandbox unavailable: {status.reason}")
 
     cfg = SandboxConfig(workspace=ws, allow_network=False)
-    res = await execute_sandboxed("echo 'in-ws' > created.txt && pwd", cfg)
+    res = await execute_sandboxed(
+        "mkdir -p ~/.cache && echo 'junk' > ~/.cache/x && echo 'in-ws' > created.txt",
+        cfg,
+    )
     assert res.exit_code == 0
     assert (ws / "created.txt").read_text(encoding="utf-8").strip() == "in-ws"
+    assert not (ws / ".cache").exists()
     assert not (home / ".verbix" / "home").exists()
     assert not (home / ".verbix" / "tasks").exists()
 

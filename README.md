@@ -53,7 +53,7 @@ Agent tuning lives in `src/verbix/agent/config/`: `voice.yaml`
 
 Verbix separates its machine-global state under `~/.verbix/` from project workspaces:
 
-- **Workspace (`--workspace`, default `~/.verbix/workspace/`)**: The working directory exposed read-write to background workers (`read`, `write`, `edit`, `grep`, `glob`, and sandboxed `bash`). When `--workspace` is omitted, Verbix uses a dedicated `~/.verbix/workspace/` directory rather than the current working directory, and refuses `$HOME` or `/` unless explicitly overridden with `--workspace`. Workers run directly in the configured workspace (with `HOME` inside `bwrap` also set to the workspace) and never create separate task or sandbox home folders.
+- **Workspace (`--workspace`, default `~/.verbix/workspace/`)**: The working directory exposed read-write to background workers (`read`, `write`, `edit`, `grep`, `glob`, and sandboxed `bash`). When `--workspace` is omitted, Verbix uses a dedicated `~/.verbix/workspace/` directory rather than the current working directory, and refuses `$HOME` or `/` unless explicitly overridden with `--workspace`. Workers run directly in the configured workspace (with `HOME=/tmp` on `bwrap`'s ephemeral `tmpfs` so CLI tool dotfile noise vanishes on exit) and never create separate task or sandbox home folders.
 - **Global state (`~/.verbix/`)**: Holds user configuration, persona, credentials, runtime logs/screenshots, and user-managed STT models:
   - `config.yaml`, `PERSONA.md`, `auth.json`: global configuration, persona overlay, and provider credentials (never touched by retention cleanup).
   - `logs/`: spilled full outputs from truncated tool observations (`tool_<hex>`).

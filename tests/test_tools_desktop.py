@@ -544,10 +544,15 @@ async def test_memory_tool_remember_list_forget_dedup_and_security(
     assert read_memory() == ""
     assert "<!--" in memory_file().read_text(encoding="utf-8")
 
-    # 7. Refuses symlinked MEMORY.md
+    # 7. Refuses symlinked MEMORY.md (and ensure_global_scaffold does not write through dangling symlink)
     memory_file().unlink()
+    dangling_target = tmp_path / "dangling_outside.txt"
+    memory_file().symlink_to(dangling_target)
+    ensure_global_scaffold()
+    assert not dangling_target.exists()
     outside = tmp_path / "outside.txt"
     outside.write_text("- secret", encoding="utf-8")
+    memory_file().unlink()
     memory_file().symlink_to(outside)
     assert read_memory() == ""
     r_sym = await tool.execute({"action": "list"}, ctx)
@@ -560,9 +565,11 @@ async def test_runtime_dynamically_grounds_memory_across_foreground_announcer_an
 ):
     from verbix.runtime.announcer import _snapshot_foreground_history
     from verbix.runtime.runtime import Runtime
+    from verbix.runtime.worker import WorkerTask
     from verbix.tools.memory import MemoryTool
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(WorkerTask, "start", lambda self: None)
     ws = tmp_path / "ws"
     ws.mkdir()
 
@@ -592,6 +599,22 @@ async def test_runtime_dynamically_grounds_memory_across_foreground_announcer_an
     assert "Preferred browser is Helium" in rt.foreground.messages[0]["content"]
     snap = _snapshot_foreground_history(rt)
     assert "Preferred browser is Helium" in snap[0]["content"]
+
+    # Spawned worker also receives USER MEMORY in its system prompt
+    task_id = await rt.spawn("open browser")
+    worker_sys = rt.tasks[task_id].session.config.system_template
+    assert "Preferred browser is Helium" in worker_sys
+
+    # Forget removes memory from foreground and announcer grounding immediately
+    await MemoryTool().execute(
+        {"action": "forget", "text": "Helium"},
+        ToolContext(workspace=ws),
+    )
+    rt._refresh_grounded_prompts()
+    assert "# USER MEMORY" not in rt.system_prompt
+    assert "Preferred browser is Helium" not in rt.foreground.messages[0]["content"]
+    snap_after = _snapshot_foreground_history(rt)
+    assert "Preferred browser is Helium" not in snap_after[0]["content"]
 
 
 def test_app_catalog_discovers_linux_xdg_desktop_entries_and_filters_hidden_or_terminal(

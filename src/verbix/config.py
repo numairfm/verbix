@@ -146,7 +146,7 @@ def ensure_global_scaffold() -> None:
     persona_file = root / "PERSONA.md"
     mem_file = root / "MEMORY.md"
     if marker.is_file():
-        if not mem_file.exists():
+        if not mem_file.exists() and not mem_file.is_symlink():
             mem_file.write_text(_MEMORY_TEMPLATE, encoding="utf-8")
         if not cfg_file.is_file() or not persona_file.is_file():
             logger.warning(
@@ -155,11 +155,11 @@ def ensure_global_scaffold() -> None:
             )
         return
     root.mkdir(parents=True, exist_ok=True)
-    if not cfg_file.is_file():
+    if not cfg_file.is_file() and not cfg_file.is_symlink():
         cfg_file.write_text(_CONFIG_TEMPLATE, encoding="utf-8")
-    if not persona_file.is_file():
+    if not persona_file.is_file() and not persona_file.is_symlink():
         persona_file.write_text(_PERSONA_TEMPLATE, encoding="utf-8")
-    if not mem_file.is_file():
+    if not mem_file.is_file() and not mem_file.is_symlink():
         mem_file.write_text(_MEMORY_TEMPLATE, encoding="utf-8")
     marker.touch(exist_ok=True)
 

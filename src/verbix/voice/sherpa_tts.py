@@ -42,6 +42,13 @@ def _resolve_threads() -> int:
     return min(4, max(1, n))
 
 
+def bundled_tts_dir() -> Path:
+    """Resolves the packaged Supertonic INT8 TTS resource directory inside verbix.voice."""
+    from importlib.resources import files
+
+    return Path(str(files("verbix.voice").joinpath("tts", "supertonic-int8"))).resolve()
+
+
 def _resample_f32(samples: np.ndarray, from_rate: int, to_rate: int) -> np.ndarray:
     """Resamples float32 mono audio using linear interpolation."""
     if from_rate == to_rate or samples.size == 0:
@@ -105,10 +112,7 @@ class SherpaTTS:
         if self.is_loaded:
             return
 
-        from scripts.fetch_voice_models import default_root
-
-        root = default_root()
-        target_dir = self.model_dir or (root / "models" / "supertonic-int8")
+        target_dir = self.model_dir or bundled_tts_dir()
 
         missing = [f for f in REQUIRED_FILES if not (target_dir / f).is_file()]
         if missing:

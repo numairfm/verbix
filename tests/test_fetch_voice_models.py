@@ -31,22 +31,15 @@ def test_default_root_fallback(monkeypatch, tmp_path):
     assert mod.default_root() == local_dir
 
 
-def test_fetch_downloads_and_verifies_files(tmp_path):
+def test_fetch_downloads_and_verifies_stt_files_only(tmp_path):
     import scripts.fetch_voice_models as mod
 
     assert "vad" not in mod.MANIFEST
+    assert "tts" not in mod.MANIFEST
     test_content = b"valid model content"
     test_sha = hashlib.sha256(test_content).hexdigest()
 
     fake_manifest = {
-        "tts": {
-            "id": "supertonic-int8",
-            "license": "BigScience OpenRAIL-M",
-            "repo": "csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11",
-            "files": {
-                "test_file.bin": (test_sha, len(test_content)),
-            },
-        },
         "asr": {
             "id": "nemotron-gguf",
             "license": "OpenMDW-1.1",
@@ -68,19 +61,56 @@ def test_fetch_downloads_and_verifies_files(tmp_path):
         mod, "_download_file", side_effect=fake_download
     ):
         paths = mod.fetch_models(root=tmp_path)
-        assert (tmp_path / "models" / "supertonic-int8" / "test_file.bin").exists()
-        assert (tmp_path / "models" / "nemotron-gguf" / "test_asr.gguf").exists()
-        assert (tmp_path / "models" / "provenance.json").exists()
-        assert paths["tts_dir"] == tmp_path / "models" / "supertonic-int8"
-        assert paths["asr_dir"] == tmp_path / "models" / "nemotron-gguf"
+        assert (tmp_path / "stt" / "models" / "nemotron-gguf" / "test_asr.gguf").exists()
+        assert (tmp_path / "stt" / "models" / "provenance.json").exists()
+        assert not (tmp_path / "models" / "supertonic-int8").exists()
+        assert paths["asr_dir"] == tmp_path / "stt" / "models" / "nemotron-gguf"
+        assert "tts_dir" not in paths
         assert "vad_dir" not in paths
 
         # Check provenance json
-        prov = json.loads((tmp_path / "models" / "provenance.json").read_text())
-        assert prov["tts"]["id"] == "supertonic-int8"
-        assert prov["tts"]["license"] == "BigScience OpenRAIL-M"
+        prov = json.loads((tmp_path / "stt" / "models" / "provenance.json").read_text())
         assert prov["asr"]["id"] == "nemotron-gguf"
+        assert prov["asr"]["license"] == "OpenMDW-1.1"
+        assert "tts" not in prov
         assert "vad" not in prov
+
+
+def test_fetch_migrates_existing_legacy_stt_without_redownload(tmp_path):
+    import scripts.fetch_voice_models as mod
+
+    test_content = b"already downloaded nemotron gguf"
+    test_sha = hashlib.sha256(test_content).hexdigest()
+
+    legacy_file = tmp_path / "models" / "nemotron-gguf" / "test_asr.gguf"
+    legacy_file.parent.mkdir(parents=True, exist_ok=True)
+    legacy_file.write_bytes(test_content)
+
+    fake_manifest = {
+        "asr": {
+            "id": "nemotron-gguf",
+            "license": "OpenMDW-1.1",
+            "repo": "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
+            "files": {
+                "test_asr.gguf": (test_sha, len(test_content)),
+            },
+        },
+    }
+
+    downloaded_urls = []
+
+    def fake_download(url, dest_path):
+        downloaded_urls.append(url)
+
+    with patch.object(mod, "MANIFEST", fake_manifest), patch.object(
+        mod, "_download_file", side_effect=fake_download
+    ):
+        paths = mod.fetch_models(root=tmp_path)
+        canonical_file = tmp_path / "stt" / "models" / "nemotron-gguf" / "test_asr.gguf"
+        assert canonical_file.is_file()
+        assert canonical_file.read_bytes() == test_content
+        assert downloaded_urls == []
+        assert paths["asr_dir"] == tmp_path / "stt" / "models" / "nemotron-gguf"
 
 
 def test_fetch_raises_on_checksum_mismatch(tmp_path):

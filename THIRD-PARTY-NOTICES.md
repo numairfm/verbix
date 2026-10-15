@@ -9,17 +9,18 @@ This file covers heavy model and media assets by name.
 - **sherpa-onnx** (Apache-2.0) — next-gen Kaldi / ONNX Runtime speech framework
   by k2-fsa (<https://github.com/k2-fsa/sherpa-onnx>).
 
-## TTS Voice Engine
+## TTS Voice Engine (Bundled Application Resource)
 
 - **Supertonic 3** (BigScience OpenRAIL-M) — on-device flow-matching multilingual
   TTS by Supertone Inc. (<https://huggingface.co/Supertone/supertonic-3>).
-  - Pinned checkpoint: `csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11` (INT8 dynamic quantization).
+  - Pinned checkpoint: `csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11` (INT8 dynamic quantization),
+    bundled as a fixed application resource under `verbix/voice/tts/supertonic-int8/`.
   - Use-based restrictions of the OpenRAIL-M license apply to downstream use and distribution
-    (see `LICENSES/bigscience-openrail-m.md` and `DISTRIBUTION-TERMS.md`).
+    (see `LICENSES/bigscience-openrail-m.md`, `src/verbix/voice/tts/supertonic-int8/LICENSE`, and `DISTRIBUTION-TERMS.md`).
   - Voice preset: `M1` (provisional pending voice-likeness clearance for commercial release;
     personality rights are tracked separately).
 
-## STT Speech Recognition
+## STT Speech Recognition (User-Managed Models)
 
 - **transcribe.cpp** (MIT) — C/C++ speech-to-text library built on ggml,
   with Python bindings by handy-computer (<https://github.com/handy-computer/transcribe.cpp>).
@@ -31,7 +32,7 @@ This file covers heavy model and media assets by name.
   streaming FastConformer-RNN-T ASR by NVIDIA, GGUF conversion by
   handy-computer (<https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf>).
   - Pinned checkpoint: `nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf` (496 MB,
-    fetched by `scripts/fetch_voice_models.py`).
+    fetched by `scripts/fetch_voice_models.py` into `~/.verbix/voice/stt/models/nemotron-gguf/`).
   - License source: model-card tag `License: openmdw-1.1`, inherited from the
     base model `nvidia/nemotron-3.5-asr-streaming-0.6b` (governing terms
     OpenMDW-1.1, <https://openmdw.ai/license/1-1/>); ready for commercial use.

@@ -41,8 +41,64 @@ def _has_min_voiced_duration(
     return (voiced * _VOICED_FRAME_S) >= min_voiced_s
 
 
+def default_voice_root() -> Path:
+    """Resolves target voice root directory: VERBIX_VOICE_DIR -> ./voice-runtime -> ~/.verbix/voice."""
+    if env := os.environ.get("VERBIX_VOICE_DIR"):
+        return Path(env).resolve()
+    local = Path.cwd() / "voice-runtime"
+    if local.is_dir():
+        return local.resolve()
+    return (Path.home() / ".verbix" / "voice").resolve()
+
+
+def default_stt_models_dir(voice_root: Path | None = None) -> Path:
+    """Returns the canonical user-managed STT models directory (<voice_root>/stt/models)."""
+    root = (voice_root or default_voice_root()).resolve()
+    return root / "stt" / "models"
+
+
+def migrate_legacy_stt_model(
+    voice_root: Path | None = None, model_id: str = "nemotron-gguf"
+) -> Path | None:
+    """Safely migrates a legacy STT model from <root>/models/<id> to <root>/stt/models/<id>.
+
+    Never overwrites an existing destination file and never touches sibling TTS files.
+    """
+    root = (voice_root or default_voice_root()).resolve()
+    legacy_dir = root / "models" / model_id
+    target_dir = root / "stt" / "models" / model_id
+    try:
+        if not legacy_dir.is_dir() or legacy_dir.is_symlink():
+            return None
+        files = [
+            f
+            for f in sorted(legacy_dir.iterdir())
+            if f.is_file() and not f.is_symlink()
+        ]
+        if not files:
+            return None
+        for src in files:
+            dest = target_dir / src.name
+            if dest.exists():
+                continue
+            target_dir.mkdir(parents=True, exist_ok=True)
+            src.replace(dest)
+        try:
+            if not any(legacy_dir.iterdir()):
+                legacy_dir.rmdir()
+        except OSError:
+            pass
+        if target_dir.is_dir():
+            for f in sorted(target_dir.glob("*.gguf")):
+                if f.is_file():
+                    return f.resolve()
+    except OSError:
+        return None
+    return None
+
+
 def find_default_stt_model(workspace: Path | None = None) -> Path:
-    """Discovers the STT model path from env, ~/.verbix/models, or default root."""
+    """Discovers the STT model path from env, ~/.verbix/voice/stt/models, or legacy fallbacks."""
     if env := os.environ.get("VERBIX_STT_MODEL"):
         return Path(env).resolve()
 
@@ -52,19 +108,41 @@ def find_default_stt_model(workspace: Path | None = None) -> Path:
             if f.is_file():
                 return f.resolve()
 
-    from scripts.fetch_voice_models import default_root
+    root = default_voice_root()
+    user_voice_root = (Path.home() / ".verbix" / "voice").resolve()
+    if root == user_voice_root:
+        migrate_legacy_stt_model(root)
 
-    root = default_root() / "models"
-    nemotron_dir = root / "nemotron-gguf"
-    if nemotron_dir.is_dir():
-        for f in nemotron_dir.glob("*.gguf"):
-            return f.resolve()
+    stt_models = default_stt_models_dir(root)
+    canonical_nemotron = stt_models / "nemotron-gguf"
+    if canonical_nemotron.is_dir():
+        for f in sorted(canonical_nemotron.glob("*.gguf")):
+            if f.is_file():
+                return f.resolve()
 
-    if root.is_dir():
-        for f in root.glob("**/*.gguf"):
-            return f.resolve()
+    if stt_models.is_dir():
+        for f in sorted(stt_models.glob("**/*.gguf")):
+            if f.is_file():
+                return f.resolve()
 
-    return root / "nemotron-gguf" / "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf"
+    # Compatibility fallback for legacy or custom VERBIX_VOICE_DIR layouts
+    legacy_models = root / "models"
+    legacy_nemotron = legacy_models / "nemotron-gguf"
+    if legacy_nemotron.is_dir():
+        for f in sorted(legacy_nemotron.glob("*.gguf")):
+            if f.is_file():
+                return f.resolve()
+
+    if legacy_models.is_dir():
+        for f in sorted(legacy_models.glob("**/*.gguf")):
+            if f.is_file():
+                return f.resolve()
+
+    return (
+        stt_models
+        / "nemotron-gguf"
+        / "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf"
+    )
 
 
 class TranscribeSTT:

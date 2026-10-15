@@ -142,5 +142,119 @@ def test_global_verbix_models_scope_used(tmp_path, monkeypatch):
     assert find_default_stt_model(workspace=ws).resolve() == global_model.resolve()
 
 
+def test_canonical_stt_model_path_under_voice_stt_models_and_lazy(tmp_path, monkeypatch):
+    from verbix.voice.transcribe_stt import TranscribeSTT, find_default_stt_model
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.delenv("VERBIX_VOICE_DIR", raising=False)
+    monkeypatch.delenv("VERBIX_STT_MODEL", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    default_path = find_default_stt_model()
+    expected = (
+        home
+        / ".verbix"
+        / "voice"
+        / "stt"
+        / "models"
+        / "nemotron-gguf"
+        / "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf"
+    )
+    assert default_path == expected.resolve()
+    # Must not create ~/.verbix/voice/stt/models merely on lookup
+    assert not (home / ".verbix" / "voice").exists()
+
+    # When model exists at canonical path, TranscribeSTT loads it
+    expected.parent.mkdir(parents=True, exist_ok=True)
+    expected.write_bytes(b"nemotron-weights")
+    _fake_transcribe_cpp(monkeypatch)
+    stt = TranscribeSTT()
+    assert stt.model_path == expected.resolve()
+
+
+def test_legacy_stt_model_migrates_safely_without_touching_legacy_tts(
+    tmp_path, monkeypatch
+):
+    from verbix.voice.transcribe_stt import find_default_stt_model
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.delenv("VERBIX_VOICE_DIR", raising=False)
+    monkeypatch.delenv("VERBIX_STT_MODEL", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    legacy_stt = (
+        home
+        / ".verbix"
+        / "voice"
+        / "models"
+        / "nemotron-gguf"
+        / "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf"
+    )
+    legacy_stt.parent.mkdir(parents=True, exist_ok=True)
+    legacy_stt.write_bytes(b"legacy-nemotron-gguf")
+
+    legacy_tts = home / ".verbix" / "voice" / "models" / "supertonic-int8" / "tts.json"
+    legacy_tts.parent.mkdir(parents=True, exist_ok=True)
+    legacy_tts.write_text('{"legacy": true}', encoding="utf-8")
+
+    resolved = find_default_stt_model()
+    canonical = (
+        home
+        / ".verbix"
+        / "voice"
+        / "stt"
+        / "models"
+        / "nemotron-gguf"
+        / "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf"
+    ).resolve()
+    assert resolved == canonical
+    assert canonical.is_file()
+    assert canonical.read_bytes() == b"legacy-nemotron-gguf"
+    # Legacy TTS files must not be deleted
+    assert legacy_tts.is_file()
+
+
+def test_legacy_stt_migration_never_overwrites_existing_destination(
+    tmp_path, monkeypatch
+):
+    from verbix.voice.transcribe_stt import find_default_stt_model
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.delenv("VERBIX_VOICE_DIR", raising=False)
+    monkeypatch.delenv("VERBIX_STT_MODEL", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    canonical = (
+        home
+        / ".verbix"
+        / "voice"
+        / "stt"
+        / "models"
+        / "nemotron-gguf"
+        / "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf"
+    )
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    canonical.write_bytes(b"new-canonical-weights")
+
+    legacy = (
+        home
+        / ".verbix"
+        / "voice"
+        / "models"
+        / "nemotron-gguf"
+        / "nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf"
+    )
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_bytes(b"old-legacy-weights")
+
+    resolved = find_default_stt_model()
+    assert resolved == canonical.resolve()
+    assert canonical.read_bytes() == b"new-canonical-weights"
+    assert legacy.read_bytes() == b"old-legacy-weights"
+
+
 
 

@@ -122,3 +122,46 @@ def test_trim_silence_removes_dead_air():
     assert len(trimmed) < len(raw)
     assert len(trimmed) == 1000 + 2 * 240
 
+
+def test_bundled_tts_dir_resolves_package_resource_not_user_home(tmp_path, monkeypatch):
+    from verbix.voice.sherpa_tts import REQUIRED_FILES, SherpaTTS, bundled_tts_dir
+
+    empty_home = tmp_path / "empty_home"
+    empty_home.mkdir()
+    unrelated_cwd = tmp_path / "unrelated_cwd"
+    unrelated_cwd.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: empty_home)
+    monkeypatch.chdir(unrelated_cwd)
+    monkeypatch.delenv("VERBIX_VOICE_DIR", raising=False)
+
+    bdir = bundled_tts_dir()
+    assert bdir.parts[-3:] == ("voice", "tts", "supertonic-int8")
+    assert not str(bdir).startswith(str(empty_home))
+    for fname in REQUIRED_FILES:
+        assert (bdir / fname).is_file(), f"Missing bundled TTS asset: {fname}"
+
+    # Legacy ~/.verbix/voice/models/supertonic-int8 must not be touched or deleted
+    legacy_tts_file = (
+        empty_home / ".verbix" / "voice" / "models" / "supertonic-int8" / "voice.bin"
+    )
+    legacy_tts_file.parent.mkdir(parents=True, exist_ok=True)
+    legacy_tts_file.write_bytes(b"legacy-user-file")
+
+    fake_module = types.ModuleType("sherpa_onnx")
+    fake_module.OfflineTts = MagicMock(return_value=MagicMock())
+    fake_module.OfflineTtsConfig = MagicMock()
+    fake_module.OfflineTtsModelConfig = MagicMock()
+    captured_supertonic = MagicMock()
+    fake_module.OfflineTtsSupertonicModelConfig = captured_supertonic
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", fake_module)
+
+    import asyncio
+
+    tts = SherpaTTS()
+    asyncio.run(tts.load())
+    assert tts.is_loaded
+    kwargs = captured_supertonic.call_args.kwargs
+    assert Path(kwargs["tts_json"]).parent == bdir
+    assert legacy_tts_file.is_file()
+    assert legacy_tts_file.read_bytes() == b"legacy-user-file"
+

@@ -22,6 +22,8 @@ scratch/
 # Local TTS runtime (helper binary + weights, built/fetched per machine)
 tts-runtime/
 voice-runtime/
+src/verbix/voice/tts/supertonic-int8/*.onnx
+src/verbix/voice/tts/supertonic-int8/*.bin
 
 # Local editor and IDE config
 .commandcode/

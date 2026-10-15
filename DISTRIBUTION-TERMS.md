@@ -8,7 +8,7 @@ travel with every copy.
 ## What binds
 
 - Asset: **Supertonic 3** TTS voice weights (package `sherpa-onnx-supertonic-3-tts-int8-2026-05-11`),
-  loaded in-process by the sherpa-onnx engine.
+  bundled with Verbix under `verbix/voice/tts/supertonic-int8/` and loaded in-process by the sherpa-onnx engine.
 - License: **BigScience OpenRAIL-M** (Supertone, Inc.), read 2026-10-09
   at <https://huggingface.co/Supertone/supertonic-3/blob/main/LICENSE>.
   Commercial use is allowed; the use restrictions apply and must be passed on.

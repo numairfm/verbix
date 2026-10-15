@@ -31,7 +31,7 @@ uv run verbix --toggle                  # send mic toggle to a running daemon
 Voice mode (`--voice`) uses push-to-talk: press Enter (or run `verbix --toggle`) to start recording, speak, and press Enter again to transcribe and submit. Pressing Enter while Verbix is speaking interrupts playback immediately and starts recording; interrupted announcements are never re-spoken automatically and fold into your next turn's context.
 
 Useful flags: `--model`, `--receptionist-model`, `--worker-model`, `--workspace`,
-`--max-tokens`, `--show-thoughts`, `--system-prompt`, `--socket-path`.
+`--max-tokens`, `--retention-days`, `--show-thoughts`, `--system-prompt`, `--socket-path`.
 
 ## Configuration
 
@@ -44,17 +44,30 @@ environment wins over file values (`cli.py:29`).
 | `VERBIX_MODEL` (`OPENROUTER_MODEL` fallback) | `openrouter/google/gemini-3.5-flash-lite` | foreground + default worker model |
 | `VERBIX_BASE_URL` | provider default | custom endpoint |
 | `VERBIX_MAX_TOKENS` | `2048` | per-turn completion cap |
+| `VERBIX_RETENTION_DAYS` | `14` | days to retain tool logs, screenshots, and task scratch directories |
 
 Agent tuning lives in `src/verbix/agent/config/`: `voice.yaml`
 (foreground), `worker.yaml` / `swe_worker.yaml` (background workers).
 
-### Global config and persona (`~/.verbix/`)
+### Global state (`~/.verbix/`) vs. workspaces
 
-All Verbix configuration, auth, persona, models, screenshots, task scratch directories, and tool spill logs live under `~/.verbix/` (never inside project workspaces):
-- Config precedence: builtin defaults < `~/.verbix/config.yaml` < env < CLI flags. `config.yaml` is optional and accepts `provider` and `stt_model`:
+Verbix separates its machine-global state under `~/.verbix/` from project workspaces:
+
+- **Workspace (`--workspace`, default `~/.verbix/workspace/`)**: The working directory exposed read-write to background workers (`read`, `write`, `edit`, `grep`, `glob`, and sandboxed `bash`). When `--workspace` is omitted, Verbix uses a dedicated `~/.verbix/workspace/` directory rather than the current working directory, and refuses `$HOME` or `/` unless explicitly overridden with `--workspace`. Project workspaces never receive a `.verbix/` subdirectory.
+- **Global state (`~/.verbix/`)**: Holds user configuration, persona, credentials, runtime scratch data, and user-managed STT models:
+  - `config.yaml`, `PERSONA.md`, `auth.json`: global configuration, persona overlay, and provider credentials (never touched by retention cleanup).
+  - `tasks/<run-id>/<task-id>/`: per-run, per-task private scratch directories (`run-id` combines the run's UTC start timestamp and a random hex suffix, e.g. `20261015_143022_a1b2c3d4`, keeping logical IDs like `task-1` stable without cross-run collisions). Created lazily only when a worker writes to its scratch path.
+  - `logs/`: spilled full outputs from truncated tool observations (`tool_<hex>`).
+  - `screenshots/`: rolling PNG archive of captured desktop screenshots (`screenshot_<timestamp>.png`).
+  - `home/`: isolated scratch `HOME` mounted into `bwrap` for sandboxed `bash`, created lazily only when `bash` runs.
+  - `voice/stt/models/`: user-managed speech-to-text (STT) GGUF models, organized by model ID (default `~/.verbix/voice/stt/models/nemotron-gguf/`), created lazily when provisioned or migrated.
+- **Retention policy**: At startup, Verbix deletes entries under `~/.verbix/logs/`, `~/.verbix/screenshots/`, and `~/.verbix/tasks/` (including empty task directories and legacy flat `tasks/task-*` directories) older than `retention_days` (default `14` days; configurable via `retention_days` in `~/.verbix/config.yaml`, `VERBIX_RETENTION_DAYS`, or `--retention-days`). The active run's `tasks/<run-id>/` directory is never deleted, and retention cleanup never touches `config.yaml`, `PERSONA.md`, `auth.json`, workspace contents, or voice models.
+
+Config precedence: builtin defaults < `~/.verbix/config.yaml` < env < CLI flags. `config.yaml` is optional and accepts `provider`, `stt_model`, and `retention_days`:
 
 ```yaml
 # stt_model: /path/to/model.gguf
+# retention_days: 14
 ```
 
 First run scaffolds `~/.verbix/` with a commented `config.yaml` and an empty `PERSONA.md`.
@@ -76,7 +89,12 @@ Provider selection: `--provider` flag > `VERBIX_PROVIDER` env > config `provider
 
 `--model` beats the entry model; `--api-key`/`--base-url` beat the entry key/base URL.
 
-Audio (`sounddevice`) and on-device voice inference are included in the default environment (`uv sync`). Voice mode uses Supertonic 3 INT8 for TTS (via sherpa-onnx) and Nemotron 3.5 ASR 0.6B GGUF for STT (via transcribe.cpp). Run `uv run scripts/fetch_voice_models.py` to download and verify models into `./voice-runtime` (`VERBIX_VOICE_DIR` overrides, `~/.verbix/voice` is the installed fallback). Attribution: `THIRD-PARTY-NOTICES.md`.
+### Voice models: user-managed STT vs. bundled TTS
+
+Audio (`sounddevice`) and on-device voice inference are included in the default environment (`uv sync`):
+- **STT (user-managed)**: Uses Nemotron 3.5 ASR 0.6B GGUF (via `transcribe.cpp`) or another user-selected GGUF model (`--stt-model`, `VERBIX_STT_MODEL`, or `stt_model` in `config.yaml`). Models live under `~/.verbix/voice/stt/models/<model-id>/` (`VERBIX_VOICE_DIR` or `./voice-runtime` overrides the voice root). Run `uv run scripts/fetch_voice_models.py` to download and verify the default Nemotron STT model.
+- **TTS (bundled application resource)**: Uses Supertonic 3 INT8 (via `sherpa-onnx`), packaged directly with the application under `verbix/voice/tts/supertonic-int8/` rather than stored as a user-managed model in `~/.verbix`. No first-run TTS download into `~/.verbix` is required.
+- **Upgrades and legacy files**: Existing Nemotron STT files at `~/.verbix/voice/models/nemotron-gguf/` are automatically migrated to `~/.verbix/voice/stt/models/nemotron-gguf/` (without overwriting any existing destination file or redownloading). Legacy TTS files under `~/.verbix/voice/models/supertonic-int8/` and `provenance.json` under `~/.verbix/voice/models/` are intentionally left untouched during upgrades; once you verify voice mode works with the new setup, you can safely delete `~/.verbix/voice/models/`. Attribution: `THIRD-PARTY-NOTICES.md`.
 
 ## Architecture
 

@@ -21,7 +21,6 @@ def test_worker_registry_has_main_tools():
         "app",
         "open",
         "system",
-        "timer",
         "memory",
         "notify",
     }

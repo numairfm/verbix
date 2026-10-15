@@ -17,7 +17,7 @@ agent:
 
     ## Command Execution Rules:
     - Prefer 'read'/'write'/'edit'/'grep'/'glob' for all file work — they behave identically on every OS and keep you inside the workspace. Use 'bash' only when no tool covers the job.
-    - Use 'app' to list, launch (optionally passing 'path' or 'paths' to open workspace files or http/https URLs in that app), or close desktop applications, 'open' to open one or more workspace files, folders, or http/https URLs in the default desktop application or a specific app (via 'app'), 'media' for media playback and system volume (passing 'player' such as 'spotify' when targeting a specific player), 'clipboard' for clipboard access (including reading copied images), 'system' to inspect host battery, CPU, memory, disk, network, and top processes, 'timer' to set, list, or cancel non-blocking countdown timers and reminders, 'memory' to save or remove durable user facts/preferences in ~/.verbix/MEMORY.md, and 'notify' to display a native desktop notification toast. 'bash' runs inside an isolated PID, DBus, and display sandbox (--unshare-pid) that cannot see or control host desktop processes, host network interfaces, or session DBus — never run ps, pgrep, pkill, playerctl, dbus-send, xdg-open, notify-send, or sleep in 'bash' to control apps, media, notifications, or timers. Once 'app', 'open', 'media', 'timer', 'memory', or 'notify' reports the verified state, conclude immediately.
+    - Use 'app' to list, launch (optionally passing 'path' or 'paths' to open workspace files or http/https URLs in that app), or close desktop applications, 'open' to open one or more workspace files, folders, or http/https URLs in the default desktop application or a specific app (via 'app'), 'media' for media playback and system volume (passing 'player' such as 'spotify' when targeting a specific player), 'clipboard' for clipboard access (including reading copied images), 'system' to inspect host battery, CPU, memory, disk, network, and top processes, 'memory' to save or remove durable user facts/preferences in ~/.verbix/MEMORY.md, and 'notify' to display a native desktop notification toast. 'bash' runs inside an isolated PID, DBus, and display sandbox (--unshare-pid) that cannot see or control host desktop processes, host network interfaces, or session DBus — never run ps, pgrep, pkill, playerctl, dbus-send, xdg-open, or notify-send in 'bash' to control apps, media, or notifications. Once 'app', 'open', 'media', 'memory', or 'notify' reports the verified state, conclude immediately.
     - 'read' opens workspace image files (jpg/png/gif/webp) — look at existing picture files with it instead of guessing from filenames or metadata.
     - Use 'screenshot' (arguments: {}) to capture and view the desktop display when asked to look at the screen, inspect visual layout, UI bugs, or error dialogs — the screenshot image is attached directly to the 'screenshot' result, so never call 'read' on a screenshot.
     - Use 'glob' to find files by pattern, and 'grep' to search code and file contents with line numbers.
@@ -41,7 +41,6 @@ agent:
     - app
     - open
     - system
-    - timer
     - memory
     - notify
     - bash
@@ -117,8 +116,8 @@ model:
     - Tool: edit
     - Arguments: {"path": "file.py", "old_str": "old", "new_str": "new"}
 
-    Use 'app', 'open', 'media', 'clipboard', 'system', 'timer', 'memory', or 'notify' for desktop and host operations:
-    - Tool: app / open / media / clipboard / system / timer / memory / notify
+    Use 'app', 'open', 'media', 'clipboard', 'system', 'memory', or 'notify' for desktop and host operations:
+    - Tool: app / open / media / clipboard / system / memory / notify
 
     Use 'bash' only for commands with no dedicated tool:
     - Tool: bash

@@ -32,7 +32,6 @@ _DEFAULT_WORKER_TOOLS = (
     "app",
     "open",
     "system",
-    "timer",
     "memory",
     "notify",
     "bash",

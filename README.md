@@ -120,7 +120,7 @@ Two layers. The agent layer does the work; the voice layer owns the floor.
  worker 1   worker 2   worker 3   tools: read/write/edit/grep/glob
                                           web_search/web_fetch/screenshot
                                           clipboard/media/app/open/system
-                                          timer/memory/notify + bash (bwrap)
+                                          memory/notify + bash (bwrap)
    └───────────┼───────────┘  (workers never see the chat —
                │ responses   only the spawn objective)
                ▼
@@ -184,7 +184,7 @@ STATE: IDLE
 | `runtime/floor.py` | `FloorArbiter`: `IDLE`/`LISTENING`/`SPEAKING` + interrupt flag |
 | `core/` | canonical messages/events, history repair |
 | `provider/` | streaming OpenAI-compatible SSE client, errors, event types |
-| `tools/` | `Tool`/`ToolContext`, `read`/`write`/`edit`/`grep`/`glob`, `web_search`/`web_fetch`, `screenshot`, `clipboard`/`media`/`app`/`open`/`system`/`timer`/`memory`/`notify`, `spawn`/`status`/`cancel`, and `bash` via mandatory bubblewrap (`bwrap`) |
+| `tools/` | `Tool`/`ToolContext`, `read`/`write`/`edit`/`grep`/`glob`, `web_search`/`web_fetch`, `screenshot`, `clipboard`/`media`/`app`/`open`/`system`/`memory`/`notify`, `spawn`/`status`/`cancel`, and `bash` via mandatory bubblewrap (`bwrap`) |
 | `voice/` | `pipeline`, `capture`, `transcribe_stt` (Nemotron ASR via transcribe.cpp), `sherpa_tts` (Supertonic TTS via sherpa-onnx), `player`, `output` (sentence streaming + two-tone 660 Hz / 880 Hz PTT earcons), `callback_sink`, `base` protocols + mocks |
 | `ipc/` | `server`/`client`/`protocol`: JSONL over Unix socket (with loopback TCP fallback on Windows), `ping/prompt/status/cancel/toggle`, runtime event fan-out |
 | `agent/` | agent core: `voice.py` (`VoiceAgent`), `worker.py` (`WorkerAgent`), `models/litellm_model.py`, `tools/registry.py`, `config/*.yaml` |
@@ -215,7 +215,7 @@ provisioned models via `uv run scripts/fetch_voice_models.py`.
 ## Platform support
 
 - **Linux (`x86_64`, `aarch64`)**: Supported tier. Requires system packages `bubblewrap` (`bwrap`, for mandatory worker `bash` sandboxing) and `libportaudio2` (`portaudio`, for `sounddevice` audio capture and playback).
-- **Windows (`amd64`) & macOS (`arm64`, `x86_64`)**: Experimental and untested by the maintainer. No sandbox backend is enabled on Windows or macOS, so the `bash` tool is automatically omitted from workers (with a startup notice on `stderr`), and workers operate using the 16 cross-platform workspace/web/desktop tools (`read`, `write`, `edit`, `grep`, `glob`, `web_search`, `web_fetch`, `screenshot`, `clipboard`, `media`, `app`, `open`, `system`, `timer`, `memory`, `notify`). IPC (`--serve` / `--toggle`) uses Unix domain sockets on POSIX and loopback TCP on Windows.
+- **Windows (`amd64`) & macOS (`arm64`, `x86_64`)**: Experimental and untested by the maintainer. No sandbox backend is enabled on Windows or macOS, so the `bash` tool is automatically omitted from workers (with a startup notice on `stderr`), and workers operate using the 15 cross-platform workspace/web/desktop tools (`read`, `write`, `edit`, `grep`, `glob`, `web_search`, `web_fetch`, `screenshot`, `clipboard`, `media`, `app`, `open`, `system`, `memory`, `notify`). IPC (`--serve` / `--toggle`) uses Unix domain sockets on POSIX and loopback TCP on Windows.
 
 ## Limits (as built)
 

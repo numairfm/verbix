@@ -74,6 +74,8 @@ def test_companion_prompt_invariants():
     assert 'you say "i,"' not in announcer_prompt.lower()
     assert "contractions" in sys_prompt.lower()
     assert "contractions" in announcer_prompt.lower()
+    assert "capitalization" in sys_prompt.lower() and "punctuation" in sys_prompt.lower()
+    assert "capitalization" in announcer_prompt.lower() and "punctuation" in announcer_prompt.lower()
     # Invariant: zero pre-tool announcements, single post-tool response, no redundant confirmations
     assert "begin with one short spoken sentence" not in sys_prompt.lower()
     assert "without speaking pre-tool announcements" in sys_prompt.lower()
@@ -102,6 +104,7 @@ def test_default_verbix_prompt_invariants():
     assert "internal detail" in DEFAULT_VERBIX_PROMPT.lower()
     assert 'you say "i,"' not in DEFAULT_VERBIX_PROMPT.lower()
     assert "contractions" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "capitalization" in DEFAULT_VERBIX_PROMPT.lower() and "punctuation" in DEFAULT_VERBIX_PROMPT.lower()
     # Invariant: zero pre-tool announcements, single post-tool response, no redundant confirmations
     assert "begin with one short spoken sentence" not in DEFAULT_VERBIX_PROMPT.lower()
     assert "without speaking pre-tool announcements" in DEFAULT_VERBIX_PROMPT.lower()

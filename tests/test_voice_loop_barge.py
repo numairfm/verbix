@@ -12,7 +12,7 @@ import pytest
 
 from verbix import cli
 from verbix.provider.models import TextDelta as ProviderTextDelta
-from verbix.voice.base import MockAudioSink, MockTextToSpeech
+from verbix.voice.base import MockAudioSink, MockSpeechToText, MockTextToSpeech
 
 
 class GateSink(MockAudioSink):
@@ -73,6 +73,8 @@ def voice_harness(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "build_runtime", lambda args: runtime)
     tts = MockTextToSpeech()
     tts.aclose = AsyncMock(return_value=None)  # type: ignore[attr-defined]
+    stt = MockSpeechToText()
+    monkeypatch.setattr("verbix.voice.transcribe_stt.TranscribeSTT", lambda *a, **k: stt)
     monkeypatch.setattr("verbix.voice.sherpa_tts.SherpaTTS", lambda *a, **k: tts)
     monkeypatch.setattr("verbix.voice.callback_sink.CallbackAudioSink", lambda *a, **k: gate_sink)
 

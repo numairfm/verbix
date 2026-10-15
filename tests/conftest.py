@@ -1,6 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_home_dir(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Isolates Path.home() per test so pytest never touches the user's real ~/.verbix."""
+    isolated_home = tmp_path_factory.mktemp("verbix_home")
+    monkeypatch.setattr(Path, "home", lambda: isolated_home)
 
 
 def assert_history_valid(messages: list[dict[str, Any]]) -> None:

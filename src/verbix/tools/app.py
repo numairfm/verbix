@@ -285,12 +285,13 @@ def _matching_procs(entry: AppEntry, procs: list[Any] | None = None) -> list[Any
     return matched
 
 
-def _launch_entry(entry: AppEntry) -> int | None:
-    if sys.platform == "win32" and hasattr(os, "startfile"):
+def _launch_entry(entry: AppEntry, paths: list[Path] | None = None) -> int | None:
+    extra_args = [str(p) for p in (paths or [])]
+    if sys.platform == "win32" and hasattr(os, "startfile") and not extra_args:
         os.startfile(entry.argv[0])  # type: ignore[attr-defined]
         return None
     proc = subprocess.Popen(
-        list(entry.argv),
+        [*entry.argv, *extra_args],
         shell=False,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -307,8 +308,8 @@ class AppTool:
     name: str = "app"
     side_effecting: bool = True
     description: str = (
-        "Lists, launches, or closes installed desktop applications using the OS application catalog "
-        "(XDG .desktop entries on Linux, .app bundles on macOS, Start Menu on Windows) and psutil."
+        "Lists, launches (optionally opening one or more workspace files), or closes installed desktop "
+        "applications using the OS application catalog and psutil."
     )
 
     @property
@@ -324,6 +325,15 @@ class AppTool:
                 "name": {
                     "type": "string",
                     "description": "Application name (required for 'launch' and 'close'; optional filter for 'list').",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Optional workspace file or directory path to open when action='launch'.",
+                },
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of workspace file or directory paths to open when action='launch'.",
                 },
             },
             "required": ["action"],
@@ -377,8 +387,17 @@ class AppTool:
             )
 
         if action == "launch":
+            from verbix.tools.open import extract_raw_paths, validate_openable_paths
+
+            raw_paths = extract_raw_paths(args)
+            targets: list[Path] = []
+            if raw_paths:
+                try:
+                    targets = validate_openable_paths(raw_paths, context.workspace)
+                except ValueError as e:
+                    return ToolResult(f"error: {e}", is_error=True)
             try:
-                spawned_pid = await asyncio.to_thread(_launch_entry, entry)
+                spawned_pid = await asyncio.to_thread(_launch_entry, entry, targets)
                 running = await asyncio.to_thread(_matching_procs, entry)
                 for _ in range(5):
                     if running:
@@ -387,8 +406,13 @@ class AppTool:
                     running = await asyncio.to_thread(_matching_procs, entry)
                 pid = running[0].pid if running else spawned_pid
                 pid_part = f", PID {pid}" if pid is not None else ""
+                files_part = (
+                    f" with {', '.join(repr(t.name) for t in targets)}"
+                    if targets
+                    else ""
+                )
                 return ToolResult(
-                    f"Launched '{entry.name}' (verified running{pid_part})."
+                    f"Launched '{entry.name}'{files_part} (verified running{pid_part})."
                 )
             except OSError as e:
                 return ToolResult(f"error: failed to launch '{entry.name}': {e}", is_error=True)

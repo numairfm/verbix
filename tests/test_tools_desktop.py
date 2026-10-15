@@ -492,3 +492,85 @@ async def test_open_tool_blocks_executable_extensions_and_magic_bytes(
     res_app = await tool.execute({"path": "Evil.app"}, ctx)
     assert res_app.is_error is True
 
+
+@pytest.mark.asyncio
+async def test_app_tool_launch_with_paths_and_open_tool_with_app_and_multiple_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from verbix.tools import app as app_mod
+    from verbix.tools import open as open_mod
+    from verbix.tools.app import AppEntry, AppTool
+    from verbix.tools.open import OpenTool
+
+    fake_catalog = [
+        AppEntry(
+            id="firefox",
+            name="Firefox",
+            exe_name="firefox",
+            argv=("/usr/bin/firefox",),
+            keywords=("browser",),
+        ),
+    ]
+    monkeypatch.setattr(app_mod, "discover_installed_apps", lambda: fake_catalog)
+    monkeypatch.setattr(app_mod, "_matching_procs", lambda entry, procs=None: [])
+
+    spawned_argvs: list[list[str]] = []
+
+    def fake_popen(argv, **kwargs):
+        spawned_argvs.append(list(argv))
+        return SimpleNamespace(pid=9999)
+
+    monkeypatch.setattr(app_mod.subprocess, "Popen", fake_popen)
+
+    f1 = tmp_path / "index.html"
+    f2 = tmp_path / "second.html"
+    f1.write_text("<h1>1</h1>", encoding="utf-8")
+    f2.write_text("<h1>2</h1>", encoding="utf-8")
+    evil = tmp_path / "evil.sh"
+    evil.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    ctx = ToolContext(workspace=tmp_path)
+    app_tool = AppTool()
+    open_tool = OpenTool()
+
+    # 1. AppTool launch with multiple paths
+    r_app_multi = await app_tool.execute(
+        {"action": "launch", "name": "firefox", "paths": ["index.html", "second.html"]},
+        ctx,
+    )
+    assert not r_app_multi.is_error
+    assert spawned_argvs[-1] == ["/usr/bin/firefox", str(f1.resolve()), str(f2.resolve())]
+
+    # 2. AppTool launch with single path rejects executable scripts and workspace escapes
+    r_app_evil = await app_tool.execute(
+        {"action": "launch", "name": "firefox", "path": "evil.sh"}, ctx
+    )
+    assert r_app_evil.is_error
+    r_app_escape = await app_tool.execute(
+        {"action": "launch", "name": "firefox", "path": "../outside.html"}, ctx
+    )
+    assert r_app_escape.is_error
+
+    # 3. OpenTool with app="firefox" and multiple paths launches Firefox with those paths
+    r_open_app = await open_tool.execute(
+        {"paths": ["index.html", "second.html"], "app": "firefox"}, ctx
+    )
+    assert not r_open_app.is_error
+    assert "Firefox" in r_open_app.observation
+    assert spawned_argvs[-1] == ["/usr/bin/firefox", str(f1.resolve()), str(f2.resolve())]
+
+    # 4. OpenTool with unknown app fails cleanly
+    r_open_bad_app = await open_tool.execute(
+        {"path": "index.html", "app": "nonexistent_browser"}, ctx
+    )
+    assert r_open_bad_app.is_error
+
+    # 5. OpenTool with multiple paths and default app dispatches each path
+    dispatched: list[Path] = []
+    monkeypatch.setattr(
+        open_mod, "_dispatch_open", lambda t: (dispatched.append(t), f"Opened '{t.name}'.")[1]
+    )
+    r_open_multi = await open_tool.execute({"paths": ["index.html", "second.html"]}, ctx)
+    assert not r_open_multi.is_error
+    assert dispatched == [f1.resolve(), f2.resolve()]
+

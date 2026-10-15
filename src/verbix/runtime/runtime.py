@@ -102,13 +102,23 @@ class Runtime:
         worker_echo: bool = False,
         *,
         allow_unsafe_workspace: bool = False,
+        retention_days: float | None = None,
     ) -> None:
-        from verbix.config import resolve_workspace
+        from verbix.config import (
+            DEFAULT_RETENTION_DAYS,
+            prune_state,
+            resolve_workspace,
+        )
 
         self.workspace = resolve_workspace(workspace, explicit=allow_unsafe_workspace)
         self.provider = provider
         self.worker_model = worker_model
         self.worker_echo = worker_echo
+        self.retention_days = (
+            float(retention_days)
+            if retention_days is not None
+            else float(DEFAULT_RETENTION_DAYS)
+        )
 
         fg_config = build_foreground(
             self,
@@ -117,6 +127,7 @@ class Runtime:
             on_wake=on_wake,
         )
         build_announcer(self, fg_config)
+        prune_state(retention_days=self.retention_days, current_run_id=self.run_id)
 
     @property
     def is_idle(self) -> bool:

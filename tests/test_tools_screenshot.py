@@ -139,8 +139,8 @@ async def test_screenshot_prunes_old_cache_files(
 
     old_file = cache_dir / "screenshot_20200101_000000.png"
     old_file.write_bytes(b"dummy")
-    four_days_ago = time.time() - (4 * 86400)
-    os.utime(old_file, (four_days_ago, four_days_ago))
+    fifteen_days_ago = time.time() - (15 * 86400)
+    os.utime(old_file, (fifteen_days_ago, fifteen_days_ago))
 
     synthetic_im = Image.new("RGB", (800, 600), color="blue")
     with patch("PIL.ImageGrab.grab", return_value=synthetic_im):

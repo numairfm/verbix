@@ -129,7 +129,12 @@ def generate_run_id() -> str:
 
 async def spawn_worker(runtime: Any, objective: str) -> str:
     """Spawns an independent background worker with full workspace tools."""
-    prune_spills(Path.home() / ".verbix" / "logs")
+    from verbix.config import DEFAULT_RETENTION_DAYS
+
+    prune_spills(
+        Path.home() / ".verbix" / "logs",
+        older_than_days=getattr(runtime, "retention_days", DEFAULT_RETENTION_DAYS),
+    )
     run_id = getattr(runtime, "run_id", None)
     if not run_id:
         run_id = generate_run_id()

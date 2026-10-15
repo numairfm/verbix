@@ -283,3 +283,172 @@ def test_deleted_scaffold_not_recreated(tmp_path, monkeypatch, caplog):
     assert not (home / ".verbix" / "config.yaml").exists()
     assert not (home / ".verbix" / "PERSONA.md").exists()
     assert any("README" in r.message for r in caplog.records)
+
+
+def test_retention_days_config_env_and_cli_precedence(tmp_path, monkeypatch):
+    from verbix.cli import build_parser
+    from verbix.config import load_config, resolve_retention_days
+
+    home = tmp_path / "home"
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True)
+    _patch_home(monkeypatch, home)
+    monkeypatch.delenv("VERBIX_PROVIDER", raising=False)
+    monkeypatch.delenv("VERBIX_RETENTION_DAYS", raising=False)
+
+    # Default is 14 days
+    assert resolve_retention_days(ws) == 14
+
+    # Config file overrides default
+    _write(home / ".verbix" / "config.yaml", "retention_days: 21\n")
+    assert load_config(ws)["retention_days"] == 21
+    assert resolve_retention_days(ws) == 21
+
+    # Env var overrides config file
+    monkeypatch.setenv("VERBIX_RETENTION_DAYS", "10")
+    assert resolve_retention_days(ws) == 10
+
+    # CLI flag overrides env and config file
+    args = build_parser().parse_args(["--workspace", str(ws), "--retention-days", "5"])
+    assert resolve_retention_days(ws, args) == 5
+
+    # Invalid retention_days in config file raises ValueError
+    monkeypatch.delenv("VERBIX_RETENTION_DAYS", raising=False)
+    for bad in ("0", "-5", "true", "'invalid'"):
+        _write(home / ".verbix" / "config.yaml", f"retention_days: {bad}\n")
+        with pytest.raises(ValueError, match="retention_days"):
+            load_config(ws)
+
+
+def test_startup_retention_prunes_old_state_and_preserves_current_and_user_data(
+    tmp_path, monkeypatch
+):
+    import os
+    import time
+    from unittest.mock import MagicMock
+
+    from verbix.config import prune_state
+    from verbix.runtime.runtime import Runtime
+
+    home = tmp_path / "home"
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True)
+    _patch_home(monkeypatch, home)
+
+    now = time.time()
+    old_ts = now - (15 * 86400)
+    very_old_ts = now - (60 * 86400)
+    fresh_ts = now - (2 * 86400)
+
+    def _age_tree(p: Path, ts: float) -> None:
+        if p.is_symlink():
+            return
+        if p.is_dir():
+            for child in p.iterdir():
+                _age_tree(child, ts)
+        os.utime(p, (ts, ts))
+
+    vroot = home / ".verbix"
+
+    # 1. Logs: old file, old flat hash directory, fresh file, and old symlink to outside dir
+    old_log_file = _write(vroot / "logs" / "tool_old123", "old spill")
+    old_log_dir = vroot / "logs" / "a1b2c3d4e5f6"
+    _write(old_log_dir / "stdout.txt", "old hash dir log")
+    fresh_log_file = _write(vroot / "logs" / "tool_fresh456", "fresh spill")
+    outside_dir = tmp_path / "outside_important"
+    outside_file = _write(outside_dir / "keep.txt", "do not delete")
+    _age_tree(outside_dir, very_old_ts)
+    symlink_in_logs = vroot / "logs" / "outside_link"
+    symlink_in_logs.symlink_to(outside_dir)
+
+    _age_tree(old_log_file, old_ts)
+    _age_tree(old_log_dir, old_ts)
+    _age_tree(fresh_log_file, fresh_ts)
+
+    # 2. Screenshots: old and fresh
+    old_shot = _write(vroot / "screenshots" / "screenshot_20260101_000000.png", "png")
+    fresh_shot = _write(vroot / "screenshots" / "screenshot_20261014_000000.png", "png")
+    _age_tree(old_shot, old_ts)
+    _age_tree(fresh_shot, fresh_ts)
+
+    # 3. Tasks: old per-run, old empty per-run, old flat task-1, old empty flat task-2,
+    #    malformed dir name, fresh per-run, and current run
+    old_run = vroot / "tasks" / "20260901_120000_deadbeef"
+    _write(old_run / "task-1" / "out.txt", "old run data")
+    _age_tree(old_run, old_ts)
+
+    old_empty_run = vroot / "tasks" / "20260902_120000_cafebabe" / "task-1"
+    old_empty_run.mkdir(parents=True)
+    _age_tree(old_empty_run.parent, old_ts)
+
+    old_flat_task = vroot / "tasks" / "task-1"
+    _write(old_flat_task / "flat.txt", "legacy flat task")
+    _age_tree(old_flat_task, old_ts)
+
+    old_empty_flat = vroot / "tasks" / "task-2"
+    old_empty_flat.mkdir(parents=True)
+    _age_tree(old_empty_flat, old_ts)
+
+    malformed_old = vroot / "tasks" / "not_a_valid_timestamp_$$$"
+    _write(malformed_old / "data.txt", "malformed")
+    _age_tree(malformed_old, old_ts)
+
+    fresh_run = vroot / "tasks" / "20261014_120000_11223344"
+    _write(fresh_run / "task-1" / "out.txt", "fresh run")
+    _age_tree(fresh_run, fresh_ts)
+
+    current_run_id = "20261015_120000_current1"
+    current_run_dir = vroot / "tasks" / current_run_id
+    _write(current_run_dir / "task-1" / "active.txt", "active")
+    _age_tree(current_run_dir, very_old_ts)
+
+    # 4. Protected user data (aged 60 days, must NEVER be deleted)
+    cfg_file = _write(vroot / "config.yaml", "provider: openrouter\n")
+    persona_file = _write(vroot / "PERSONA.md", "Calm voice.\n")
+    auth_file = _write(vroot / "auth.json", "{}\n")
+    default_ws_file = _write(vroot / "workspace" / "notes.md", "user workspace note\n")
+    voice_model_file = _write(
+        vroot / "voice" / "stt" / "models" / "nemotron-gguf" / "model.gguf", "weights"
+    )
+    for protected in (
+        cfg_file,
+        persona_file,
+        auth_file,
+        default_ws_file.parent,
+        vroot / "voice",
+    ):
+        _age_tree(protected, very_old_ts)
+
+    prune_state(vroot, retention_days=14, current_run_id=current_run_id)
+
+    assert not old_log_file.exists()
+    assert not old_log_dir.exists()
+    assert fresh_log_file.is_file()
+    assert outside_file.is_file()
+
+    assert not old_shot.exists()
+    assert fresh_shot.is_file()
+
+    assert not old_run.exists()
+    assert not old_empty_run.parent.exists()
+    assert not old_flat_task.exists()
+    assert not old_empty_flat.exists()
+    assert not malformed_old.exists()
+    assert (fresh_run / "task-1" / "out.txt").is_file()
+    assert (current_run_dir / "task-1" / "active.txt").is_file()
+
+    assert cfg_file.is_file()
+    assert persona_file.is_file()
+    assert auth_file.is_file()
+    assert default_ws_file.is_file()
+    assert voice_model_file.is_file()
+
+    # Also verify Runtime startup invokes retention without creating missing dirs on clean home
+    clean_home = tmp_path / "clean_home"
+    _patch_home(monkeypatch, clean_home)
+    rt = Runtime(workspace=ws, provider=MagicMock())
+    assert rt.run_id
+    assert not (clean_home / ".verbix" / "logs").exists()
+    assert not (clean_home / ".verbix" / "screenshots").exists()
+    assert not (clean_home / ".verbix" / "tasks").exists()
+    assert not (clean_home / ".verbix" / "home").exists()

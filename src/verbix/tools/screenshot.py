@@ -13,7 +13,7 @@ from verbix.tools.base import FileAttachment, ToolContext, ToolResult
 from verbix.tools.shared import resolve_contained_path
 
 
-def _prune_screenshots(cache_dir: Path, max_age_days: int = 3) -> None:
+def _prune_screenshots(cache_dir: Path, max_age_days: float = 14) -> None:
     """Silently prune cached screenshot files older than max_age_days."""
     try:
         cutoff = time.time() - max_age_days * 86400
@@ -88,7 +88,7 @@ class ScreenshotTool:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cached_file = cache_dir / f"screenshot_{ts}.png"
             im.save(cached_file, format="PNG")
-            _prune_screenshots(cache_dir, max_age_days=3)
+            _prune_screenshots(cache_dir, max_age_days=14)
 
             # Workspace saving if target specified
             if target is not None:

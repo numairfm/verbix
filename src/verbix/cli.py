@@ -12,7 +12,12 @@ from typing import Any
 
 from verbix.agent.models.litellm_model import LitellmModel, LitellmModelConfig
 from verbix.auth import resolve_provider
-from verbix.config import ensure_global_scaffold, load_config, resolve_workspace
+from verbix.config import (
+    ensure_global_scaffold,
+    load_config,
+    resolve_retention_days,
+    resolve_workspace,
+)
 from verbix.core.events import (
     AgentEvent,
     TextDelta,
@@ -188,6 +193,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Custom persona or instructions layered onto Verbix's core system prompt.",
     )
+    parser.add_argument(
+        "--retention-days",
+        type=float,
+        default=None,
+        help="Days to retain tool logs, screenshots, and task directories (default: 14).",
+    )
     return parser
 
 
@@ -256,6 +267,7 @@ def build_runtime(args: argparse.Namespace) -> Runtime:
         or os.environ.get("VERBIX_WORKER_ECHO") == "1",
         system_prompt=system_prompt,
         allow_unsafe_workspace=explicit_ws,
+        retention_days=resolve_retention_days(workspace, args),
     )
 
 

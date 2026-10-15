@@ -566,11 +566,97 @@ async def test_app_tool_launch_with_paths_and_open_tool_with_app_and_multiple_pa
     assert r_open_bad_app.is_error
 
     # 5. OpenTool with multiple paths and default app dispatches each path
-    dispatched: list[Path] = []
+    dispatched: list[Path | str] = []
     monkeypatch.setattr(
-        open_mod, "_dispatch_open", lambda t: (dispatched.append(t), f"Opened '{t.name}'.")[1]
+        open_mod, "_dispatch_open", lambda t: (dispatched.append(t), f"Opened '{t}'.")[1]
     )
     r_open_multi = await open_tool.execute({"paths": ["index.html", "second.html"]}, ctx)
     assert not r_open_multi.is_error
     assert dispatched == [f1.resolve(), f2.resolve()]
+
+    # 6. Both AppTool and OpenTool accept http:// and https:// URLs and reject unsafe URI schemes
+    r_app_url = await app_tool.execute(
+        {
+            "action": "launch",
+            "name": "firefox",
+            "path": "https://en.wikipedia.org/wiki/Albert_Einstein",
+        },
+        ctx,
+    )
+    assert not r_app_url.is_error
+    assert spawned_argvs[-1] == [
+        "/usr/bin/firefox",
+        "https://en.wikipedia.org/wiki/Albert_Einstein",
+    ]
+
+    dispatched.clear()
+    r_open_url = await open_tool.execute(
+        {"path": "https://en.wikipedia.org/wiki/Albert_Einstein"}, ctx
+    )
+    assert not r_open_url.is_error
+    assert dispatched == ["https://en.wikipedia.org/wiki/Albert_Einstein"]
+
+    for unsafe_uri in (
+        "javascript:alert(1)",
+        "file:///etc/passwd",
+        "data:text/html,<script>alert(1)</script>",
+    ):
+        res_bad_open = await open_tool.execute({"path": unsafe_uri}, ctx)
+        assert res_bad_open.is_error
+        res_bad_app = await app_tool.execute(
+            {"action": "launch", "name": "firefox", "path": unsafe_uri}, ctx
+        )
+        assert res_bad_app.is_error
+
+
+def test_flatpak_desktop_entry_extracts_real_exe_name_strips_forwarding_markers_and_matches_precisely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from verbix.tools import app as app_mod
+
+    apps_dir = tmp_path / "applications"
+    apps_dir.mkdir(parents=True)
+    (apps_dir / "com.spotify.Client.desktop").write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Spotify\n"
+        "GenericName=Music Player\n"
+        "Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=spotify --file-forwarding com.spotify.Client @@u %U @@\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app_mod, "_linux_desktop_dirs", lambda: [apps_dir])
+    catalog = app_mod._discover_linux_apps()
+    assert len(catalog) == 1
+    spotify = catalog[0]
+    assert spotify.exe_name == "spotify"
+    assert spotify.argv == (
+        "/usr/bin/flatpak",
+        "run",
+        "--branch=stable",
+        "--arch=x86_64",
+        "--command=spotify",
+        "com.spotify.Client",
+    )
+
+    # Process matching must NOT match an unrelated flatpak process
+    other_flatpak = SimpleNamespace(
+        pid=101,
+        info={
+            "pid": 101,
+            "name": "flatpak",
+            "exe": "/usr/bin/flatpak",
+            "cmdline": ["/usr/bin/flatpak", "run", "org.gimp.GIMP"],
+        },
+    )
+    spotify_flatpak = SimpleNamespace(
+        pid=202,
+        info={
+            "pid": 202,
+            "name": "bwrap",
+            "exe": "/usr/bin/bwrap",
+            "cmdline": ["/usr/bin/bwrap", "--args", "com.spotify.Client"],
+        },
+    )
+    matched = app_mod._matching_procs(spotify, [other_flatpak, spotify_flatpak])
+    assert matched == [spotify_flatpak]
 

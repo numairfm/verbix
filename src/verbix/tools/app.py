@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import configparser
+import ctypes
 import os
 import plistlib
 import re
@@ -17,6 +18,8 @@ import psutil
 from verbix.tools.base import ToolContext, ToolResult
 
 _FIELD_CODE_RE = re.compile(r"^%[fFuUdDnNickvm]$")
+_FLATPAK_MARKERS = frozenset({"--file-forwarding", "@@", "@@u", "@@f"})
+_WRAPPER_BINS = frozenset({"flatpak", "bwrap", "env", "sh", "bash"})
 
 
 @dataclass(frozen=True)
@@ -37,7 +40,10 @@ def _linux_desktop_dirs() -> list[Path]:
         "XDG_DATA_DIRS",
         "/usr/local/share:/usr/share:/var/lib/flatpak/exports/share:/var/lib/snapd/desktop",
     )
-    dirs = [data_home / "applications"]
+    dirs = [
+        data_home / "applications",
+        data_home / "flatpak" / "exports" / "share" / "applications",
+    ]
     for part in raw_dirs.split(":"):
         if part.strip():
             dirs.append(Path(part.strip()) / "applications")
@@ -50,17 +56,30 @@ def _clean_desktop_exec(exec_line: str) -> tuple[str, ...]:
     except ValueError:
         return ()
     cleaned: list[str] = []
-    # Skip leading 'env VAR=VAL ...' wrapper if present so argv[0] is the binary
     i = 0
     if tokens and Path(tokens[0]).name == "env":
         i = 1
         while i < len(tokens) and "=" in tokens[i] and not tokens[i].startswith("-"):
             i += 1
     for tok in tokens[i:]:
-        if _FIELD_CODE_RE.match(tok):
+        if _FIELD_CODE_RE.match(tok) or tok in _FLATPAK_MARKERS:
             continue
         cleaned.append(tok.replace("%%", "%"))
     return tuple(cleaned)
+
+
+def _extract_exe_name(argv: tuple[str, ...], app_id: str) -> str:
+    bin_name = Path(argv[0]).name.lower()
+    if bin_name == "flatpak":
+        for tok in argv[1:]:
+            if tok.startswith("--command="):
+                cmd = Path(tok.split("=", 1)[1]).name.lower()
+                if cmd and cmd not in _WRAPPER_BINS:
+                    return cmd
+        tail = app_id.split(".")[-1].lower()
+        if tail and tail not in _WRAPPER_BINS:
+            return tail
+    return bin_name
 
 
 def _discover_linux_apps() -> list[AppEntry]:
@@ -101,7 +120,7 @@ def _discover_linux_apps() -> list[AppEntry]:
             argv = _clean_desktop_exec(exec_line)
             if not argv:
                 continue
-            exe_name = Path(argv[0]).name.lower()
+            exe_name = _extract_exe_name(argv, app_id)
             kw_raw = ";".join(
                 filter(
                     None,
@@ -226,15 +245,12 @@ def _match_app(query: str, catalog: list[AppEntry]) -> AppEntry | None:
     q = query.strip().lower()
     if not q or any(ch in q for ch in ("/", "\\", ";", "|", "&", "$", "`")):
         return None
-    # 1. Exact match on id, name, or exe_name
     for entry in catalog:
         if q in (entry.id.lower(), entry.name.lower(), entry.exe_name.lower()):
             return entry
-    # 2. Substring match on name or id
     for entry in catalog:
         if q in entry.name.lower() or q in entry.id.lower():
             return entry
-    # 3. Keyword match
     for entry in catalog:
         if any(q in kw for kw in entry.keywords):
             return entry
@@ -252,7 +268,11 @@ def _running_user_procs() -> list[Any]:
             if pid == my_pid:
                 continue
             uids = info.get("uids")
-            if my_uid is not None and uids is not None and getattr(uids, "real", my_uid) != my_uid:
+            if (
+                my_uid is not None
+                and uids is not None
+                and getattr(uids, "real", my_uid) != my_uid
+            ):
                 continue
             out.append(proc)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -262,36 +282,57 @@ def _running_user_procs() -> list[Any]:
 
 def _matching_procs(entry: AppEntry, procs: list[Any] | None = None) -> list[Any]:
     base_exe = entry.exe_name.lower().removesuffix("-bin")
-    target_names = {
+    raw_names = {
         entry.exe_name.lower(),
         base_exe,
         f"{base_exe}-bin",
         entry.id.lower(),
         entry.name.lower(),
     }
+    target_names = {n for n in raw_names if n and n not in _WRAPPER_BINS}
+    app_id_lower = entry.id.lower()
     matched: list[Any] = []
-    for proc in (procs if procs is not None else _running_user_procs()):
+    for proc in procs if procs is not None else _running_user_procs():
         pname = (proc.info.get("name") or "").lower()
         pexe = Path(proc.info.get("exe") or "").name.lower()
-        cmdline = proc.info.get("cmdline") or []
+        cmdline = [str(c).lower() for c in (proc.info.get("cmdline") or [])]
         cmd0 = Path(cmdline[0]).name.lower() if cmdline else ""
         if (
             pname in target_names
             or pname.removesuffix("-bin") in target_names
             or pexe in target_names
             or cmd0 in target_names
+            or ("." in app_id_lower and app_id_lower in cmdline)
         ):
             matched.append(proc)
     return matched
 
 
-def _launch_entry(entry: AppEntry, paths: list[Path] | None = None) -> int | None:
+def _launch_entry(
+    entry: AppEntry, paths: list[Path | str] | None = None
+) -> int | None:
     extra_args = [str(p) for p in (paths or [])]
-    if sys.platform == "win32" and hasattr(os, "startfile") and not extra_args:
-        os.startfile(entry.argv[0])  # type: ignore[attr-defined]
-        return None
+    if sys.platform == "win32":
+        if not extra_args and hasattr(os, "startfile"):
+            os.startfile(entry.argv[0])  # type: ignore[attr-defined]
+            return None
+        if entry.argv[0].lower().endswith(".lnk") and hasattr(ctypes, "windll"):
+            params = subprocess.list2cmdline(extra_args) if extra_args else None
+            ctypes.windll.shell32.ShellExecuteW(
+                None, "open", entry.argv[0], params, None, 1
+            )
+            return None
+    if (
+        sys.platform == "darwin"
+        and extra_args
+        and ".app/Contents/MacOS/" in entry.argv[0]
+    ):
+        bundle_path = entry.argv[0].split(".app/Contents/MacOS/", 1)[0] + ".app"
+        cmd = ["/usr/bin/open", "-a", bundle_path, *extra_args]
+    else:
+        cmd = [*entry.argv, *extra_args]
     proc = subprocess.Popen(
-        [*entry.argv, *extra_args],
+        cmd,
         shell=False,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -302,14 +343,37 @@ def _launch_entry(entry: AppEntry, paths: list[Path] | None = None) -> int | Non
     return getattr(proc, "pid", None)
 
 
+async def launch_app_entry(
+    entry: AppEntry, targets: list[Path | str] | None = None
+) -> str:
+    """Launches an AppEntry with optional file/URL targets and verifies running state."""
+    from verbix.tools.open import _target_label
+
+    spawned_pid = await asyncio.to_thread(_launch_entry, entry, targets)
+    running = await asyncio.to_thread(_matching_procs, entry)
+    for _ in range(5):
+        if running:
+            break
+        await asyncio.sleep(0.05)
+        running = await asyncio.to_thread(_matching_procs, entry)
+    pid = running[0].pid if running else spawned_pid
+    pid_part = f", PID {pid}" if pid is not None else ""
+    files_part = (
+        f" with {', '.join(repr(_target_label(t)) for t in targets)}"
+        if targets
+        else ""
+    )
+    return f"Launched '{entry.name}'{files_part} (verified running{pid_part})."
+
+
 class AppTool:
     """Discovers, lists, launches, and closes desktop applications using OS app catalogs and psutil."""
 
     name: str = "app"
     side_effecting: bool = True
     description: str = (
-        "Lists, launches (optionally opening one or more workspace files), or closes installed desktop "
-        "applications using the OS application catalog and psutil."
+        "Lists, launches (optionally opening one or more workspace files or http(s) URLs), or closes "
+        "installed desktop applications using the OS application catalog and psutil."
     )
 
     @property
@@ -328,12 +392,12 @@ class AppTool:
                 },
                 "path": {
                     "type": "string",
-                    "description": "Optional workspace file or directory path to open when action='launch'.",
+                    "description": "Optional workspace file, directory, or http(s) URL to open when action='launch'.",
                 },
                 "paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional list of workspace file or directory paths to open when action='launch'.",
+                    "description": "Optional list of workspace files, directories, or http(s) URLs to open when action='launch'.",
                 },
             },
             "required": ["action"],
@@ -352,9 +416,7 @@ class AppTool:
 
         if action == "list":
             procs = await asyncio.to_thread(_running_user_procs)
-            running_apps = [
-                e.name for e in catalog if _matching_procs(e, procs)
-            ]
+            running_apps = [e.name for e in catalog if _matching_procs(e, procs)]
             installed = [
                 f"{e.name} ({e.generic_name})"
                 if e.generic_name and e.generic_name.lower() != e.name.lower()
@@ -368,10 +430,16 @@ class AppTool:
             ]
             lines = []
             if running_apps:
-                lines.append(f"Running desktop apps: {', '.join(sorted(set(running_apps)))}")
+                lines.append(
+                    f"Running desktop apps: {', '.join(sorted(set(running_apps)))}"
+                )
             if installed:
                 lines.append(f"Installed desktop apps: {', '.join(installed)}")
-            return ToolResult("\n".join(lines) if lines else "No matching desktop applications found.")
+            return ToolResult(
+                "\n".join(lines)
+                if lines
+                else "No matching desktop applications found."
+            )
 
         if not name:
             return ToolResult(
@@ -387,35 +455,25 @@ class AppTool:
             )
 
         if action == "launch":
-            from verbix.tools.open import extract_raw_paths, validate_openable_paths
+            from verbix.tools.open import (
+                extract_raw_paths,
+                validate_openable_paths,
+            )
 
             raw_paths = extract_raw_paths(args)
-            targets: list[Path] = []
+            targets: list[Path | str] = []
             if raw_paths:
                 try:
                     targets = validate_openable_paths(raw_paths, context.workspace)
                 except ValueError as e:
                     return ToolResult(f"error: {e}", is_error=True)
             try:
-                spawned_pid = await asyncio.to_thread(_launch_entry, entry, targets)
-                running = await asyncio.to_thread(_matching_procs, entry)
-                for _ in range(5):
-                    if running:
-                        break
-                    await asyncio.sleep(0.05)
-                    running = await asyncio.to_thread(_matching_procs, entry)
-                pid = running[0].pid if running else spawned_pid
-                pid_part = f", PID {pid}" if pid is not None else ""
-                files_part = (
-                    f" with {', '.join(repr(t.name) for t in targets)}"
-                    if targets
-                    else ""
-                )
-                return ToolResult(
-                    f"Launched '{entry.name}'{files_part} (verified running{pid_part})."
-                )
+                obs = await launch_app_entry(entry, targets)
+                return ToolResult(obs)
             except OSError as e:
-                return ToolResult(f"error: failed to launch '{entry.name}': {e}", is_error=True)
+                return ToolResult(
+                    f"error: failed to launch '{entry.name}': {e}", is_error=True
+                )
 
         # action == "close"
         matched = await asyncio.to_thread(_matching_procs, entry)

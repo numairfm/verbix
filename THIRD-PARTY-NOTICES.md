@@ -36,26 +36,6 @@ This file covers heavy model and media assets by name.
     base model `nvidia/nemotron-3.5-asr-streaming-0.6b` (governing terms
     OpenMDW-1.1, <https://openmdw.ai/license/1-1/>); ready for commercial use.
 
-- **Canary 180M Flash** (NVIDIA, CC-BY-4.0) — RETIRED. Weights no longer
-  fetched (`scripts/fetch_voice_models.py` now pins Nemotron GGUF above);
-  superseded as the default STT (`TranscribeSTT` wired in `src/verbix/cli.py`).
-  Legacy code path `src/verbix/voice/sherpa_stt.py` retained; entry kept for
-  provenance. Original checkpoint:
-  `csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8`.
-
-## Voice Activity Detection (Silero)
-
-- **Silero VAD** (MIT) — voice activity detector by the Silero team
-  (<https://github.com/snakers4/silero-vad>), loaded via sherpa-onnx.
-  - Pinned checkpoint: `silero_vad.onnx` (k2-fsa/sherpa-onnx release asset
-    `asr-models`, fetched by `scripts/fetch_voice_models.py`).
-  - License source: upstream `LICENSE` (MIT, Silero Team); copy in
-    `LICENSES/mit-silero.md`.
-
-## Acoustic Echo Cancellation (pywebrtc-audio)
-
-- **pywebrtc-audio** (BSD-3-Clause) — WebRTC AudioProcessingModule bindings for real-time acoustic echo cancellation (<https://github.com/strands-labs/pywebrtc-audio>).
-
 ## Gitignore Pattern Matching (pathspec)
 
 - **pathspec** (MPL-2.0) — pure-Python gitignore pattern matching library by Caleb P. Burns (<https://github.com/cpburnz/python-path-specification>).

@@ -20,7 +20,6 @@ dependencies = [
     "pycaw>=20240210; sys_platform == 'win32'",
     "pydantic>=2.12",
     "pyperclip>=1.9.0",
-    "pywebrtc-audio>=0.2.0",
     "pyyaml>=6.0",
     "sherpa-onnx>=1.12.0",
     "sherpa-onnx-core>=1.12.0",

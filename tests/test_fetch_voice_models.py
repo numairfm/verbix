@@ -34,6 +34,7 @@ def test_default_root_fallback(monkeypatch, tmp_path):
 def test_fetch_downloads_and_verifies_files(tmp_path):
     import scripts.fetch_voice_models as mod
 
+    assert "vad" not in mod.MANIFEST
     test_content = b"valid model content"
     test_sha = hashlib.sha256(test_content).hexdigest()
 
@@ -46,15 +47,12 @@ def test_fetch_downloads_and_verifies_files(tmp_path):
                 "test_file.bin": (test_sha, len(test_content)),
             },
         },
-        "vad": {
-            "id": "silero-vad",
-            "license": "MIT",
-            "repo": "k2-fsa/sherpa-onnx",
+        "asr": {
+            "id": "nemotron-gguf",
+            "license": "OpenMDW-1.1",
+            "repo": "handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
             "files": {
-                "test_vad.onnx": {
-                    "sha256": test_sha,
-                    "url": "https://custom.url/test_vad.onnx",
-                },
+                "test_asr.gguf": (test_sha, len(test_content)),
             },
         },
     }
@@ -71,17 +69,18 @@ def test_fetch_downloads_and_verifies_files(tmp_path):
     ):
         paths = mod.fetch_models(root=tmp_path)
         assert (tmp_path / "models" / "supertonic-int8" / "test_file.bin").exists()
-        assert (tmp_path / "models" / "silero-vad" / "test_vad.onnx").exists()
-        assert "https://custom.url/test_vad.onnx" in downloaded_urls
+        assert (tmp_path / "models" / "nemotron-gguf" / "test_asr.gguf").exists()
         assert (tmp_path / "models" / "provenance.json").exists()
         assert paths["tts_dir"] == tmp_path / "models" / "supertonic-int8"
-        assert paths["vad_dir"] == tmp_path / "models" / "silero-vad"
+        assert paths["asr_dir"] == tmp_path / "models" / "nemotron-gguf"
+        assert "vad_dir" not in paths
 
         # Check provenance json
         prov = json.loads((tmp_path / "models" / "provenance.json").read_text())
         assert prov["tts"]["id"] == "supertonic-int8"
         assert prov["tts"]["license"] == "BigScience OpenRAIL-M"
-        assert prov["vad"]["id"] == "silero-vad"
+        assert prov["asr"]["id"] == "nemotron-gguf"
+        assert "vad" not in prov
 
 
 def test_fetch_raises_on_checksum_mismatch(tmp_path):

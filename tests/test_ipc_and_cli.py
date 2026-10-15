@@ -347,4 +347,18 @@ def test_cli_voice_mode_defaults_to_ptt():
     assert args.voice_mode == "ptt"
 
 
+@pytest.mark.asyncio
+async def test_cli_voice_mode_continuous_fails_with_clear_error(tmp_path, capsys):
+    from verbix.cli import async_main, build_parser
+
+    args = build_parser().parse_args(
+        ["--voice", "--voice-mode", "continuous", "--workspace", str(tmp_path)]
+    )
+    code = await async_main(args)
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "Continuous voice mode has been removed" in err
+
+
+
 

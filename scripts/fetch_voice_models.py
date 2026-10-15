@@ -69,17 +69,6 @@ MANIFEST: dict[str, dict] = {
             ),
         },
     },
-    "vad": {
-        "id": "silero-vad",
-        "license": "MIT",
-        "repo": "k2-fsa/sherpa-onnx (release asset asr-models)",
-        "files": {
-            "silero_vad.onnx": {
-                "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
-                "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
-            },
-        },
-    },
 }
 
 

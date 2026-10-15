@@ -95,5 +95,4 @@ def test_floor_can_announce_only_when_idle_and_not_interrupted():
     floor.set_state(FloorState.IDLE)
     floor.request_interrupt()
     assert floor.can_announce() is False
-    assert not hasattr(floor, "user_speaking")
 

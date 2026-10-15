@@ -23,6 +23,7 @@ def test_worker_registry_has_main_tools():
         "system",
         "timer",
         "memory",
+        "notify",
     }
     if probe_sandbox().available:
         expected.add("bash")

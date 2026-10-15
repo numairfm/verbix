@@ -1,21 +1,49 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from typing import Any
 
 import pyperclip
+from PIL import Image, ImageGrab
 
-from verbix.tools.base import ToolContext, ToolResult
+from verbix.tools.base import FileAttachment, ToolContext, ToolResult
+
+
+def _grab_clipboard_image() -> ToolResult | None:
+    try:
+        grabbed = ImageGrab.grabclipboard()
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(grabbed, Image.Image):
+        return None
+    w, h = grabbed.size
+    rgba = grabbed.convert("RGBA")
+    bg = Image.new("RGB", rgba.size, (255, 255, 255))
+    bg.paste(rgba, mask=rgba.split()[3])
+    bg.thumbnail((1568, 1568), Image.LANCZOS)
+    buf = io.BytesIO()
+    bg.save(buf, format="JPEG", quality=82)
+    return ToolResult(
+        f"[clipboard image attached: {w}x{h}]",
+        attachments=(
+            FileAttachment(
+                data=buf.getvalue(),
+                mime="image/jpeg",
+                name="clipboard.jpg",
+            ),
+        ),
+    )
 
 
 class ClipboardTool:
-    """Reads or writes the system clipboard via pyperclip."""
+    """Reads or writes text (and reads copied images) from the system clipboard."""
 
     name: str = "clipboard"
     side_effecting: bool = True
     description: str = (
-        "Reads from or writes text to the system clipboard. "
-        "Use action='read' to inspect copied text or action='write' with 'text' to copy text."
+        "Reads from or writes text to the system clipboard (and attaches copied images when reading). "
+        "Use action='read' to inspect copied text or images, or action='write' with 'text' to copy text."
     )
 
     @property
@@ -58,6 +86,14 @@ class ClipboardTool:
 
         try:
             content = await asyncio.to_thread(pyperclip.paste)
-            return ToolResult(content if content else "(clipboard is empty)")
+            if content:
+                return ToolResult(content)
+            img_res = await asyncio.to_thread(_grab_clipboard_image)
+            if img_res is not None:
+                return img_res
+            return ToolResult("(clipboard is empty)")
         except (pyperclip.PyperclipException, OSError, RuntimeError) as e:
+            img_res = await asyncio.to_thread(_grab_clipboard_image)
+            if img_res is not None:
+                return img_res
             return ToolResult(f"error: clipboard read failed: {e}", is_error=True)

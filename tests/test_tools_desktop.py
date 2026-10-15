@@ -626,6 +626,89 @@ async def test_runtime_dynamically_grounds_memory_across_foreground_announcer_an
     assert "Preferred browser is Helium" not in snap_after[0]["content"]
 
 
+@pytest.mark.asyncio
+async def test_clipboard_tool_reads_copied_image_when_text_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import pyperclip
+    from PIL import Image, ImageGrab
+
+    from verbix.tools.clipboard import ClipboardTool
+
+    monkeypatch.setattr(pyperclip, "paste", lambda: "")
+    monkeypatch.setattr(
+        ImageGrab, "grabclipboard", lambda: Image.new("RGB", (320, 200), color="red")
+    )
+
+    res = await ClipboardTool().execute({"action": "read"}, ToolContext(workspace=tmp_path))
+    assert not res.is_error
+    assert "[clipboard image attached: 320x200]" in res.observation
+    assert len(res.attachments) == 1
+    assert res.attachments[0].mime == "image/jpeg"
+
+
+@pytest.mark.asyncio
+async def test_notify_tool_linux_macos_and_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import dbus_fast.aio
+    from dbus_fast.constants import MessageType
+
+    from verbix.tools import notify as notify_mod
+    from verbix.tools.notify import NotifyTool
+
+    ctx = ToolContext(workspace=tmp_path)
+    tool = NotifyTool()
+
+    # 1. Linux DBus org.freedesktop.Notifications.Notify
+    monkeypatch.setattr(notify_mod.sys, "platform", "linux")
+    sent_dbus = []
+
+    class FakeNotifyBus:
+        async def connect(self):
+            return self
+
+        def disconnect(self):
+            pass
+
+        async def call(self, msg):
+            sent_dbus.append((msg.destination, msg.member, msg.body))
+            return SimpleNamespace(message_type=MessageType.METHOD_RETURN, body=[1])
+
+    monkeypatch.setattr(dbus_fast.aio, "MessageBus", lambda bus_type=None: FakeNotifyBus())
+    r_lin = await tool.execute({"title": "Verbix", "message": "Timer is up!"}, ctx)
+    assert not r_lin.is_error
+    assert len(sent_dbus) == 1
+    assert sent_dbus[0][0] == "org.freedesktop.Notifications"
+    assert sent_dbus[0][1] == "Notify"
+    assert "Timer is up!" in sent_dbus[0][2]
+
+    # 2. macOS osascript argv-safe notification
+    monkeypatch.setattr(notify_mod.sys, "platform", "darwin")
+    mac_cmds: list[list[str]] = []
+    monkeypatch.setattr(
+        notify_mod.subprocess,
+        "run",
+        lambda cmd, **kw: (mac_cmds.append(list(cmd)), SimpleNamespace(returncode=0))[1],
+    )
+    r_mac = await tool.execute({"title": 'Verbix "Quote"', "message": "Body text"}, ctx)
+    assert not r_mac.is_error
+    assert mac_cmds[-1][-2:] == ['Verbix "Quote"', "Body text"]
+
+    # 3. Windows notification
+    monkeypatch.setattr(notify_mod.sys, "platform", "win32")
+    win_envs: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        notify_mod.subprocess,
+        "run",
+        lambda cmd, **kw: (win_envs.append(dict(kw.get("env") or {})), SimpleNamespace(returncode=0))[1],
+    )
+    r_win = await tool.execute({"title": "Verbix", "message": "Done"}, ctx)
+    assert not r_win.is_error
+    assert win_envs[-1]["VERBIX_NOTIFY_TITLE"] == "Verbix"
+    assert win_envs[-1]["VERBIX_NOTIFY_MSG"] == "Done"
+
+
 def test_app_catalog_discovers_linux_xdg_desktop_entries_and_filters_hidden_or_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

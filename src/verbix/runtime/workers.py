@@ -34,6 +34,7 @@ _DEFAULT_WORKER_TOOLS = (
     "system",
     "timer",
     "memory",
+    "notify",
     "bash",
 )
 

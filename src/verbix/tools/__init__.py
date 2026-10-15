@@ -19,6 +19,7 @@ from verbix.tools.glob import GlobTool
 from verbix.tools.grep import GrepTool
 from verbix.tools.media import MediaTool
 from verbix.tools.memory import MemoryTool
+from verbix.tools.notify import NotifyTool
 from verbix.tools.open import OpenTool
 from verbix.tools.read import FileReadTool
 from verbix.tools.sandbox import SandboxConfig, SandboxResult, execute_sandboxed
@@ -48,6 +49,7 @@ __all__ = [
     "GrepTool",
     "MediaTool",
     "MemoryTool",
+    "NotifyTool",
     "OpenTool",
     "SandboxConfig",
     "SandboxResult",
@@ -84,6 +86,7 @@ TOOL_CATALOG: dict[str, Callable[[Any], Any]] = {
     "system": lambda runtime: SystemTool(),
     "timer": TimerTool,
     "memory": lambda runtime: MemoryTool(),
+    "notify": lambda runtime: NotifyTool(),
     "spawn": SpawnTool,
     "status": StatusTool,
     "cancel": CancelTool,

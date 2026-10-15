@@ -228,3 +228,59 @@ async def test_speech_output_never_synthesizes_error_turn_complete_tokens():
     await asyncio.sleep(0.05)
     assert tts.synthesized_texts == []
 
+
+@pytest.mark.asyncio
+async def test_Idle_ptt_toggle_plays_start_and_stop_earcon_cues():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from verbix.runtime.floor import FloorArbiter
+    from verbix.voice.base import MockAudioSink, MockSpeechToText, MockTextToSpeech
+    from verbix.voice.pipeline import VoicePipeline
+    from verbix.voice.player import AudioPlayer
+
+    rt = MagicMock()
+    rt.floor = FloorArbiter()
+    rt.is_idle = True
+    rt.submit = AsyncMock(return_value="ok")
+
+    cap = MagicMock()
+    cap.sample_rate = 16000
+    cap.is_recording = False
+
+    async def start_rec():
+        cap.is_recording = True
+
+    async def stop_rec():
+        cap.is_recording = False
+        return b"\x00\x00" * 100
+
+    cap.start_recording = AsyncMock(side_effect=start_rec)
+    cap.stop_recording = AsyncMock(side_effect=stop_rec)
+
+    sink = MockAudioSink(playback_delay=0.0)
+    pipeline = VoicePipeline(
+        runtime=rt,
+        stt=MockSpeechToText(predefined_transcriptions=[""]),
+        player=AudioPlayer(tts=MockTextToSpeech(), sink=sink),
+        capture=cap,
+    )
+
+    cues: list[float] = []
+    orig_play_cue = pipeline.turn_output.play_cue
+
+    async def spy_cue(freq: float = 880.0):
+        cues.append(freq)
+        await orig_play_cue(freq)
+
+    pipeline.turn_output.play_cue = spy_cue  # type: ignore[method-assign]
+
+    r1 = await pipeline.toggle()
+    assert r1["action"] == "recording"
+    await asyncio.sleep(0.02)
+    assert cues == [660.0]
+
+    r2 = await pipeline.toggle()
+    assert r2["action"] == "idle"
+    await asyncio.sleep(0.02)
+    assert cues == [660.0, 880.0]
+

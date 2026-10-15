@@ -108,8 +108,9 @@ class VoicePipeline:
             await self.start_recording()
             return {"action": "interrupted_and_recording"}
 
-        # 3. Idle -> begin recording
+        # 3. Idle -> begin recording with opening earcon cue
         self.runtime.user_active = True
+        asyncio.create_task(self._speech_output.play_cue(660.0))
         await self.start_recording()
         return {"action": "recording"}
 

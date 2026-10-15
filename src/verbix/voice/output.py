@@ -279,7 +279,7 @@ class SpeechOutput:
         self._top_up()
 
 
-    async def play_cue(self) -> None:
+    async def play_cue(self, freq: float = 880.0) -> None:
         """Earcon that never kills speech: direct play only when idle."""
         try:
             import numpy as np
@@ -289,7 +289,7 @@ class SpeechOutput:
             n = int(sample_rate * 0.05)
             t = np.linspace(0, 0.05, n, endpoint=False)
             envelope = np.sin(np.pi * np.linspace(0, 1, n)) ** 2
-            wave = (np.sin(2 * np.pi * 880.0 * t) * envelope * 0.25).astype(np.float32)
+            wave = (np.sin(2 * np.pi * float(freq) * t) * envelope * 0.25).astype(np.float32)
             cue = wave.tobytes() if fmt == "f32" else (wave * 32767).astype(np.int16).tobytes()
         except (ImportError, OSError, RuntimeError, ValueError):
             logger.debug("Failed to build cue sound", exc_info=True)

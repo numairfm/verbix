@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -98,7 +99,6 @@ def probe_sandbox(allow_network: bool = False) -> SandboxStatus:
 def build_sandbox_env(workspace: Path) -> dict[str, str]:
     """Builds the child environment strictly from an allowlist (PATH, LANG, TERM + scratch dirs)."""
     scratch_home = Path.home() / ".verbix" / "home"
-    scratch_home.mkdir(parents=True, exist_ok=True)
     env: dict[str, str] = {
         "PATH": "/usr/bin:/bin",
         "LANG": "C.UTF-8",
@@ -187,6 +187,8 @@ async def execute_sandboxed(command: str, config: SandboxConfig) -> SandboxResul
     scratch_home.mkdir(parents=True, exist_ok=True)
     cmd_args.extend(["--bind", str(scratch_home), str(scratch_home)])
     tasks_dir = verbix_home / "tasks"
+    for m in re.finditer(re.escape(str(tasks_dir)) + r"/([A-Za-z0-9_.-]+/task-\d+)", command):
+        (tasks_dir / m.group(1)).mkdir(parents=True, exist_ok=True)
     if tasks_dir.is_dir():
         cmd_args.extend(["--bind", str(tasks_dir), str(tasks_dir)])
     logs_dir = verbix_home / "logs"

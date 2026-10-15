@@ -221,7 +221,7 @@ def test_worker_task_get_status_excludes_system_prompt_and_scaffolding():
 
 
 @pytest.mark.asyncio
-async def test_spawn_creates_private_scratch_dir(tmp_path, monkeypatch):
+async def test_spawn_configures_scratch_dir_lazily_without_creating_empty_dirs(tmp_path, monkeypatch):
     import re
     from pathlib import Path
     from types import SimpleNamespace
@@ -230,6 +230,8 @@ async def test_spawn_creates_private_scratch_dir(tmp_path, monkeypatch):
     from verbix.runtime.ledger import TaskLedger
     from verbix.runtime.worker import WorkerTask
     from verbix.runtime.workers import spawn_worker
+    from verbix.tools.base import ToolContext
+    from verbix.tools.write import FileWriteTool
 
     started = []
     monkeypatch.setattr(WorkerTask, "start", lambda self: started.append(self.id))
@@ -246,20 +248,34 @@ async def test_spawn_creates_private_scratch_dir(tmp_path, monkeypatch):
         ledger=TaskLedger(),
         _broadcast_event=lambda *a: broadcasted.append(a),
     )
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
     task_id = await spawn_worker(runtime, "do stuff")
     assert task_id == "task-1"
     assert hasattr(runtime, "run_id") and re.fullmatch(
         r"\d{8}_\d{6}_[0-9a-f]{6,12}", runtime.run_id
     )
-    scratch = tmp_path / "home" / ".verbix" / "tasks" / runtime.run_id / "task-1"
+    scratch = home / ".verbix" / "tasks" / runtime.run_id / "task-1"
     worker_agent = runtime.tasks["task-1"].session
     assert worker_agent.extra_template_vars["scratch_dir"] == str(scratch)
+    # Directories must not exist merely because a task or run was initialized
+    assert not scratch.exists()
+    assert not (home / ".verbix" / "tasks").exists()
+    assert not (home / ".verbix" / "home").exists()
     assert not (tmp_path / ".verbix").exists()
     assert started == ["task-1"]
     assert ("task_registered", {"task_id": "task-1", "objective": "do stuff"}) in [
         (a[0], a[1]) for a in broadcasted
     ]
+
+    # Writing to scratch_dir lazily creates the directory
+    res = await FileWriteTool().execute(
+        {"path": str(scratch / "artifact.txt"), "content": "created on write"},
+        ToolContext(workspace=tmp_path),
+    )
+    assert not res.is_error
+    assert scratch.is_dir()
+    assert (scratch / "artifact.txt").read_text(encoding="utf-8") == "created on write"
 
 
 @pytest.mark.asyncio

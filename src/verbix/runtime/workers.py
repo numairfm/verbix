@@ -137,7 +137,6 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
     runtime._task_counter += 1
     task_id = f"task-{runtime._task_counter}"
     scratch_dir = Path.home() / ".verbix" / "tasks" / run_id / task_id
-    scratch_dir.mkdir(parents=True, exist_ok=True)
 
     raw_worker_cfg = _load_worker_yaml_dict()
     agent_cfg_dict = raw_worker_cfg.get("agent", {})

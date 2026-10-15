@@ -13,7 +13,8 @@ import yaml
 logger = logging.getLogger(__name__)
 
 DEFAULT_RETENTION_DAYS = 14
-_ALLOWED_KEYS = ("provider", "stt_model", "retention_days")
+_ALLOWED_KEYS = ("provider", "stt_model", "retention_days", "tts_voice", "tts_speed")
+_VALID_TTS_VOICES = frozenset({"M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5"})
 _GUIDANCE_BLOCK = re.compile(r"\A\s*<!--.*?-->\s*", re.DOTALL)
 
 _CONFIG_TEMPLATE = """\
@@ -21,6 +22,9 @@ _CONFIG_TEMPLATE = """\
 # VERBIX_PROVIDER env and CLI flags win over this file.
 # Uncomment and edit to set a default speech-to-text model:
 # stt_model: /path/to/model.gguf
+# Supertonic TTS voice (M1-M5 or F1-F5, default: M1) and speed (default: 1.0):
+# tts_voice: M1
+# tts_speed: 1.0
 # Days to retain old tool logs and screenshots (default: 14):
 # retention_days: 14
 """
@@ -54,6 +58,20 @@ def _read_config_file(path: Path) -> dict:
             raise ValueError(
                 f"Invalid 'retention_days' in {path}: expected a positive number"
             )
+    if "tts_voice" in data and data["tts_voice"] is not None:
+        v = str(data["tts_voice"]).strip().upper()
+        if v not in _VALID_TTS_VOICES:
+            raise ValueError(
+                f"Invalid 'tts_voice' in {path}: expected one of {sorted(_VALID_TTS_VOICES)}"
+            )
+        data["tts_voice"] = v
+    if "tts_speed" in data and data["tts_speed"] is not None:
+        s = data["tts_speed"]
+        if isinstance(s, bool) or not isinstance(s, (int, float)) or not (0.25 <= float(s) <= 3.0):
+            raise ValueError(
+                f"Invalid 'tts_speed' in {path}: expected a number between 0.25 and 3.0"
+            )
+        data["tts_speed"] = float(s)
     return {k: data[k] for k in _ALLOWED_KEYS if k in data}
 
 
@@ -79,6 +97,25 @@ def load_config(
             raise ValueError(
                 f"Invalid VERBIX_RETENTION_DAYS='{env_retention}': expected a positive number"
             ) from e
+    env_voice = os.environ.get("VERBIX_TTS_VOICE")
+    if env_voice:
+        v = env_voice.strip().upper()
+        if v not in _VALID_TTS_VOICES:
+            raise ValueError(
+                f"Invalid VERBIX_TTS_VOICE='{env_voice}': expected one of {sorted(_VALID_TTS_VOICES)}"
+            )
+        cfg["tts_voice"] = v
+    env_speed = os.environ.get("VERBIX_TTS_SPEED")
+    if env_speed:
+        try:
+            s = float(env_speed)
+            if not (0.25 <= s <= 3.0):
+                raise ValueError
+            cfg["tts_speed"] = s
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid VERBIX_TTS_SPEED='{env_speed}': expected a number between 0.25 and 3.0"
+            ) from e
     if args is not None:
         for key in _ALLOWED_KEYS:
             value = getattr(args, key, None)
@@ -91,6 +128,23 @@ def load_config(
                     raise ValueError(
                         f"Invalid --retention-days='{value}': expected a positive number"
                     )
+                if key == "tts_voice":
+                    v = str(value).strip().upper()
+                    if v not in _VALID_TTS_VOICES:
+                        raise ValueError(
+                            f"Invalid --tts-voice='{value}': expected one of {sorted(_VALID_TTS_VOICES)}"
+                        )
+                    value = v
+                if key == "tts_speed":
+                    if (
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not (0.25 <= float(value) <= 3.0)
+                    ):
+                        raise ValueError(
+                            f"Invalid --tts-speed='{value}': expected a number between 0.25 and 3.0"
+                        )
+                    value = float(value)
                 cfg[key] = value
     return cfg
 

@@ -155,10 +155,14 @@ class VoicePipeline:
 
             self.runtime.floor.set_state(FloorState.LISTENING)
 
-        # Warm provider connection in background so TLS handshake is complete before speech ends
+        # Warm provider connection and TTS ONNX weights in background while user speaks
         warm_fn = getattr(getattr(self.runtime, "provider", None), "warm", None)
         if asyncio.iscoroutinefunction(warm_fn):
             asyncio.create_task(warm_fn())
+        tts = getattr(self.player, "tts", None)
+        load_fn = getattr(tts, "load", None)
+        if asyncio.iscoroutinefunction(load_fn) and not getattr(tts, "is_loaded", False):
+            asyncio.create_task(load_fn())
 
         await self.capture.start_recording()
 

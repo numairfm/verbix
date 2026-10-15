@@ -411,6 +411,58 @@ async def test_server_with_voice_pipeline_fans_out_wake_output_and_broadcasts_fl
 
 
 @pytest.mark.asyncio
+async def test_server_streams_foreground_voice_pipeline_turn_events_to_ipc_clients(
+    tmp_path,
+):
+    from verbix.voice.base import MockAudioSink, MockSpeechToText, MockTextToSpeech
+    from verbix.voice.pipeline import VoicePipeline
+    from verbix.voice.player import AudioPlayer
+
+    provider = MagicMock()
+
+    async def fake_stream(messages, tools=None, **kwargs):
+        yield ProviderTextDelta(text="Hello from voice turn.")
+        yield ProviderFinish(reason="stop")
+
+    provider.stream = fake_stream
+    rt = Runtime(workspace=tmp_path, provider=provider)
+    pipeline = VoicePipeline(
+        runtime=rt,
+        stt=MockSpeechToText(),
+        player=AudioPlayer(tts=MockTextToSpeech(), sink=MockAudioSink(playback_delay=0.0)),
+    )
+    sock_path = tmp_path / "voice_turn.sock"
+    server = VerbixServer(runtime=rt, pipeline=pipeline, socket_path=sock_path)
+    await server.start()
+    try:
+        reader, writer = await asyncio.open_unix_connection(str(sock_path))
+        while not server._clients:
+            await asyncio.sleep(0.01)
+
+        await pipeline.execute_voice_turn("Hi there")
+        received_types = []
+        while True:
+            try:
+                line = await asyncio.wait_for(reader.readline(), timeout=0.3)
+            except TimeoutError:
+                break
+            if not line:
+                break
+            msg = json.loads(line.decode("utf-8"))
+            received_types.append(msg["type"])
+            if msg["type"] == "turn_complete":
+                break
+        assert "text_delta" in received_types
+        assert "turn_complete" in received_types
+
+        writer.close()
+        await writer.wait_closed()
+    finally:
+        await server.stop()
+        await rt.aclose()
+
+
+@pytest.mark.asyncio
 async def test_ipc_server_and_client_fallback_to_tcp_when_unix_sockets_unavailable(
     tmp_path, monkeypatch
 ):

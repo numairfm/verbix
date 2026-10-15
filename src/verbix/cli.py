@@ -168,6 +168,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to GGUF speech-to-text model file (default: auto-discover).",
     )
     parser.add_argument(
+        "--tts-voice",
+        type=str,
+        default=None,
+        help="Supertonic TTS voice ID (M1-M5 or F1-F5; default: M1).",
+    )
+    parser.add_argument(
+        "--tts-speed",
+        type=float,
+        default=None,
+        help="Supertonic TTS speaking speed multiplier (0.25-3.0; default: 1.0).",
+    )
+    parser.add_argument(
         "--dump-mic-dir",
         type=Path,
         default=None,
@@ -441,9 +453,12 @@ def _build_voice_pipeline(
     from verbix.voice.sherpa_tts import SherpaTTS
     from verbix.voice.transcribe_stt import TranscribeSTT
 
-    stt_model = load_config(runtime.workspace, args).get("stt_model")
+    cfg = load_config(runtime.workspace, args)
+    stt_model = cfg.get("stt_model")
+    tts_voice = cfg.get("tts_voice") or "M1"
+    tts_speed = float(cfg.get("tts_speed") or 1.0)
     stt = TranscribeSTT(model_path=stt_model, workspace=runtime.workspace)
-    tts = SherpaTTS()
+    tts = SherpaTTS(voice_id=tts_voice, speed=tts_speed)
     sink = CallbackAudioSink(
         sample_rate=24000,
         audio_format="f32",

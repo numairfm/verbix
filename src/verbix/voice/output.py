@@ -92,6 +92,7 @@ class SpeechOutput:
         self.tts = tts
         self.sink = sink
         self.printer = printer
+        self.on_event: Any = None
         self._buf = ""
         self._seen = ""
         self._delivered: list[str] = []
@@ -116,6 +117,10 @@ class SpeechOutput:
             res = self.printer.emit(event)
             if asyncio.iscoroutine(res):
                 await res
+        if callable(self.on_event):
+            res_ev = self.on_event(event)
+            if asyncio.iscoroutine(res_ev):
+                await res_ev
 
         if isinstance(event, TextDelta):
             self._buf += event.text

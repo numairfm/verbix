@@ -45,6 +45,8 @@ environment wins over file values (`cli.py:29`).
 | `VERBIX_BASE_URL` | provider default | custom endpoint |
 | `VERBIX_MAX_TOKENS` | `2048` | per-turn completion cap |
 | `VERBIX_RETENTION_DAYS` | `14` | days to retain tool logs and screenshots |
+| `VERBIX_TTS_VOICE` | `M1` | Supertonic TTS voice (`M1`–`M5`, `F1`–`F5`) |
+| `VERBIX_TTS_SPEED` | `1.0` | Supertonic TTS speaking speed (`0.25`–`3.0`) |
 
 Agent tuning lives in `src/verbix/agent/config/`: `voice.yaml`
 (foreground), `worker.yaml` / `swe_worker.yaml` (background workers).
@@ -61,10 +63,12 @@ Verbix separates its machine-global state under `~/.verbix/` from project worksp
   - `voice/stt/models/`: user-managed speech-to-text (STT) GGUF models, organized by model ID (default `~/.verbix/voice/stt/models/nemotron-gguf/`), created lazily when provisioned or migrated.
 - **Retention policy**: At startup, Verbix deletes entries under `~/.verbix/logs/` and `~/.verbix/screenshots/` older than `retention_days` (default `14` days; configurable via `retention_days` in `~/.verbix/config.yaml`, `VERBIX_RETENTION_DAYS`, or `--retention-days`). Retention cleanup never touches `config.yaml`, `PERSONA.md`, `MEMORY.md`, `auth.json`, workspace contents, or voice models.
 
-Config precedence: builtin defaults < `~/.verbix/config.yaml` < env < CLI flags. `config.yaml` is optional and accepts `provider`, `stt_model`, and `retention_days`:
+Config precedence: builtin defaults < `~/.verbix/config.yaml` < env < CLI flags. `config.yaml` is optional and accepts `provider`, `stt_model`, `tts_voice`, `tts_speed`, and `retention_days`:
 
 ```yaml
 # stt_model: /path/to/model.gguf
+# tts_voice: M1
+# tts_speed: 1.0
 # retention_days: 14
 ```
 

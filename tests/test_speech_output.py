@@ -284,3 +284,42 @@ async def test_Idle_ptt_toggle_plays_start_and_stop_earcon_cues():
     await asyncio.sleep(0.02)
     assert cues == [660.0, 880.0]
 
+
+@pytest.mark.asyncio
+async def test_start_recording_prewarms_tts_when_not_loaded():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from verbix.runtime.floor import FloorArbiter
+    from verbix.voice.base import MockAudioSink, MockSpeechToText, MockTextToSpeech
+    from verbix.voice.pipeline import VoicePipeline
+    from verbix.voice.player import AudioPlayer
+
+    rt = MagicMock()
+    rt.floor = FloorArbiter()
+    rt.is_idle = True
+
+    cap = MagicMock()
+    cap.is_recording = False
+    cap.start_recording = AsyncMock()
+
+    tts = MockTextToSpeech()
+    tts.is_loaded = False  # type: ignore[attr-defined]
+    loaded_called = False
+
+    async def fake_load():
+        nonlocal loaded_called
+        loaded_called = True
+        tts.is_loaded = True  # type: ignore[attr-defined]
+
+    tts.load = fake_load  # type: ignore[attr-defined]
+
+    pipeline = VoicePipeline(
+        runtime=rt,
+        stt=MockSpeechToText(),
+        player=AudioPlayer(tts=tts, sink=MockAudioSink()),
+        capture=cap,
+    )
+    await pipeline.start_recording()
+    await asyncio.sleep(0.02)
+    assert loaded_called is True
+

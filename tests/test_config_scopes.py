@@ -320,6 +320,65 @@ def test_retention_days_config_env_and_cli_precedence(tmp_path, monkeypatch):
             load_config(ws)
 
 
+def test_tts_voice_and_speed_config_env_cli_precedence_and_validation(
+    tmp_path, monkeypatch
+):
+    import verbix.voice.sherpa_tts as tts_mod
+    import verbix.voice.transcribe_stt as stt_mod
+    from verbix.cli import _build_voice_pipeline, build_parser, build_runtime
+    from verbix.config import load_config
+
+    home = tmp_path / "home"
+    ws = tmp_path / "ws"
+    ws.mkdir(parents=True)
+    _patch_home(monkeypatch, home)
+    monkeypatch.delenv("VERBIX_PROVIDER", raising=False)
+    monkeypatch.delenv("VERBIX_TTS_VOICE", raising=False)
+    monkeypatch.delenv("VERBIX_TTS_SPEED", raising=False)
+
+    # 1. Config file sets tts_voice and tts_speed
+    _write(home / ".verbix" / "config.yaml", "tts_voice: f2\ntts_speed: 1.15\n")
+    cfg = load_config(ws)
+    assert cfg["tts_voice"] == "F2"
+    assert cfg["tts_speed"] == 1.15
+
+    # 2. Env vars override config file
+    monkeypatch.setenv("VERBIX_TTS_VOICE", "M3")
+    monkeypatch.setenv("VERBIX_TTS_SPEED", "1.25")
+    cfg_env = load_config(ws)
+    assert cfg_env["tts_voice"] == "M3"
+    assert cfg_env["tts_speed"] == 1.25
+
+    # 3. CLI flags override env vars and reach SherpaTTS
+    captured_tts: dict = {}
+
+    class FakeTTS:
+        def __init__(self, voice_id="M1", speed=1.0, **kw):
+            captured_tts["voice_id"] = voice_id
+            captured_tts["speed"] = speed
+
+    monkeypatch.setattr(tts_mod, "SherpaTTS", FakeTTS)
+    monkeypatch.setattr(stt_mod, "TranscribeSTT", lambda *a, **k: object())
+    monkeypatch.setattr("verbix.voice.callback_sink.CallbackAudioSink", lambda *a, **k: object())
+
+    args = build_parser().parse_args(
+        ["--workspace", str(ws), "--tts-voice", "F4", "--tts-speed", "0.9"]
+    )
+    rt = build_runtime(args)
+    _build_voice_pipeline(rt, args)
+    assert captured_tts == {"voice_id": "F4", "speed": 0.9}
+
+    # 4. Invalid tts_voice or tts_speed raises ValueError
+    monkeypatch.delenv("VERBIX_TTS_VOICE", raising=False)
+    monkeypatch.delenv("VERBIX_TTS_SPEED", raising=False)
+    _write(home / ".verbix" / "config.yaml", "tts_voice: X9\n")
+    with pytest.raises(ValueError, match="tts_voice"):
+        load_config(ws)
+    _write(home / ".verbix" / "config.yaml", "tts_speed: 0\n")
+    with pytest.raises(ValueError, match="tts_speed"):
+        load_config(ws)
+
+
 def test_startup_retention_prunes_old_state_and_preserves_current_and_user_data(
     tmp_path, monkeypatch
 ):

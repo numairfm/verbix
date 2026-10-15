@@ -96,11 +96,17 @@ class VerbixServer:
         self._prompt_tasks: set[asyncio.Task[Any]] = set()
         self._event_forwarder_task: asyncio.Task[None] | None = None
 
-        # Configure wake turn output (fanning out to both voice output and IPC clients when pipeline is attached)
+        # Configure wake and foreground voice turn output fan-out to IPC clients
         bcast = BroadcastWakeOutput(self)
+        turn_out = getattr(self.pipeline, "turn_output", None) if self.pipeline else None
+        if turn_out is not None:
+            turn_out.on_event = bcast.emit
         if self.runtime.wake_output is None:
             self.runtime.wake_output = bcast
-        elif not isinstance(self.runtime.wake_output, BroadcastWakeOutput):
+        elif (
+            self.runtime.wake_output is not turn_out
+            and not isinstance(self.runtime.wake_output, BroadcastWakeOutput)
+        ):
             from verbix.runtime.announcer import WakeOutputFanOut
 
             self.runtime.wake_output = WakeOutputFanOut(

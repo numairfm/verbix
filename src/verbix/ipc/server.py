@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -139,13 +140,20 @@ class VerbixServer:
                 self.socket_path.unlink()
 
             start_unix = getattr(asyncio, "start_unix_server", None)
-            if callable(start_unix):
-                self._server = await start_unix(
-                    self._handle_client,
-                    path=str(self.socket_path),
-                )
-                logger.info("Verbix IPC server listening on UDS: %s", self.socket_path)
-            else:
+            started_unix = False
+            if sys.platform != "win32" and callable(start_unix):
+                try:
+                    self._server = await start_unix(
+                        self._handle_client,
+                        path=str(self.socket_path),
+                    )
+                    started_unix = True
+                    logger.info(
+                        "Verbix IPC server listening on UDS: %s", self.socket_path
+                    )
+                except (NotImplementedError, AttributeError):
+                    started_unix = False
+            if not started_unix:
                 self._server = await asyncio.start_server(
                     self._handle_client,
                     host="127.0.0.1",

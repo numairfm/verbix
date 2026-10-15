@@ -118,9 +118,12 @@ class SpeechOutput:
             if asyncio.iscoroutine(res):
                 await res
         if callable(self.on_event):
-            res_ev = self.on_event(event)
-            if asyncio.iscoroutine(res_ev):
-                await res_ev
+            if isinstance(event, TurnComplete) and (event.final_text or "").strip() in _INTERNAL_CONTROL_TOKENS:
+                pass
+            else:
+                res_ev = self.on_event(event)
+                if asyncio.iscoroutine(res_ev):
+                    await res_ev
 
         if isinstance(event, TextDelta):
             self._buf += event.text

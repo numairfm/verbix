@@ -463,13 +463,16 @@ async def test_server_streams_foreground_voice_pipeline_turn_events_to_ipc_clien
 
 
 @pytest.mark.asyncio
-async def test_ipc_server_and_client_fallback_to_tcp_when_unix_sockets_unavailable(
+async def test_ipc_server_and_client_fallback_to_tcp_when_unix_sockets_raise_not_implemented(
     tmp_path, monkeypatch
 ):
     from verbix.ipc.client import VerbixClient
 
-    monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
-    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
+    async def raise_not_impl(*a, **k):
+        raise NotImplementedError("AF_UNIX not supported on Windows event loop")
+
+    monkeypatch.setattr(asyncio, "start_unix_server", raise_not_impl, raising=False)
+    monkeypatch.setattr(asyncio, "open_unix_connection", raise_not_impl, raising=False)
 
     rt = _make_runtime(tmp_path)
     sock_path = tmp_path / "win_fallback.sock"

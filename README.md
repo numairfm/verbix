@@ -215,11 +215,11 @@ provisioned models via `uv run scripts/fetch_voice_models.py`.
 ## Platform support
 
 - **Linux (`x86_64`, `aarch64`)**: Supported tier. Requires system packages `bubblewrap` (`bwrap`, for mandatory worker `bash` sandboxing) and `libportaudio2` (`portaudio`, for `sounddevice` audio capture and playback).
-- **Windows (`amd64`) & macOS (`arm64`, `x86_64`)**: Experimental and untested by the maintainer. No sandbox backend is enabled on Windows or macOS, so the `bash` tool is automatically omitted from workers (with a startup notice on `stderr`), and workers operate using the 12 cross-platform workspace/web/desktop tools (`read`, `write`, `edit`, `grep`, `glob`, `web_search`, `web_fetch`, `screenshot`, `clipboard`, `media`, `app`, `open`). IPC (`--serve` / `--toggle`) uses POSIX Unix domain sockets.
+- **Windows (`amd64`) & macOS (`arm64`, `x86_64`)**: Experimental and untested by the maintainer. No sandbox backend is enabled on Windows or macOS, so the `bash` tool is automatically omitted from workers (with a startup notice on `stderr`), and workers operate using the 16 cross-platform workspace/web/desktop tools (`read`, `write`, `edit`, `grep`, `glob`, `web_search`, `web_fetch`, `screenshot`, `clipboard`, `media`, `app`, `open`, `system`, `timer`, `memory`, `notify`). IPC (`--serve` / `--toggle`) uses Unix domain sockets on POSIX and loopback TCP on Windows.
 
 ## Limits (as built)
 
-- Nothing survives restart: history, ledger, workers are in-memory only.
+- Chat history, task ledger, and workers are in-memory only (`~/.verbix/MEMORY.md` persists saved user facts across restarts).
 - Workers get the objective only, never the chat; no steering a running worker
   except cancel.
 - Rolling compaction keeps foreground context near ~16k tokens

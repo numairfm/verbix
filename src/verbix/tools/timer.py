@@ -168,7 +168,7 @@ class TimerTool:
             finally:
                 store.pop(timer_id, None)
 
-            msg = f"Timer '{label}' ({dur_str}) is up. Let the user know now."
+            msg = f"Timer '{label}' ({dur_str}) finished."
             if runtime_ref is not None:
                 on_done = getattr(runtime_ref, "_on_task_finished", None)
                 if callable(on_done):

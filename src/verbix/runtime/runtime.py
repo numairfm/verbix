@@ -263,6 +263,19 @@ class Runtime:
             ]
             envelope.append(f"[Active background tasks: {'; '.join(active_parts)}]")
 
+        timers = [
+            e
+            for e in getattr(self, "_timers", {}).values()
+            if not getattr(e, "task", None).done()
+        ]
+        if timers:
+            now = time.time()
+            t_parts = [
+                f"{e.id} ('{e.label}', {max(0, round(e.fire_at - now))}s remaining)"
+                for e in timers
+            ]
+            envelope.append(f"[Active timers: {'; '.join(t_parts)}]")
+
         folded_ids: list[str] = []
         pending_lines: list[str] = []
         if hasattr(self, "ledger"):
@@ -501,22 +514,36 @@ class Runtime:
         if task_id:
             task = self.tasks.get(task_id)
             if not task:
+                timer_entry = getattr(self, "_timers", {}).get(task_id)
+                if timer_entry is not None and not timer_entry.task.done():
+                    rem = max(0, round(timer_entry.fire_at - time.time()))
+                    return f"{timer_entry.id}: '{timer_entry.label}' (timer running, {rem}s remaining)"
                 return f"No task found with ID '{task_id}'."
             if task.status in ("completed", "failed"):
                 self._mark_task_heard(task.id)
             return task.get_status(full=full)
 
         active = self.list_active_tasks()
+        active_timers = [
+            e
+            for e in getattr(self, "_timers", {}).values()
+            if not getattr(e, "task", None).done()
+        ]
         recent_done = [t for t in self.tasks.values() if t.status != "running"][-3:]
 
-        if not active and not recent_done:
+        if not active and not active_timers and not recent_done:
             return "No active background tasks."
 
         lines = []
-        if active:
+        if active or active_timers:
             lines.append("Active tasks:")
             for t in active:
                 lines.append(f"- {t.get_status(full=full)}")
+            now = time.time()
+            for e in active_timers:
+                lines.append(
+                    f"- {e.id}: '{e.label}' (timer, {max(0, round(e.fire_at - now))}s remaining)"
+                )
         if recent_done:
             lines.append("Recently completed:")
             for t in recent_done:
@@ -531,17 +558,29 @@ class Runtime:
         return "\n".join(lines)
 
     async def cancel(self, task_id: str | None = None) -> str:
-        """Cancels running tasks immediately."""
+        """Cancels running tasks and active timers immediately."""
         active = self.list_active_tasks()
+        timers_dict = getattr(self, "_timers", {})
+        active_timers = [
+            e for e in timers_dict.values() if not getattr(e, "task", None).done()
+        ]
 
         if task_id == "all":
-            if not active:
+            if not active and not active_timers:
                 return "No active tasks to cancel."
             for t in active:
                 await t.cancel()
-            return f"Cancelled all {len(active)} active tasks."
+            for e in active_timers:
+                e.task.cancel()
+                timers_dict.pop(e.id, None)
+            total = len(active) + len(active_timers)
+            return f"Cancelled all {total} active tasks."
 
         if task_id:
+            if task_id in timers_dict:
+                e = timers_dict.pop(task_id)
+                e.task.cancel()
+                return f"Cancelled {e.id} ('{e.label}')."
             task = self.tasks.get(task_id)
             if not task:
                 return f"No task found with ID '{task_id}'."
@@ -551,14 +590,22 @@ class Runtime:
             return f"Cancelled {task.id} ('{task.description}')."
 
         # task_id omitted
-        if not active:
+        if not active and not active_timers:
             return "No active tasks to cancel."
-        if len(active) == 1:
+        if len(active) == 1 and not active_timers:
             t = active[0]
             await t.cancel()
             return f"Cancelled {t.id} ('{t.description}')."
+        if len(active_timers) == 1 and not active:
+            e = active_timers[0]
+            e.task.cancel()
+            timers_dict.pop(e.id, None)
+            return f"Cancelled {e.id} ('{e.label}')."
 
-        task_lines = "\n".join(f"- {t.id}: '{t.description}'" for t in active)
+        task_lines = "\n".join(
+            [f"- {t.id}: '{t.description}'" for t in active]
+            + [f"- {e.id}: '{e.label}'" for e in active_timers]
+        )
         return (
             "Multiple tasks are running. Specify which task ID to cancel, or pass 'all':\n"
             f"{task_lines}"

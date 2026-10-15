@@ -108,9 +108,9 @@ class VoicePipeline:
             await self.start_recording()
             return {"action": "interrupted_and_recording"}
 
-        # 3. Idle -> begin recording with opening earcon cue
+        # 3. Idle -> play opening earcon cue, then begin recording
         self.runtime.user_active = True
-        asyncio.create_task(self._speech_output.play_cue(660.0))
+        await self._speech_output.play_cue(660.0)
         await self.start_recording()
         return {"action": "recording"}
 
@@ -162,7 +162,10 @@ class VoicePipeline:
         tts = getattr(self.player, "tts", None)
         load_fn = getattr(tts, "load", None)
         if asyncio.iscoroutinefunction(load_fn) and not getattr(tts, "is_loaded", False):
-            asyncio.create_task(load_fn())
+            t = asyncio.create_task(load_fn())
+            t.add_done_callback(
+                lambda fut: fut.exception() if not fut.cancelled() else None
+            )
 
         await self.capture.start_recording()
 

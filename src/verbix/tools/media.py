@@ -239,7 +239,16 @@ def _macos_media_or_volume(
         )
         return f"Audio {'muted' if new_mute else 'unmuted'}."
 
-    app_name = "Spotify" if (player and "spotify" in player.lower()) else "Music"
+    app_name: str | None = None
+    if player and player.strip():
+        low_p = player.strip().lower()
+        if "spotify" in low_p:
+            app_name = "Spotify"
+        elif "music" in low_p or "itunes" in low_p:
+            app_name = "Music"
+        else:
+            return f"No active media player matching '{player}' found (available on macOS: Spotify, Music)."
+
     if action == "status":
         script = (
             'set out to ""\n'
@@ -272,8 +281,8 @@ def _macos_media_or_volume(
         "stop": "pause",
     }[action]
     target_script = (
-        f'tell application "{app_name}" to {apple_cmd}'
-        if player
+        f'if application "{app_name}" is running then tell application "{app_name}" to {apple_cmd}'
+        if app_name
         else (
             'if application "Spotify" is running then\n'
             f'  tell application "Spotify" to {apple_cmd}\n'
@@ -289,7 +298,7 @@ def _macos_media_or_volume(
         timeout=5.0,
         check=True,
     )
-    return f"Sent '{action}' to {player or 'active media player'}."
+    return f"Sent '{action}' to {app_name or 'active media player'}."
 
 
 def _windows_media_or_volume(

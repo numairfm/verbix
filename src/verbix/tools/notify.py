@@ -80,11 +80,14 @@ def _windows_notify(title: str, message: str) -> str:
     """Sends a Windows toast/balloon notification passing strings safely via environment variables."""
     ps_script = (
         "Add-Type -AssemblyName System.Windows.Forms; "
+        "Add-Type -AssemblyName System.Drawing; "
         "$n = New-Object System.Windows.Forms.NotifyIcon; "
         "$n.Icon = [System.Drawing.SystemIcons]::Information; "
         "$n.Visible = $true; "
         "$n.ShowBalloonTip(5000, $env:VERBIX_NOTIFY_TITLE, $env:VERBIX_NOTIFY_MSG, "
-        "[System.Windows.Forms.ToolTipIcon]::Info)"
+        "[System.Windows.Forms.ToolTipIcon]::Info); "
+        "Start-Sleep -Milliseconds 250; "
+        "$n.Dispose()"
     )
     env = {
         **os.environ,

@@ -462,13 +462,26 @@ async def test_timer_tool_set_list_cancel_and_fires_announcement(tmp_path: Path)
     assert not r_list.is_error
     assert "laundry" in r_list.observation
 
-    # 3. Wait for fast timer to fire -> triggers announcement on runtime
+    # 3. Wait for fast timer to fire -> triggers announcement on runtime without imperative prose
     await asyncio.sleep(0.1)
     assert len(announced) == 1
     assert announced[0][0] == "timer-1"
     assert "check pasta" in announced[0][1]
+    assert "Let the user know" not in announced[0][1]
 
-    # 4. Cancel remaining timer
+    # 4. Runtime status() and cancel() see and cancel active timers
+    real_rt = MagicMock()
+    from verbix.runtime.runtime import Runtime
+
+    real_rt = Runtime(workspace=tmp_path, provider=MagicMock())
+    real_timer = TimerTool(real_rt)
+    await real_timer.execute({"action": "set", "seconds": 30, "label": "tea"}, ctx)
+    assert "tea" in real_rt.status()
+    cancel_msg = await real_rt.cancel()
+    assert "Cancelled" in cancel_msg and "tea" in cancel_msg
+    await real_rt.aclose()
+
+    # 5. Cancel remaining timer on DummyRuntime
     r_cancel = await tool.execute({"action": "cancel", "timer_id": "timer-2"}, ctx)
     assert not r_cancel.is_error
     assert "Cancelled timer-2" in r_cancel.observation

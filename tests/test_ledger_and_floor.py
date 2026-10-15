@@ -80,3 +80,20 @@ async def test_runtime_wires_floor_and_ledger(tmp_path):
     await rt.submit("hello")
     assert rt.floor.state == FloorState.IDLE
     assert rt.is_idle
+
+
+def test_floor_can_announce_only_when_idle_and_not_interrupted():
+    floor = FloorArbiter()
+    assert floor.can_announce() is True
+
+    floor.set_state(FloorState.LISTENING)
+    assert floor.can_announce() is False
+
+    floor.set_state(FloorState.SPEAKING)
+    assert floor.can_announce() is False
+
+    floor.set_state(FloorState.IDLE)
+    floor.request_interrupt()
+    assert floor.can_announce() is False
+    assert not hasattr(floor, "user_speaking")
+

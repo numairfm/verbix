@@ -18,13 +18,8 @@ def test_capture_init_defaults():
 
 @pytest.mark.asyncio
 async def test_capture_lifecycle_with_sounddevice():
-    """Verify PTTCapture uses sounddevice.RawInputStream and delivers conditioned audio chunks."""
-    chunks_received = []
-
-    def on_chunk(data: bytes):
-        chunks_received.append(data)
-
-    cap = PTTCapture(sample_rate=16000, channels=1, on_chunk=on_chunk)
+    """Verify PTTCapture uses sounddevice.RawInputStream and returns conditioned audio bytes."""
+    cap = PTTCapture(sample_rate=16000, channels=1)
 
     fake_stream = MagicMock()
     fake_stream.start = MagicMock()
@@ -56,14 +51,13 @@ async def test_capture_lifecycle_with_sounddevice():
         assert not cap.is_recording
         assert fake_stream.stop.called
         assert fake_stream.close.called
-        assert len(chunks_received) == 2
         assert len(recorded) == 1280
 
 
 @pytest.mark.asyncio
 async def test_audio_callback_never_raises_after_loop_teardown():
     """Ctrl+C teardown: a late PortAudio callback must not escape (no traceback noise)."""
-    cap = PTTCapture(sample_rate=16000, channels=1, on_chunk=lambda _b: None)
+    cap = PTTCapture(sample_rate=16000, channels=1)
 
     fake_stream = MagicMock()
     callback_holder = []

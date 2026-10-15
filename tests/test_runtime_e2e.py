@@ -63,7 +63,6 @@ async def test_runtime_spawn_and_completion_loop(tmp_path):
     runtime = Runtime(
         workspace=tmp_path,
         provider=provider,
-        buffer_window=0.05,
         on_wake=on_wake,
     )
 
@@ -98,7 +97,6 @@ async def test_runtime_status_and_cancel(mock_provider, tmp_path):
     runtime = Runtime(
         workspace=tmp_path,
         provider=mock_provider,
-        buffer_window=0.05,
     )
 
     # Status with no tasks
@@ -161,7 +159,7 @@ async def test_runtime_cancelled_task_does_not_fire_announcer(tmp_path):
             emitted_events.append(event)
 
     output = FakeOutput()
-    runtime = Runtime(workspace=tmp_path, provider=provider, buffer_window=0.02)
+    runtime = Runtime(workspace=tmp_path, provider=provider)
     runtime.wake_output = output
 
     task_id = await runtime.spawn("task to be cancelled")
@@ -295,7 +293,7 @@ async def test_runtime_direct_worker_completion_is_silent(tmp_path):
             emitted_events.append(event)
 
     output = FakeOutput()
-    runtime = Runtime(workspace=tmp_path, provider=provider, buffer_window=0.02)
+    runtime = Runtime(workspace=tmp_path, provider=provider)
     runtime.wake_output = output
 
     # Spawn worker
@@ -662,9 +660,8 @@ async def test_scripted_live_session_replay_has_no_duplicate_spawns_and_no_doubl
 
     rt.spawn = fake_spawn
 
-    # Hold floor in LISTENING with user_speaking=True during turns 1-2
+    # Hold floor in LISTENING (PTT recording active) during turns 1-2
     rt.floor.set_state(FloorState.LISTENING)
-    rt.floor.set_user_speaking(True)
 
     # Turn 1: "What's on my screen?" -> spawns task-1 (screenshot is in worker capabilities)
     assert "screenshot" in rt.system_prompt
@@ -673,13 +670,11 @@ async def test_scripted_live_session_replay_has_no_duplicate_spawns_and_no_doubl
 
     # Turn 2: "Someone told me Nvidia bought Hugging Face for 13B" -> sees active task-1, spawns task-2
     rt.floor.set_state(FloorState.LISTENING)
-    rt.floor.set_user_speaking(True)
     await rt.submit("Someone told me Nvidia bought Hugging Face for 13B, is that true?")
     assert len(spawned_objectives) == 2
 
-    # Tasks 1 and 2 complete while user is about to ask "What's the status?"
+    # Tasks 1 and 2 complete while user is recording in PTT (LISTENING) before asking "What's the status?"
     rt.floor.set_state(FloorState.LISTENING)
-    rt.floor.set_user_speaking(True)
     rt.tasks["task-1"]._status = "completed"
     rt.tasks["task-1"]._result = "Screen shows VS Code."
     rt._on_task_finished("task-1", "Screen shows VS Code.")
@@ -698,9 +693,8 @@ async def test_scripted_live_session_replay_has_no_duplicate_spawns_and_no_doubl
     await rt.submit("What's the Nvidia stock price?")
     assert len(spawned_objectives) == 3
 
-    # Task 3 finishes while floor is LISTENING and user is silent -> announced proactively!
-    rt.floor.set_state(FloorState.LISTENING)
-    rt.floor.set_user_speaking(False)
+    # Task 3 finishes while floor is IDLE -> announced immediately!
+    assert rt.floor.state == FloorState.IDLE
     rt.tasks["task-3"]._status = "completed"
     rt.tasks["task-3"]._result = "$228.52"
     rt._on_task_finished("task-3", "$228.52")

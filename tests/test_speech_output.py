@@ -1,52 +1,10 @@
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from verbix.core.events import TextDelta, TurnComplete
-from verbix.runtime.floor import FloorArbiter, FloorState
 from verbix.voice.base import MockAudioSink, MockTextToSpeech
 from verbix.voice.output import SpeechOutput
-from verbix.voice.pipeline import VoicePipeline
-from verbix.voice.player import AudioPlayer
-
-
-class _FakeCapture:
-    def __init__(self, sample_rate: int = 16000):
-        self.sample_rate = sample_rate
-        self.is_recording = False
-        self.on_chunk = None
-
-    async def start_recording(self):
-        self.is_recording = True
-
-    async def stop_recording(self):
-        self.is_recording = False
-        return b""
-
-
-class _RecordingAEC:
-    """AEC stand-in: keeps pending reference bytes and counts resets."""
-
-    is_available = False
-
-    def __init__(self) -> None:
-        self.refs: list[bytes] = []
-        self.resets = 0
-        self._ref_buffer = bytearray(b"pending")
-
-    def feed_reference(
-        self,
-        audio: bytes,
-        source_sample_rate: int = 24000,
-        audio_format: str = "f32",
-    ) -> None:
-        self._ref_buffer.extend(audio)
-        self.refs.append(audio)
-
-    def reset(self) -> None:
-        self.resets += 1
-        self._ref_buffer.clear()
 
 
 @pytest.mark.asyncio
@@ -252,110 +210,6 @@ async def test_playback_completion_clears_accounting():
     snap = out.interrupt()
     assert snap is None
     assert out.last_interruption is None
-
-
-@pytest.mark.asyncio
-async def test_gap_silence_reaches_reference_hook():
-    """Slice 2: inter-sentence gap silence must reach the on_audio reference hook."""
-    seen: list[bytes] = []
-    out = SpeechOutput(
-        tts=MockTextToSpeech(),
-        sink=MockAudioSink(playback_delay=0.01),
-        on_audio=seen.append,
-    )
-    text = "First sentence here. Second sentence here."
-    await out.emit(TextDelta(text=text))
-    await out.emit(TurnComplete(final_text=text))
-    for _ in range(200):
-        if not out.is_playing:
-            break
-        await asyncio.sleep(0.01)
-    await asyncio.sleep(0.05)
-    assert bytes(int(24000 * 0.15) * 4) in seen
-
-
-@pytest.mark.asyncio
-async def test_idle_earcon_cue_reaches_reference_hook():
-    """Slice 2: an idle earcon cue must feed reference exactly what was heard."""
-    seen: list[bytes] = []
-    sink = MockAudioSink()
-    out = SpeechOutput(tts=MockTextToSpeech(), sink=sink, on_audio=seen.append)
-    await out.play_cue()
-    assert len(seen) == 1
-    assert len(seen[0]) == int(24000 * 0.05) * 4
-    assert seen[0] == sink.played_chunks[0]
-
-
-@pytest.mark.asyncio
-async def test_queued_earcon_cue_reaches_reference_hook():
-    """Slice 2: an earcon queued behind speech must also reach the reference hook."""
-    seen: list[bytes] = []
-    sink = MockAudioSink(playback_delay=0.2)
-    out = SpeechOutput(tts=MockTextToSpeech(), sink=sink, on_audio=seen.append)
-    await out.emit(TextDelta(text="Sentence being spoken aloud right now. "))
-    await asyncio.sleep(0.05)
-    assert out.is_playing
-    await out.play_cue()
-    for _ in range(200):
-        if not out.is_playing:
-            break
-        await asyncio.sleep(0.02)
-    await asyncio.sleep(0.05)
-    assert any(len(c) == int(24000 * 0.05) * 4 for c in seen)
-
-
-async def _listening_pipeline_with_refs():
-    """Pipeline with pending reference audio after speech has flowed to the hook."""
-    runtime = MagicMock()
-    runtime.floor = FloorArbiter()
-    runtime.is_idle = False
-    runtime.user_active = False
-    runtime.cancel_turn = AsyncMock()
-    aec = _RecordingAEC()
-    sink = MockAudioSink(playback_delay=0.01)
-    player = AudioPlayer(tts=MockTextToSpeech(), sink=sink)
-    stt = MagicMock()
-    stt.open_session = MagicMock(return_value=MagicMock())
-    pipeline = VoicePipeline(
-        runtime=runtime, stt=stt, player=player, capture=_FakeCapture(), aec=aec
-    )
-    pipeline._is_continuous_active = True
-    pipeline._loop = asyncio.get_running_loop()
-    await pipeline._setup_turn_listening()
-    text = "First sentence here. Second sentence here."
-    await pipeline.turn_output.emit(TextDelta(text=text))
-    await pipeline.turn_output.emit(TurnComplete(final_text=text))
-    for _ in range(100):
-        if aec.refs:
-            break
-        await asyncio.sleep(0.01)
-    assert aec.refs, "speech audio never reached the reference hook"
-    return pipeline, aec
-
-
-@pytest.mark.asyncio
-async def test_interrupt_preserves_pending_reference():
-    """Slice 2: barge-in interrupt must not wipe reference whose echo is airborne."""
-    pipeline, aec = await _listening_pipeline_with_refs()
-    pipeline.runtime.floor.set_state(FloorState.SPEAKING)
-    pipeline._interrupt_active_speech()
-    await asyncio.sleep(0.02)
-    assert aec.resets == 0
-    assert aec.refs
-    await pipeline.stop_continuous_session()
-
-
-@pytest.mark.asyncio
-async def test_idle_listening_preserves_pending_reference():
-    """Slice 2: mic chunks while listening must not wipe pending reference."""
-    pipeline, aec = await _listening_pipeline_with_refs()
-    while pipeline.turn_output.is_playing:
-        await asyncio.sleep(0.01)
-    pipeline.runtime.floor.set_state(FloorState.LISTENING)
-    pipeline.capture.on_chunk(b"\x00" * 320)
-    assert aec.resets == 0
-    assert aec.refs
-    await pipeline.stop_continuous_session()
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -55,11 +54,9 @@ class PTTCapture:
         self,
         sample_rate: int = 16000,
         channels: int = 1,
-        on_chunk: Callable[[bytes], None] | None = None,
     ) -> None:
         self.sample_rate = sample_rate
         self.channels = channels
-        self.on_chunk = on_chunk
         self._stream: Any = None
         self._is_recording: bool = False
         self._queue: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -137,11 +134,6 @@ class PTTCapture:
                     break
                 chunk = self._condition_chunk(chunk)
                 buf.extend(chunk)
-                if self.on_chunk:
-                    try:
-                        self.on_chunk(chunk)
-                    except (OSError, RuntimeError) as e:
-                        logger.debug("on_chunk error: %s", e)
             return bytes(buf)
 
         self._reader_task = asyncio.create_task(_read_stream())

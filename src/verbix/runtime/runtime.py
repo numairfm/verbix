@@ -97,7 +97,6 @@ class Runtime:
         provider: Any,
         system_prompt: str | None = None,
         worker_system_prompt: str | None = None,
-        buffer_window: float = 0.3,
         on_wake: Callable[[str], Coroutine[Any, Any, None] | None] | None = None,
         worker_model: Any = None,
         worker_echo: bool = False,

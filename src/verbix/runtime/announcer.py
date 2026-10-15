@@ -190,7 +190,6 @@ async def drain_pending_announcements(runtime: Any) -> None:
         )
         was_interrupted = (
             bool(getattr(runtime.floor, "interrupt_requested", False))
-            or bool(getattr(runtime.floor, "user_speaking", False))
             or not turn_completed
         )
         if final_text and not was_interrupted:

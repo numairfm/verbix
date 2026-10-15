@@ -61,42 +61,6 @@ class _StubRuntime:
         self.cancel_kwargs = kwargs
 
 
-class _StubSession:
-    def __init__(self):
-        self.on_endpoint = None
-        self.speech_duration = 0.0
-
-    def feed(self, pcm: bytes) -> None:
-        pass
-
-    @property
-    def is_speech_detected(self) -> bool:
-        return False
-
-    def feed_barge_in(self, pcm: bytes) -> bool:
-        return False
-
-    async def finalize(self) -> str:
-        return ""
-
-    def cancel(self) -> None:
-        pass
-
-    def reset(self) -> None:
-        pass
-
-
-class _StubSTT:
-    def __init__(self):
-        self.sessions = []
-
-    def open_session(self, sample_rate: int = 16000, on_endpoint=None):
-        sess = _StubSession()
-        sess.on_endpoint = on_endpoint
-        self.sessions.append(sess)
-        return sess
-
-
 @pytest.mark.asyncio
 async def test_toggle_passes_pre_interrupt_heard_text_to_cancel():
     """Snapshot ordering: heard text captured before mute, not after."""
@@ -230,8 +194,7 @@ async def test_interrupt_does_not_pass_unplayed_synthesized_text_to_cancel_turn(
     capture = _StubCapture()
     sink = TrackingSink(playback_delay=0.05)
     player = AudioPlayer(tts=MockTextToSpeech(), sink=sink)
-    pipeline = VoicePipeline(runtime=stub, stt=_StubSTT(), player=player, capture=capture)
-    pipeline._loop = asyncio.get_running_loop()
+    pipeline = VoicePipeline(runtime=stub, stt=None, player=player, capture=capture)
 
     text = "First sentence here. Second sentence here. Third sentence here."
     await pipeline.turn_output.emit(TextDelta(text=text))
@@ -249,8 +212,7 @@ async def test_interrupt_does_not_pass_unplayed_synthesized_text_to_cancel_turn(
 
     # Case 1: Interruption occurs while 0 samples have played (before first sentence completes)
     sink.played = 0
-    pipeline._interrupt_active_speech()
-    await asyncio.sleep(0.02)  # allow call_soon_threadsafe task to execute
+    await pipeline.toggle()
 
     assert stub.cancel_kwargs is not None
     # cancel_turn must receive empty string, NOT the 3 synthesized sentences from delivered_text()!
@@ -275,8 +237,7 @@ async def test_interrupt_does_not_pass_unplayed_synthesized_text_to_cancel_turn(
     # Set played samples mid-way through sentence 2
     sink.played = (start2 + end2) // 2
 
-    pipeline._interrupt_active_speech()
-    await asyncio.sleep(0.02)
+    await pipeline.toggle()
 
     assert stub.cancel_kwargs is not None
     assert stub.cancel_kwargs.get("heard") == "First sentence here."

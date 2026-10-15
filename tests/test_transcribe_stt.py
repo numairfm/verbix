@@ -142,55 +142,5 @@ def test_global_verbix_models_scope_used(tmp_path, monkeypatch):
     assert find_default_stt_model(workspace=ws).resolve() == global_model.resolve()
 
 
-@pytest.mark.asyncio
-async def test_transcribe_session_drops_pre_speech_noise_outside_vad_spans():
-    from verbix.voice.transcribe_stt import TranscribeSession
-
-    transcribed_buffers = []
-    fake_stt = MagicMock()
-    fake_stt.transcribe = lambda audio, sr: (
-        transcribed_buffers.append(audio) or "hey what's up"
-    )
-
-    speech_span = b"\x10\x00" * 1600  # 100ms span (3200 bytes)
-    fake_seg = MagicMock()
-    fake_seg.pop_segments = MagicMock(side_effect=[[], [], [speech_span]])
-    fake_seg.flush = MagicMock(return_value=[])
-
-    sess = TranscribeSession(stt=fake_stt, segmenter=fake_seg, sample_rate=16000)
-    pre_noise = b"\x01\x00" * 1600
-    sess.feed(pre_noise)
-    sess.feed(pre_noise)
-    sess.feed(speech_span)
-
-    res = await sess.finalize()
-    assert res == "hey what's up"
-    assert transcribed_buffers == [speech_span]
-    assert len(sess._buf) == 0
-    assert len(sess.fed_chunks) == 0
-
-    # TranscribeSession also exposes is_speech_detected delegating to segmenter
-    fake_seg.is_speech_detected = True
-    sess2 = TranscribeSession(stt=fake_stt, segmenter=fake_seg, sample_rate=16000)
-    assert sess2.is_speech_detected is True
-
-
-def test_ptt_open_session_without_on_endpoint_does_not_initialize_silero_vad(
-    tmp_path, monkeypatch
-):
-    import verbix.voice.sherpa_vad as vad_mod
-    from verbix.voice.transcribe_stt import TranscribeSTT
-
-    def _forbid_vad(*a, **k):
-        raise AssertionError("SileroSegmenter must not be initialized for PTT open_session(on_endpoint=None)")
-
-    monkeypatch.setattr(vad_mod, "SileroSegmenter", _forbid_vad)
-
-    stt = object.__new__(TranscribeSTT)
-    stt.sample_rate = 16000
-    sess = stt.open_session(sample_rate=16000, on_endpoint=None)
-    assert sess._segmenter is None
-    assert sess._uses_spans is False
-
 
 

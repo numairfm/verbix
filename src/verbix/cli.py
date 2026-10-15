@@ -584,8 +584,6 @@ async def async_main(args: argparse.Namespace) -> int:
         except (KeyboardInterrupt, asyncio.CancelledError):
             sys.stdout.write("\n")
         finally:
-            if getattr(pipeline, "is_continuous_active", False):
-                await pipeline.stop_continuous_session()
             live = getattr(pipeline, "_active_voice_task", None)
             if live is not None and not live.done():
                 live.cancel()

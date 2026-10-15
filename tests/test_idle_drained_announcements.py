@@ -269,7 +269,6 @@ async def test_ptt_interrupted_announcement_with_short_capture_is_not_retried_an
     class FakePTTCapture:
         sample_rate = 16000
         is_recording = False
-        on_chunk = None
 
         async def start_recording(self):
             self.is_recording = True
@@ -284,9 +283,6 @@ async def test_ptt_interrupted_announcement_with_short_capture_is_not_retried_an
         player=player,
         capture=FakePTTCapture(),
     )
-
-    # PTT-only pipeline must not initialize continuous-only EchoCanceller
-    assert pipeline._aec is None
 
     # 1. Task finishes while idle -> announcement starts playing
     rt.ledger.register_task("task-1", "Check workspace")
@@ -332,7 +328,6 @@ async def test_ptt_interrupted_announcement_with_short_capture_is_not_retried_an
     assert "Workspace has 5 files." in seen_fg_prompts[0]
     assert rt.ledger.get("task-1").delivery == "heard"
     assert announcer_calls == 1
-    assert pipeline._aec is None
     await rt.aclose()
 
 

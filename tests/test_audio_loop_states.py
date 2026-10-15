@@ -77,3 +77,49 @@ async def test_pipeline_ptt_mutes_playback_and_transitions_states():
     await pipeline.execute_voice_turn("User question")
     assert rt.floor.state == FloorState.IDLE
     assert rt.floor.is_idle is True
+
+
+@pytest.mark.asyncio
+async def test_pipeline_logs_user_transcript_ptt():
+    """Pipeline logs finalized PTT transcripts with duration and ignores empty ones."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from verbix.voice.base import MockAudioSink, MockSpeechToText, MockTextToSpeech
+    from verbix.voice.pipeline import VoicePipeline
+    from verbix.voice.player import AudioPlayer
+
+    printed = []
+    printer = MagicMock()
+    printer.print_user = lambda text, duration=None: printed.append((text, duration))
+
+    runtime = MagicMock()
+    runtime.floor = FloorArbiter()
+    runtime.is_idle = True
+    runtime.submit = AsyncMock(return_value="ok")
+
+    cap = MagicMock()
+    cap.sample_rate = 16000
+    cap.is_recording = False
+    cap.start_recording = AsyncMock()
+    cap.stop_recording = AsyncMock(return_value=b"\x01\x00" * 16000)  # 1.0s
+
+    pipeline = VoicePipeline(
+        runtime=runtime,
+        stt=MockSpeechToText(predefined_transcriptions=["hello from ptt", ""]),
+        player=AudioPlayer(tts=MockTextToSpeech(), sink=MockAudioSink()),
+        capture=cap,
+        printer=printer,
+    )
+
+    res1 = await pipeline.stop_recording_and_process()
+    assert res1["action"] == "processing"
+    if pipeline._active_voice_task:
+        await pipeline._active_voice_task
+    assert len(printed) == 1
+    assert printed[0][0] == "hello from ptt"
+    assert printed[0][1] == 1.0
+
+    res2 = await pipeline.stop_recording_and_process()
+    assert res2["action"] == "idle"
+    assert len(printed) == 1
+

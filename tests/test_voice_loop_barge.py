@@ -32,7 +32,6 @@ class FakeCapture:
     def __init__(self):
         self.is_recording = False
         self.sample_rate = 16000
-        self.on_chunk = None
         self.started = False
 
     async def start_recording(self):

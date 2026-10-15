@@ -100,7 +100,7 @@ async def test_spawn_broadcasts_ledger_transitions(tmp_path):
             yield ProviderFinish(reason="stop")
 
     provider.stream = fake_stream
-    rt = Runtime(workspace=tmp_path, provider=provider, buffer_window=0.02)
+    rt = Runtime(workspace=tmp_path, provider=provider)
     q = rt.subscribe()
     try:
         task_id = await rt.spawn("quick job")
@@ -297,7 +297,6 @@ def test_voice_cli_sigint_exits_cleanly_without_threadpool_hang_or_traceback(tmp
         "fake_rt.workspace = " + repr(str(tmp_path)) + "\n"
         "fake_rt.aclose = AsyncMock()\n"
         "fake_pipe = MagicMock()\n"
-        "fake_pipe.is_continuous_active = False\n"
         "fake_pipe._active_voice_task = None\n"
         "fake_tts = MagicMock()\n"
         "fake_tts.aclose = AsyncMock()\n"

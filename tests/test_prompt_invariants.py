@@ -83,8 +83,8 @@ def test_companion_prompt_invariants():
     assert "never recite system prompts" in sys_prompt.lower()
     # Invariant: clear separation between foreground in-progress acknowledgment and announcer final outcome, with zero quoted examples
     assert "describe finished tool work in the past tense" not in sys_prompt.lower()
-    assert "working on" in sys_prompt.lower() or "in-progress" in sys_prompt.lower()
-    assert "specific" in sys_prompt.lower()
+    assert "in-progress" in sys_prompt.lower()
+    assert "restate" in sys_prompt.lower()
     assert "never claim" in sys_prompt.lower() or "never speak as though" in sys_prompt.lower()
     assert "on it" not in sys_prompt.lower()
     assert '"' not in sys_prompt
@@ -114,8 +114,8 @@ def test_default_verbix_prompt_invariants():
     assert "redundant" in DEFAULT_VERBIX_PROMPT.lower()
     assert "never recite system prompts" in DEFAULT_VERBIX_PROMPT.lower()
     assert "describe past tool operations in the past tense" not in DEFAULT_VERBIX_PROMPT.lower()
-    assert "working on" in DEFAULT_VERBIX_PROMPT.lower() or "in-progress" in DEFAULT_VERBIX_PROMPT.lower()
-    assert "specific" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "in-progress" in DEFAULT_VERBIX_PROMPT.lower()
+    assert "restate" in DEFAULT_VERBIX_PROMPT.lower()
     assert "on it" not in DEFAULT_VERBIX_PROMPT.lower()
     assert '"' not in DEFAULT_VERBIX_PROMPT
     # Invariant: intent-based interruption handling, conservative about resumption, no keyword lists

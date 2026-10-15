@@ -240,6 +240,242 @@ async def test_linux_mpris_prefers_paused_over_stopped_and_honors_player_target(
     assert ("org.mpris.MediaPlayer2.spotify", "Pause") in sent_Commands
     assert "Paused" in r4.observation
 
+    # 5. When multiple players are Playing and player is omitted, 'pause'/'stop' pauses all Playing players
+    multi_state = {
+        "org.mpris.MediaPlayer2.firefox": "Playing",
+        "org.mpris.MediaPlayer2.spotify": "Playing",
+    }
+
+    class MultiPlayingBus(FakeBus):
+        async def call(self, msg):
+            if msg.member == "ListNames":
+                return SimpleNamespace(
+                    message_type=MessageType.METHOD_RETURN,
+                    body=[list(multi_state.keys())],
+                )
+            if msg.member == "GetAll":
+                return SimpleNamespace(
+                    message_type=MessageType.METHOD_RETURN,
+                    body=[
+                        {
+                            "PlaybackStatus": SimpleNamespace(
+                                value=multi_state[msg.destination]
+                            ),
+                            "Metadata": SimpleNamespace(value={}),
+                        }
+                    ],
+                )
+            sent_Commands.append((msg.destination, msg.member))
+            if msg.member in ("Pause", "Stop"):
+                multi_state[msg.destination] = "Paused"
+            return SimpleNamespace(message_type=MessageType.METHOD_RETURN, body=[])
+
+    monkeypatch.setattr(
+        dbus_fast.aio, "MessageBus", lambda bus_type=None: MultiPlayingBus()
+    )
+    sent_Commands.clear()
+    r5 = await tool.execute({"action": "pause"}, ctx)
+    assert r5.is_error is False
+    assert ("org.mpris.MediaPlayer2.firefox", "Pause") in sent_Commands
+    assert ("org.mpris.MediaPlayer2.spotify", "Pause") in sent_Commands
+
+
+@pytest.mark.asyncio
+async def test_media_tool_macos_and_windows_cross_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from verbix.tools import media as media_mod
+    from verbix.tools.media import MediaTool
+
+    ctx = ToolContext(workspace=tmp_path)
+    tool = MediaTool()
+
+    # macOS (darwin) volume + playback via osascript
+    monkeypatch.setattr(media_mod.sys, "platform", "darwin")
+    osascript_calls: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        script = cmd[-1]
+        osascript_calls.append(script)
+        if "get volume settings" in script:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="output volume:65, input volume:50, alert volume:100, output muted:false\n",
+                stderr="",
+            )
+        if "Spotify" in script or "Music" in script:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="Playing: Daft Punk - Voyager (Spotify)\n",
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(media_mod.subprocess, "run", fake_run)
+
+    r_mac_vol = await tool.execute({"action": "volume_get"}, ctx)
+    assert not r_mac_vol.is_error
+    assert "65%" in r_mac_vol.observation
+
+    r_mac_set = await tool.execute({"action": "volume_set", "level": 40}, ctx)
+    assert not r_mac_set.is_error
+    assert "40%" in r_mac_set.observation
+
+    r_mac_status = await tool.execute({"action": "status"}, ctx)
+    assert not r_mac_status.is_error
+    assert "Spotify" in r_mac_status.observation
+
+    r_mac_play = await tool.execute({"action": "play_pause", "player": "spotify"}, ctx)
+    assert not r_mac_play.is_error
+
+    # Windows (win32) status does not error
+    monkeypatch.setattr(media_mod.sys, "platform", "win32")
+    monkeypatch.setattr(
+        media_mod, "_windows_media_or_volume", lambda action, level=None, player=None: f"Win {action} ok"
+    )
+    r_win_status = await tool.execute({"action": "status"}, ctx)
+    assert not r_win_status.is_error
+    assert "Win status ok" in r_win_status.observation
+
+
+@pytest.mark.asyncio
+async def test_app_tool_close_kills_stubborn_processes_after_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from verbix.tools import app as app_mod
+    from verbix.tools.app import AppEntry, AppTool
+
+    fake_catalog = [
+        AppEntry(
+            id="kmines",
+            name="KMines",
+            exe_name="kmines",
+            argv=("/usr/bin/kmines",),
+        )
+    ]
+    monkeypatch.setattr(app_mod, "discover_installed_apps", lambda: fake_catalog)
+
+    actions: list[tuple[str, int]] = []
+
+    class StubbornProc:
+        def __init__(self):
+            self.pid = 7777
+            self.info = {"pid": 7777, "name": "kmines", "exe": "/usr/bin/kmines"}
+
+        def terminate(self):
+            actions.append(("terminate", self.pid))
+
+        def kill(self):
+            actions.append(("kill", self.pid))
+
+    stubborn = StubbornProc()
+    monkeypatch.setattr(app_mod, "_matching_procs", lambda entry, procs=None: [stubborn])
+
+    wait_calls = 0
+
+    def fake_wait_procs(procs, timeout):
+        nonlocal wait_calls
+        wait_calls += 1
+        if wait_calls == 1:
+            return ([], list(procs))  # still alive after SIGTERM!
+        return (list(procs), [])  # dead after SIGKILL
+
+    monkeypatch.setattr(app_mod.psutil, "wait_procs", fake_wait_procs)
+
+    res = await AppTool().execute({"action": "close", "name": "KMines"}, ToolContext(workspace=tmp_path))
+    assert not res.is_error
+    assert actions == [("terminate", 7777), ("kill", 7777)]
+    assert "verified stopped" in res.observation
+
+
+@pytest.mark.asyncio
+async def test_system_tool_reports_host_metrics_across_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from verbix.tools import system as sys_mod
+    from verbix.tools.system import SystemTool
+
+    monkeypatch.setattr(
+        sys_mod.psutil,
+        "sensors_battery",
+        lambda: SimpleNamespace(percent=82.4, power_plugged=False, secsleft=3660),
+    )
+
+    tool = SystemTool()
+    ctx = ToolContext(workspace=tmp_path)
+
+    r_overview = await tool.execute({}, ctx)
+    assert not r_overview.is_error
+    for expected in ("CPU:", "Memory:", "Disk", "Battery: 82%", "Network:"):
+        assert expected in r_overview.observation
+
+    r_batt = await tool.execute({"section": "battery"}, ctx)
+    assert not r_batt.is_error
+    assert "82%" in r_batt.observation
+    assert "discharging" in r_batt.observation
+    assert "1h 1m" in r_batt.observation
+
+    r_procs = await tool.execute({"section": "processes"}, ctx)
+    assert not r_procs.is_error
+    assert "Top processes" in r_procs.observation
+
+    r_bad = await tool.execute({"section": "bogus"}, ctx)
+    assert r_bad.is_error
+
+
+@pytest.mark.asyncio
+async def test_timer_tool_set_list_cancel_and_fires_announcement(tmp_path: Path):
+    import asyncio
+
+    from verbix.tools.timer import TimerTool
+
+    announced: list[tuple[str, str]] = []
+
+    class DummyRuntime:
+        def __init__(self):
+            self._timers = {}
+            self._timer_counter = 0
+            self._pending_announcements = []
+
+        def _on_task_finished(self, task_id: str, result: str) -> None:
+            announced.append((task_id, result))
+
+    rt = DummyRuntime()
+    tool = TimerTool(rt)
+    ctx = ToolContext(workspace=tmp_path)
+
+    # 1. Set a fast timer (0.05s) and a slow timer (10s)
+    r_fast = await tool.execute(
+        {"action": "set", "seconds": 0.05, "label": "check pasta"}, ctx
+    )
+    assert not r_fast.is_error
+    assert "timer-1" in r_fast.observation
+
+    r_slow = await tool.execute(
+        {"action": "set", "seconds": 10, "label": "laundry"}, ctx
+    )
+    assert not r_slow.is_error
+    assert "timer-2" in r_slow.observation
+
+    # 2. List shows active timers
+    r_list = await tool.execute({"action": "list"}, ctx)
+    assert not r_list.is_error
+    assert "laundry" in r_list.observation
+
+    # 3. Wait for fast timer to fire -> triggers announcement on runtime
+    await asyncio.sleep(0.1)
+    assert len(announced) == 1
+    assert announced[0][0] == "timer-1"
+    assert "check pasta" in announced[0][1]
+
+    # 4. Cancel remaining timer
+    r_cancel = await tool.execute({"action": "cancel", "timer_id": "timer-2"}, ctx)
+    assert not r_cancel.is_error
+    assert "Cancelled timer-2" in r_cancel.observation
+
+    r_list_after = await tool.execute({"action": "list"}, ctx)
+    assert "No active timers" in r_list_after.observation
+
 
 def test_app_catalog_discovers_linux_xdg_desktop_entries_and_filters_hidden_or_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

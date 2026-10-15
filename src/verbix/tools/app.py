@@ -492,6 +492,13 @@ class AppTool:
         if callable(wait_fn):
             try:
                 _, alive = await asyncio.to_thread(wait_fn, matched, 2.0)
+                if alive:
+                    for proc in alive:
+                        try:
+                            proc.kill()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+                            continue
+                    _, alive = await asyncio.to_thread(wait_fn, alive, 1.0)
                 still_alive = bool(alive)
             except (AttributeError, TypeError):
                 pass

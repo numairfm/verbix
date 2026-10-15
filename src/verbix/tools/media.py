@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import subprocess
 import sys
 from typing import Any
 
@@ -114,35 +116,44 @@ async def _linux_mpris_action(action: str, player: str | None = None) -> str:
                 return f"No active media player matching '{player}' found (available: {avail})."
             candidates = filtered
 
-        chosen = max(candidates, key=lambda c: c[0])[1]
-        method = _MPRIS_METHODS[action]
-        call_reply = await bus.call(
-            Message(
-                destination=chosen,
-                path="/org/mpris/MediaPlayer2",
-                interface="org.mpris.MediaPlayer2.Player",
-                member=method,
-            )
-        )
-        if call_reply.message_type == MessageType.ERROR:
-            raise RuntimeError(f"MPRIS {method} error: {call_reply.body}")
+        if action in ("stop", "pause") and not (player and player.strip()):
+            playing = [c[1] for c in candidates if c[0] == 3]
+            targets = playing if playing else [max(candidates, key=lambda c: c[0])[1]]
+        else:
+            targets = [max(candidates, key=lambda c: c[0])[1]]
 
-        post = await _read_mpris_state(bus, chosen)
-        if action == "stop" and post is not None and post[0] == "Playing":
-            await bus.call(
+        method = _MPRIS_METHODS[action]
+        reports: list[str] = []
+        for chosen in targets:
+            call_reply = await bus.call(
                 Message(
                     destination=chosen,
                     path="/org/mpris/MediaPlayer2",
                     interface="org.mpris.MediaPlayer2.Player",
-                    member="Pause",
+                    member=method,
                 )
             )
-            post = await _read_mpris_state(bus, chosen)
+            if call_reply.message_type == MessageType.ERROR:
+                raise RuntimeError(f"MPRIS {method} error: {call_reply.body}")
 
-        short_chosen = chosen.removeprefix("org.mpris.MediaPlayer2.")
-        if post is not None:
-            return f"Sent '{action}' to {short_chosen} ({post[2]})."
-        return f"Sent '{action}' to {short_chosen}."
+            post = await _read_mpris_state(bus, chosen)
+            if action == "stop" and post is not None and post[0] == "Playing":
+                await bus.call(
+                    Message(
+                        destination=chosen,
+                        path="/org/mpris/MediaPlayer2",
+                        interface="org.mpris.MediaPlayer2.Player",
+                        member="Pause",
+                    )
+                )
+                post = await _read_mpris_state(bus, chosen)
+
+            short_chosen = chosen.removeprefix("org.mpris.MediaPlayer2.")
+            if post is not None:
+                reports.append(f"Sent '{action}' to {short_chosen} ({post[2]}).")
+            else:
+                reports.append(f"Sent '{action}' to {short_chosen}.")
+        return " ".join(reports)
     finally:
         bus.disconnect()
 
@@ -176,7 +187,114 @@ def _linux_pulse_volume(action: str, level: int | None = None) -> str:
         raise ValueError(f"Unsupported volume action: {action}")
 
 
-def _windows_media_or_volume(action: str, level: int | None = None) -> str:
+def _macos_media_or_volume(
+    action: str, level: int | None = None, player: str | None = None
+) -> str:
+    """Uses macOS built-in osascript for system audio volume and Music/Spotify playback."""
+    if action == "volume_get":
+        res = subprocess.run(
+            ["/usr/bin/osascript", "-e", "get volume settings"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=True,
+        )
+        vol_match = re.search(r"output volume:(\d+)", res.stdout)
+        muted = "output muted:true" in res.stdout.lower()
+        pct = int(vol_match.group(1)) if vol_match else 0
+        return f"Volume: {pct}% ({'muted' if muted else 'unmuted'})"
+
+    if action == "volume_set":
+        assert level is not None
+        clamped = max(0, min(100, int(level)))
+        subprocess.run(
+            [
+                "/usr/bin/osascript",
+                "-e",
+                f"set volume output volume {clamped} without output muted",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=True,
+        )
+        return f"Volume set to {clamped}%."
+
+    if action == "mute":
+        res = subprocess.run(
+            ["/usr/bin/osascript", "-e", "get volume settings"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=True,
+        )
+        new_mute = "output muted:true" not in res.stdout.lower()
+        flag = "with output muted" if new_mute else "without output muted"
+        subprocess.run(
+            ["/usr/bin/osascript", "-e", f"set volume {flag}"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=True,
+        )
+        return f"Audio {'muted' if new_mute else 'unmuted'}."
+
+    app_name = "Spotify" if (player and "spotify" in player.lower()) else "Music"
+    if action == "status":
+        script = (
+            'set out to ""\n'
+            'repeat with appName in {"Spotify", "Music"}\n'
+            '  if application appName is running then\n'
+            '    tell application appName\n'
+            '      set st to (player state as string)\n'
+            '      set out to out & st & " (" & appName & ")\\n"\n'
+            '    end tell\n'
+            '  end if\n'
+            'end repeat\n'
+            'return out'
+        )
+        res = subprocess.run(
+            ["/usr/bin/osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=True,
+        )
+        out = res.stdout.strip()
+        return out if out else "No active media players found."
+
+    apple_cmd = {
+        "play_pause": "playpause",
+        "play": "play",
+        "pause": "pause",
+        "next": "next track",
+        "previous": "previous track",
+        "stop": "pause",
+    }[action]
+    target_script = (
+        f'tell application "{app_name}" to {apple_cmd}'
+        if player
+        else (
+            'if application "Spotify" is running then\n'
+            f'  tell application "Spotify" to {apple_cmd}\n'
+            'else if application "Music" is running then\n'
+            f'  tell application "Music" to {apple_cmd}\n'
+            'end if'
+        )
+    )
+    subprocess.run(
+        ["/usr/bin/osascript", "-e", target_script],
+        capture_output=True,
+        text=True,
+        timeout=5.0,
+        check=True,
+    )
+    return f"Sent '{action}' to {player or 'active media player'}."
+
+
+def _windows_media_or_volume(
+    action: str, level: int | None = None, player: str | None = None
+) -> str:
     """Uses Win32 keybd_event for media keys and pycaw for volume on Windows."""
     import ctypes
 
@@ -195,7 +313,7 @@ def _windows_media_or_volume(action: str, level: int | None = None) -> str:
         ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
         return f"Sent media key '{action}'."
 
-    if action in ("volume_get", "volume_set", "mute"):
+    if action in ("volume_get", "volume_set", "mute", "status"):
         try:
             from ctypes import POINTER, cast
 
@@ -205,7 +323,7 @@ def _windows_media_or_volume(action: str, level: int | None = None) -> str:
             devices = AudioUtilities.GetSpeakers()
             interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
             volume = cast(interface, POINTER(IAudioEndpointVolume))
-            if action == "volume_get":
+            if action in ("volume_get", "status"):
                 pct = round(volume.GetMasterVolumeLevelScalar() * 100)
                 muted = bool(volume.GetMute())
                 return f"Volume: {pct}% ({'muted' if muted else 'unmuted'})"
@@ -224,6 +342,8 @@ def _windows_media_or_volume(action: str, level: int | None = None) -> str:
                 ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
                 ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
                 return "Toggled audio mute."
+            if action == "status":
+                return "Media playback status unavailable on this Windows audio device."
             raise
     raise RuntimeError(f"Action '{action}' is not supported on Windows")
 
@@ -297,8 +417,15 @@ class MediaTool:
                     return ToolResult(obs)
                 obs = await asyncio.to_thread(_linux_pulse_volume, action, level)
                 return ToolResult(obs)
+            if sys.platform == "darwin":
+                obs = await asyncio.to_thread(
+                    _macos_media_or_volume, action, level, player_str
+                )
+                return ToolResult(obs)
             if sys.platform == "win32":
-                obs = await asyncio.to_thread(_windows_media_or_volume, action, level)
+                obs = await asyncio.to_thread(
+                    _windows_media_or_volume, action, level, player_str
+                )
                 return ToolResult(obs)
             return ToolResult(
                 f"error: media tool is not supported on platform '{sys.platform}'",

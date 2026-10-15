@@ -539,7 +539,11 @@ class Runtime:
         self._broadcast_event("wake_event", {"event": type(event).__name__, **payload})
 
     async def aclose(self) -> None:
-        """Teardown: SIGKILL tracked in-flight process groups."""
+        """Teardown: SIGKILL tracked in-flight process groups and cancel active timers."""
         from verbix.tools.sandbox import kill_active_processes
 
+        for entry in list(getattr(self, "_timers", {}).values()):
+            task = getattr(entry, "task", None)
+            if task is not None and not task.done():
+                task.cancel()
         kill_active_processes()

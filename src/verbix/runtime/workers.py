@@ -31,6 +31,8 @@ _DEFAULT_WORKER_TOOLS = (
     "media",
     "app",
     "open",
+    "system",
+    "timer",
     "bash",
 )
 
@@ -150,6 +152,7 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
     model_to_use = adapt_provider(runtime.worker_model or runtime.provider)
     worker_tools = build_registry(
         worker_tool_names,
+        runtime=runtime,
         workspace=runtime.workspace,
         output_limits=resolve_output_limits(agent_cfg_dict.get("tool_output")),
     )

@@ -20,6 +20,8 @@ def test_worker_registry_has_main_tools():
         "media",
         "app",
         "open",
+        "system",
+        "timer",
     }
     if probe_sandbox().available:
         expected.add("bash")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from verbix.tools.base import ToolContext, ToolResult
@@ -8,7 +9,7 @@ from verbix.tools.shared import check_fresh, record_version, resolve_contained_p
 
 class FileEditTool:
     name: str = "edit"
-    side_effecting: bool = False
+    side_effecting: bool = True
     description: str = "Replaces an exact occurrence of old_str with new_str in a file."
 
     @property
@@ -30,6 +31,9 @@ class FileEditTool:
         }
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        return await asyncio.to_thread(self._execute_sync, args, context)
+
+    def _execute_sync(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         path_str = args.get("path", "")
         old_str = args.get("old_str", "")
         new_str = args.get("new_str", "")

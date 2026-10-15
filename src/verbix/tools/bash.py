@@ -13,7 +13,7 @@ from verbix.tools.sandbox import (
 
 class BashTool:
     name: str = "bash"
-    side_effecting: bool = False
+    side_effecting: bool = True
 
     def __init__(
         self,

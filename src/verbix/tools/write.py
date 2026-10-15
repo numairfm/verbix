@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from verbix.tools.base import ToolContext, ToolResult
@@ -8,7 +9,7 @@ from verbix.tools.shared import check_fresh, record_version, resolve_contained_p
 
 class FileWriteTool:
     name: str = "write"
-    side_effecting: bool = False
+    side_effecting: bool = True
     description: str = (
         "Writes content to a file within the workspace, creating parent directories."
     )
@@ -28,6 +29,9 @@ class FileWriteTool:
         }
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        return await asyncio.to_thread(self._execute_sync, args, context)
+
+    def _execute_sync(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         path_str = args.get("path", "")
         content = args.get("content", "")
         if not isinstance(content, str):

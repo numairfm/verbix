@@ -146,6 +146,37 @@ async def test_read_empty_directory(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_read_directory_hides_secret_files_and_survives_broken_symlinks(
+    tmp_path: Path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "visible.txt").write_text("ok", encoding="utf-8")
+    (workspace / ".env").write_text("SECRET=1", encoding="utf-8")
+    (workspace / "auth.json").write_text("{}", encoding="utf-8")
+    (workspace / "auth.yaml").write_text("k: v", encoding="utf-8")
+    (workspace / "broken_link").symlink_to(workspace / "nonexistent_target")
+
+    ctx = ToolContext(workspace=workspace)
+    res = await FileReadTool().execute({"path": "."}, ctx)
+    assert res.is_error is False
+    assert "visible.txt" in res.observation
+    assert ".env" not in res.observation
+    assert "auth.json" not in res.observation
+    assert "auth.yaml" not in res.observation
+    assert "broken_link" in res.observation
+
+
+def test_mutating_tools_mark_side_effecting_true():
+    from verbix.tools.clipboard import ClipboardTool
+
+    assert FileWriteTool.side_effecting is True
+    assert FileEditTool.side_effecting is True
+    assert BashTool.side_effecting is True
+    assert ClipboardTool.side_effecting is True
+
+
+@pytest.mark.asyncio
 async def test_read_returns_images_as_viewable_content(tmp_path: Path):
     import base64
 

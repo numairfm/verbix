@@ -25,6 +25,8 @@ from verbix.tools.screenshot import ScreenshotTool
 from verbix.tools.shared import bind_output, resolve_contained_path
 from verbix.tools.spawn import SpawnTool
 from verbix.tools.status import StatusTool
+from verbix.tools.system import SystemTool
+from verbix.tools.timer import TimerTool
 from verbix.tools.web_fetch import WebFetchTool
 from verbix.tools.web_search import WebSearchTool
 from verbix.tools.write import FileWriteTool
@@ -50,6 +52,8 @@ __all__ = [
     "ScreenshotTool",
     "SpawnTool",
     "StatusTool",
+    "SystemTool",
+    "TimerTool",
     "Tool",
     "ToolContext",
     "ToolResult",
@@ -75,6 +79,8 @@ TOOL_CATALOG: dict[str, Callable[[Any], Any]] = {
     "media": lambda runtime: MediaTool(),
     "app": lambda runtime: AppTool(),
     "open": lambda runtime: OpenTool(),
+    "system": lambda runtime: SystemTool(),
+    "timer": TimerTool,
     "spawn": SpawnTool,
     "status": StatusTool,
     "cancel": CancelTool,

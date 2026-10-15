@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
 from verbix.tools.base import FileAttachment, ToolContext, ToolResult
-from verbix.tools.shared import record_version, resolve_contained_path
+from verbix.tools.shared import (
+    _is_secret_basename,
+    record_version,
+    resolve_contained_path,
+)
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
@@ -39,7 +44,9 @@ class FileReadTool:
 
     def _read_dir(self, target: Path, path_str: str, args: dict[str, Any]) -> ToolResult:
         try:
-            names = sorted(e.name for e in target.iterdir())
+            names = sorted(
+                e.name for e in target.iterdir() if not _is_secret_basename(e.name)
+            )
         except OSError as e:
             return ToolResult(f"error: could not list '{path_str}': {e}", is_error=True)
         if not names:
@@ -47,7 +54,13 @@ class FileReadTool:
         rows = []
         for name in names:
             full = target / name
-            rows.append(f"{name}/ (directory)" if full.is_dir() else f"{name} ({full.stat().st_size} bytes)")
+            try:
+                if full.is_dir():
+                    rows.append(f"{name}/ (directory)")
+                else:
+                    rows.append(f"{name} ({full.stat().st_size} bytes)")
+            except OSError:
+                rows.append(f"{name} (broken link)")
         start_line = max(1, int(args.get("start_line", 1)))
         end_line = args.get("end_line")
         end_line = min(len(rows), int(end_line)) if end_line is not None else len(rows)
@@ -82,6 +95,9 @@ class FileReadTool:
             return ToolResult(f"error: could not read file '{path_str}': {e}", is_error=True)
 
     async def execute(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
+        return await asyncio.to_thread(self._execute_sync, args, context)
+
+    def _execute_sync(self, args: dict[str, Any], context: ToolContext) -> ToolResult:
         path_str = args.get("path", "")
         try:
             target = resolve_contained_path(path_str, context.workspace)

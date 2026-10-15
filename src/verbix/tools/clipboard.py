@@ -12,7 +12,7 @@ class ClipboardTool:
     """Reads or writes the system clipboard via pyperclip."""
 
     name: str = "clipboard"
-    side_effecting: bool = False
+    side_effecting: bool = True
     description: str = (
         "Reads from or writes text to the system clipboard. "
         "Use action='read' to inspect copied text or action='write' with 'text' to copy text."

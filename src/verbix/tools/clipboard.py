@@ -93,7 +93,4 @@ class ClipboardTool:
                 return img_res
             return ToolResult("(clipboard is empty)")
         except (pyperclip.PyperclipException, OSError, RuntimeError) as e:
-            img_res = await asyncio.to_thread(_grab_clipboard_image)
-            if img_res is not None:
-                return img_res
             return ToolResult(f"error: clipboard read failed: {e}", is_error=True)

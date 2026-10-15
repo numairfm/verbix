@@ -454,6 +454,10 @@ class Runtime:
         return await spawn_worker(self, task)
 
     def _on_floor_state_changed(self, prev_state: FloorState, new_state: FloorState) -> None:
+        if hasattr(self, "_subscribers"):
+            self._broadcast_event(
+                "floor_state", {"state": str(new_state.value).lower()}
+            )
         if self.floor.can_announce() and self._pending_announcements:
             try:
                 loop = asyncio.get_running_loop()

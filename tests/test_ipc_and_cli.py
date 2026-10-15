@@ -360,5 +360,79 @@ async def test_cli_voice_mode_continuous_fails_with_clear_error(tmp_path, capsys
     assert "Continuous voice mode has been removed" in err
 
 
+@pytest.mark.asyncio
+async def test_server_with_voice_pipeline_fans_out_wake_output_and_broadcasts_floor_state(
+    tmp_path,
+):
+    from verbix.runtime.floor import FloorState
+
+    rt = _make_runtime(tmp_path)
+    voice_events = []
+
+    class FakeVoiceOutput:
+        async def emit(self, event):
+            voice_events.append(event)
+
+        def delivered_text(self):
+            return "spoken"
+
+        def reset_delivered(self):
+            pass
+
+    rt.wake_output = FakeVoiceOutput()
+    sock_path = tmp_path / "fanout.sock"
+    server = VerbixServer(runtime=rt, socket_path=sock_path)
+    await server.start()
+    try:
+        reader, writer = await asyncio.open_unix_connection(str(sock_path))
+        while not server._clients:
+            await asyncio.sleep(0.01)
+
+        # 1. Emitting on wake_output reaches BOTH FakeVoiceOutput AND IPC client
+        await rt.wake_output.emit(TextDelta(text="Timer is up."))
+        assert len(voice_events) == 1
+        line = await asyncio.wait_for(reader.readline(), timeout=2.0)
+        msg = json.loads(line.decode("utf-8"))
+        assert msg["type"] == "text_delta"
+        assert msg["payload"]["text"] == "Timer is up."
+
+        # 2. Floor state transition broadcasts floor_state runtime_event to IPC client
+        rt.floor.set_state(FloorState.LISTENING)
+        line2 = await asyncio.wait_for(reader.readline(), timeout=2.0)
+        msg2 = json.loads(line2.decode("utf-8"))
+        assert msg2["type"] == "runtime_event"
+        assert msg2["payload"]["type"] == "floor_state"
+        assert msg2["payload"]["payload"]["state"] == "listening"
+
+        writer.close()
+        await writer.wait_closed()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_ipc_server_and_client_fallback_to_tcp_when_unix_sockets_unavailable(
+    tmp_path, monkeypatch
+):
+    from verbix.ipc.client import VerbixClient
+
+    monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
+    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
+
+    rt = _make_runtime(tmp_path)
+    sock_path = tmp_path / "win_fallback.sock"
+    server = VerbixServer(runtime=rt, socket_path=sock_path)
+    await server.start()
+    try:
+        assert sock_path.is_file()
+        client = VerbixClient(socket_path=sock_path)
+        await client.connect()
+        assert await client.ping() is True
+        await client.close()
+    finally:
+        await server.stop()
+    assert not sock_path.exists()
+
+
 
 

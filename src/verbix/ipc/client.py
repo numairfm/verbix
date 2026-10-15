@@ -27,9 +27,17 @@ class VerbixClient:
     async def connect(self) -> None:
         """Connects to the Verbix IPC server over UDS or TCP."""
         if self.socket_path:
-            self._reader, self._writer = await asyncio.open_unix_connection(
-                path=str(self.socket_path)
-            )
+            open_unix = getattr(asyncio, "open_unix_connection", None)
+            if callable(open_unix):
+                self._reader, self._writer = await open_unix(
+                    path=str(self.socket_path)
+                )
+            else:
+                endpoint = self.socket_path.read_text(encoding="utf-8").strip()
+                host_str, port_str = endpoint.rsplit(":", 1)
+                self._reader, self._writer = await asyncio.open_connection(
+                    host=host_str, port=int(port_str)
+                )
         elif self.host and self.port:
             self._reader, self._writer = await asyncio.open_connection(
                 host=self.host, port=self.port

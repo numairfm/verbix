@@ -123,6 +123,10 @@ class VoicePipeline:
             logger.info("Recognized user speech (%.1fs): %s", duration, cleaned)
         else:
             logger.info("Recognized user speech: %s", cleaned)
+        if self.runtime is not None and hasattr(self.runtime, "_broadcast_event"):
+            self.runtime._broadcast_event(
+                "user_transcript", {"text": cleaned, "duration": duration}
+            )
         if self.printer and hasattr(self.printer, "print_user"):
             try:
                 if duration is not None:

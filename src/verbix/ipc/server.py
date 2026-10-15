@@ -96,9 +96,16 @@ class VerbixServer:
         self._prompt_tasks: set[asyncio.Task[Any]] = set()
         self._event_forwarder_task: asyncio.Task[None] | None = None
 
-        # Configure wake turn output if not already assigned
+        # Configure wake turn output (fanning out to both voice output and IPC clients when pipeline is attached)
+        bcast = BroadcastWakeOutput(self)
         if self.runtime.wake_output is None:
-            self.runtime.wake_output = BroadcastWakeOutput(self)
+            self.runtime.wake_output = bcast
+        elif not isinstance(self.runtime.wake_output, BroadcastWakeOutput):
+            from verbix.runtime.announcer import WakeOutputFanOut
+
+            self.runtime.wake_output = WakeOutputFanOut(
+                self.runtime.wake_output, bcast.emit
+            )
 
     async def _send(self, writer: asyncio.StreamWriter, msg_bytes: bytes) -> bool:
         """Sends data to a client writer with per-writer synchronization."""
@@ -125,11 +132,28 @@ class VerbixServer:
             if self.socket_path.exists():
                 self.socket_path.unlink()
 
-            self._server = await asyncio.start_unix_server(
-                self._handle_client,
-                path=str(self.socket_path),
-            )
-            logger.info("Verbix IPC server listening on UDS: %s", self.socket_path)
+            start_unix = getattr(asyncio, "start_unix_server", None)
+            if callable(start_unix):
+                self._server = await start_unix(
+                    self._handle_client,
+                    path=str(self.socket_path),
+                )
+                logger.info("Verbix IPC server listening on UDS: %s", self.socket_path)
+            else:
+                self._server = await asyncio.start_server(
+                    self._handle_client,
+                    host="127.0.0.1",
+                    port=0,
+                )
+                bound_port = self._server.sockets[0].getsockname()[1]
+                self.socket_path.write_text(
+                    f"127.0.0.1:{bound_port}\n", encoding="utf-8"
+                )
+                logger.info(
+                    "Verbix IPC server listening on loopback TCP 127.0.0.1:%d (%s)",
+                    bound_port,
+                    self.socket_path,
+                )
         elif self.host and self.port:
             self._server = await asyncio.start_server(
                 self._handle_client,

@@ -54,12 +54,12 @@ Agent tuning lives in `src/verbix/agent/config/`: `voice.yaml`
 Verbix separates its machine-global state under `~/.verbix/` from project workspaces:
 
 - **Workspace (`--workspace`, default `~/.verbix/workspace/`)**: The working directory exposed read-write to background workers (`read`, `write`, `edit`, `grep`, `glob`, and sandboxed `bash`). When `--workspace` is omitted, Verbix uses a dedicated `~/.verbix/workspace/` directory rather than the current working directory, and refuses `$HOME` or `/` unless explicitly overridden with `--workspace`. Workers run directly in the configured workspace (with `HOME=/tmp` on `bwrap`'s ephemeral `tmpfs` so CLI tool dotfile noise vanishes on exit) and never create separate task or sandbox home folders.
-- **Global state (`~/.verbix/`)**: Holds user configuration, persona, credentials, runtime logs/screenshots, and user-managed STT models:
-  - `config.yaml`, `PERSONA.md`, `auth.json`: global configuration, persona overlay, and provider credentials (never touched by retention cleanup).
+- **Global state (`~/.verbix/`)**: Holds user configuration, persona, persistent memory, credentials, runtime logs/screenshots, and user-managed STT models:
+  - `config.yaml`, `PERSONA.md`, `MEMORY.md`, `auth.json`: global configuration, persona overlay, persistent cross-session user memory, and provider credentials (never touched by retention cleanup).
   - `logs/`: spilled full outputs from truncated tool observations (`tool_<hex>`).
   - `screenshots/`: rolling PNG archive of captured desktop screenshots (`screenshot_<timestamp>.png`).
   - `voice/stt/models/`: user-managed speech-to-text (STT) GGUF models, organized by model ID (default `~/.verbix/voice/stt/models/nemotron-gguf/`), created lazily when provisioned or migrated.
-- **Retention policy**: At startup, Verbix deletes entries under `~/.verbix/logs/` and `~/.verbix/screenshots/` older than `retention_days` (default `14` days; configurable via `retention_days` in `~/.verbix/config.yaml`, `VERBIX_RETENTION_DAYS`, or `--retention-days`). Retention cleanup never touches `config.yaml`, `PERSONA.md`, `auth.json`, workspace contents, or voice models.
+- **Retention policy**: At startup, Verbix deletes entries under `~/.verbix/logs/` and `~/.verbix/screenshots/` older than `retention_days` (default `14` days; configurable via `retention_days` in `~/.verbix/config.yaml`, `VERBIX_RETENTION_DAYS`, or `--retention-days`). Retention cleanup never touches `config.yaml`, `PERSONA.md`, `MEMORY.md`, `auth.json`, workspace contents, or voice models.
 
 Config precedence: builtin defaults < `~/.verbix/config.yaml` < env < CLI flags. `config.yaml` is optional and accepts `provider`, `stt_model`, and `retention_days`:
 
@@ -68,9 +68,11 @@ Config precedence: builtin defaults < `~/.verbix/config.yaml` < env < CLI flags.
 # retention_days: 14
 ```
 
-First run scaffolds `~/.verbix/` with a commented `config.yaml` and an empty `PERSONA.md`.
+First run scaffolds `~/.verbix/` with a commented `config.yaml`, an empty `PERSONA.md`, and an empty `MEMORY.md`.
 
 `~/.verbix/PERSONA.md` is an overlay appended to the system prompt under `# USER PERSONA` — it never replaces core prompts. A leading `<!-- ... -->` guidance block is stripped. `--system-prompt` replaces file persona entirely when set.
+
+`~/.verbix/MEMORY.md` stores durable facts and preferences across sessions (managed via the `memory` tool or edited directly on disk) and is dynamically injected into `# ENVIRONMENT & GROUNDING` on every turn.
 
 Provider selection: `--provider` flag > `VERBIX_PROVIDER` env > config `provider` name. The name selects an entry in `~/.verbix/auth.json`:
 
@@ -105,15 +107,16 @@ Two layers. The agent layer does the work; the voice layer owns the floor.
                │
                ▼
    ┌───────────────────────┐
-   │ main agent            │  tools: spawn(objective)
-   │ (foreground)          │         status(task) · cancel(task)
+   │ main agent            │  tools: spawn(objective) · status(task)
+   │ (foreground)          │         cancel(task) · memory(...)
    └───────────┬───────────┘  no filesystem, no shell
                │ spawn
    ┌───────────┼───────────┐
    ▼           ▼           ▼
  worker 1   worker 2   worker 3   tools: read/write/edit/grep/glob
                                           web_search/web_fetch/screenshot
-                                          clipboard/media/app/open + bash (bwrap)
+                                          clipboard/media/app/open/system
+                                          timer/memory/notify + bash (bwrap)
    └───────────┼───────────┘  (workers never see the chat —
                │ responses   only the spawn objective)
                ▼
@@ -177,16 +180,21 @@ STATE: IDLE
 | `runtime/floor.py` | `FloorArbiter`: `IDLE`/`LISTENING`/`SPEAKING` + interrupt flag |
 | `core/` | canonical messages/events, history repair |
 | `provider/` | streaming OpenAI-compatible SSE client, errors, event types |
-| `tools/` | `Tool`/`ToolContext`, `read`/`write`/`edit`/`grep`/`glob`, `web_search`/`web_fetch`, `screenshot`, `clipboard`/`media`/`app`/`open`, `spawn`/`status`/`cancel`, and `bash` via mandatory bubblewrap (`bwrap`) |
-| `voice/` | `pipeline`, `capture`, `transcribe_stt` (Nemotron ASR via transcribe.cpp), `sherpa_tts` (Supertonic TTS via sherpa-onnx), `player`, `output` (sentence streaming), `callback_sink`, `base` protocols + mocks |
-| `ipc/` | `server`/`client`/`protocol`: JSONL over Unix socket, `ping/prompt/status/cancel/toggle`, runtime event fan-out |
+| `tools/` | `Tool`/`ToolContext`, `read`/`write`/`edit`/`grep`/`glob`, `web_search`/`web_fetch`, `screenshot`, `clipboard`/`media`/`app`/`open`/`system`/`timer`/`memory`/`notify`, `spawn`/`status`/`cancel`, and `bash` via mandatory bubblewrap (`bwrap`) |
+| `voice/` | `pipeline`, `capture`, `transcribe_stt` (Nemotron ASR via transcribe.cpp), `sherpa_tts` (Supertonic TTS via sherpa-onnx), `player`, `output` (sentence streaming + two-tone 660 Hz / 880 Hz PTT earcons), `callback_sink`, `base` protocols + mocks |
+| `ipc/` | `server`/`client`/`protocol`: JSONL over Unix socket (with loopback TCP fallback on Windows), `ping/prompt/status/cancel/toggle`, runtime event fan-out |
 | `agent/` | agent core: `voice.py` (`VoiceAgent`), `worker.py` (`WorkerAgent`), `models/litellm_model.py`, `tools/registry.py`, `config/*.yaml` |
 
-## IPC
+## IPC & Desktop Overlay (GPUI)
 
-`VerbixServer` fronts the same `Runtime`. Actions: `ping`, `prompt`, `status`,
-`cancel`, `toggle`. Runtime events (`task_registered`, `task_completed`,
-`task_cancelled`, `wake_event`) fan out to subscriber queues.
+`VerbixServer` (`verbix --serve --voice`) fronts the same `Runtime` and `VoicePipeline` over `~/.local/share/verbix/verbix.sock` (falling back to `127.0.0.1` loopback TCP on Windows).
+- **Actions**: `ping`, `prompt`, `status`, `cancel`, `toggle`.
+- **Streamed JSONL events**: `floor_state` (`idle` / `listening` / `speaking`), `user_transcript`, `task_registered`, `task_completed`, `task_failed`, `task_cancelled`, `wake_event`, `text_delta`, `turn_complete`.
+- **Planned Rust + GPUI Desktop Overlay**:
+  - Uses Zed's `gpui` crate (`Apache-2.0`, compatible with Verbix's closed-source commercial track) as a lightweight native GPU client connected to `verbix.sock`.
+  - **Always-on-top non-activating overlay**: `WindowKind::PopUp` (`NSPanel` with `NSWindowStyleMaskNonactivatingPanel` at `NSPopUpWindowLevel` on macOS; `WS_EX_TOOLWINDOW | WS_EX_TOPMOST` with `SW_SHOWNOACTIVATE` on Windows; `_NET_WM_WINDOW_TYPE_NOTIFICATION` on X11) and `WindowKind::LayerShell` (`zwlr_layer_shell_v1` `Layer::Overlay` with `KeyboardInteractivity::None` on Linux Wayland), paired with `WindowBackgroundAppearance::Transparent` / `Blurred`.
+  - **Click-through (mouse pass-through)**: Native `Window::set_input_region(Some(&[]))` (or per-pill interactive bounds) on Wayland, and `raw_window_handle::HasWindowHandle` hooks (`setIgnoresMouseEvents: YES` on macOS, `WS_EX_LAYERED | WS_EX_TRANSPARENT` on Windows, XShape `ShapeInput` on X11) so mouse clicks pass straight through the overlay to the active game or application underneath.
+  - Note: Pin a specific `gpui` git revision in `Cargo.toml` since `gpui` is pre-1.0 and tracks Zed `main`.
 
 ## Develop
 

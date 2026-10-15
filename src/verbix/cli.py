@@ -499,7 +499,10 @@ async def async_main(args: argparse.Namespace) -> int:
         tts: Any = None
         sink: Any = None
         if args.voice:
-            pipeline, tts, sink = _build_voice_pipeline(runtime, args)
+            printer = CliPrinter(show_thoughts=getattr(args, "show_thoughts", False))
+            pipeline, tts, sink = _build_voice_pipeline(
+                runtime, args, printer=printer
+            )
 
         server = VerbixServer(
             runtime=runtime, pipeline=pipeline, socket_path=socket_path

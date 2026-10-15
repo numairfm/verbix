@@ -154,7 +154,10 @@ class VoiceAgent:
         try:
             return Template(template_str, undefined=StrictUndefined).render(**context)
         except Exception:  # noqa: BLE001
-            return Template(template_str).render(**context)
+            try:
+                return Template(template_str).render(**context)
+            except Exception:  # noqa: BLE001
+                return template_str
 
     def add_messages(self, *messages: dict[str, Any]) -> list[dict[str, Any]]:
         self.messages.extend(messages)

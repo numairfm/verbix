@@ -655,6 +655,34 @@ async def test_notify_tool_linux_macos_and_windows(
     assert win_envs[-1]["VERBIX_NOTIFY_MSG"] == "Done"
 
 
+@pytest.mark.asyncio
+async def test_agent_template_rendering_survives_jinja_syntax_and_does_not_expose_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from verbix.agent.models.litellm_model import LitellmModel, LitellmModelConfig
+    from verbix.runtime.runtime import Runtime
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    cfg = LitellmModelConfig(
+        model_name="openrouter/google/gemini-3.5-flash-lite",
+        model_kwargs={"api_key": "sk-super-secret-api-key-999"},
+    )
+    model = LitellmModel(config_class=lambda **kw: cfg)
+
+    # User persona or custom prompt containing '{{ model_kwargs.api_key }}' and broken Jinja '{{ unclosed'
+    rt = Runtime(
+        workspace=ws,
+        provider=model,
+        system_prompt="Leak: {{ model_kwargs.api_key }} and broken {{ unclosed",
+    )
+    rendered_fg = rt.foreground._render_template(rt.foreground.config.system_template)
+    assert "sk-super-secret-api-key-999" not in rendered_fg
+    assert "{{ unclosed" in rendered_fg
+
+
 def test_app_catalog_discovers_linux_xdg_desktop_entries_and_filters_hidden_or_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

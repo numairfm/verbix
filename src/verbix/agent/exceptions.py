@@ -1,26 +1,6 @@
-class InterruptAgentFlow(Exception):
-    """Raised to interrupt the agent flow and add messages."""
+class FormatError(Exception):
+    """Raised when the model's output is not in the expected tool-call format."""
 
-    def __init__(self, *messages: dict):
-        self.messages = messages
-        super().__init__()
-
-
-class Submitted(InterruptAgentFlow):
-    """Raised when the agent has completed its task."""
-
-
-class LimitsExceeded(InterruptAgentFlow):
-    """Raised when the agent has exceeded its cost or step limit."""
-
-
-class TimeExceeded(LimitsExceeded):
-    """Raised when the agent has exceeded its wall-clock time limit."""
-
-
-class UserInterruption(InterruptAgentFlow):
-    """Raised when the user interrupts the agent."""
-
-
-class FormatError(InterruptAgentFlow):
-    """Raised when the LM's output is not in the expected format."""
+    def __init__(self, *messages: dict) -> None:
+        self.messages = list(messages)
+        super().__init__(str(messages[-1].get("content", "")) if messages else "")

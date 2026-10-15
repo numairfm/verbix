@@ -317,4 +317,4 @@ class LitellmModel:
         )
 
     def get_template_vars(self, **kwargs: Any) -> dict[str, Any]:
-        return self.config.model_dump()
+        return {"model_name": self.config.model_name}

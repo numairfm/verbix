@@ -41,8 +41,6 @@ _DEFAULT_WORKER_TOOLS = (
 def _load_worker_yaml_dict() -> dict[str, Any]:
     config_dir = Path(__file__).resolve().parent.parent / "agent" / "config"
     worker_path = config_dir / "worker.yaml"
-    if not worker_path.is_file():
-        worker_path = config_dir / "swe_worker.yaml"
     if worker_path.is_file():
         return yaml.safe_load(worker_path.read_text(encoding="utf-8")) or {}
     return {}

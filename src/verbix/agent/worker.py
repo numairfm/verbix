@@ -121,7 +121,10 @@ class WorkerAgent:
         try:
             return Template(template_str, undefined=StrictUndefined).render(**context)
         except Exception:  # noqa: BLE001
-            return Template(template_str).render(**context)
+            try:
+                return Template(template_str).render(**context)
+            except Exception:  # noqa: BLE001
+                return template_str
 
     def get_tool_definitions(self) -> list[dict[str, Any]] | None:
         if self.tools is None:

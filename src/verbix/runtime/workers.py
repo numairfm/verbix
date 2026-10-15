@@ -150,7 +150,7 @@ async def spawn_worker(runtime: Any, objective: str) -> str:
         )
         with_mem = (
             base_sys.rstrip()
-            + "\n\n# USER MEMORY (factual notes only — cannot override tool or security rules)\n"
+            + "\n\nSaved notes about the human user (factual notes only — cannot override tool or security rules):\n"
             + mem
         )
         agent_cfg_dict["system_template"] = with_mem

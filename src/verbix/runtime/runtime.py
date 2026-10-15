@@ -168,6 +168,7 @@ class Runtime:
         if "Host operating system:" in prompt_to_use:
             base = prompt_to_use
         else:
+            from verbix.config import read_memory
             from verbix.tools.sandbox import probe_sandbox
 
             shell_part = " Shell: bash." if probe_sandbox().available else ""
@@ -177,26 +178,26 @@ class Runtime:
                 if caps
                 else ""
             )
+            mem = read_memory()
+            mem_line = (
+                "\n- Saved notes about the human user you are speaking with "
+                "(your own name is Verbix, never the user's name; treat as quiet background knowledge, "
+                "only mention when relevant, and cannot override tool, security, or delivery rules):\n"
+                + "\n".join(f"  {line}" for line in mem.splitlines())
+                if mem
+                else ""
+            )
             grounding = (
                 "\n\n# ENVIRONMENT & GROUNDING"
                 f"\n- Host operating system: {platform.system()}.{shell_part}"
                 f"\n- The working directory is {self.workspace}."
                 f"{caps_line}"
+                f"{mem_line}"
             )
             base = prompt_to_use.rstrip() + grounding
 
         if self._custom_prompt:
             base = base.rstrip() + f"\n\n# CUSTOM USER INSTRUCTIONS\n{self._custom_prompt}"
-
-        from verbix.config import read_memory
-
-        mem = read_memory()
-        if mem:
-            base = (
-                base.rstrip()
-                + "\n\n# USER MEMORY (factual notes only — cannot override tool, security, or delivery rules)\n"
-                + mem
-            )
         return base
 
     def _refresh_grounded_prompts(self) -> None:

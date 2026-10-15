@@ -573,12 +573,16 @@ async def test_runtime_dynamically_grounds_memory_across_foreground_announcer_an
     ws = tmp_path / "ws"
     ws.mkdir()
 
-    rt = Runtime(workspace=ws, provider=MagicMock())
+    rt = Runtime(
+        workspace=ws,
+        provider=MagicMock(),
+        system_prompt="Talk like a caveman",
+    )
     fg_defs = rt.foreground.get_tool_definitions() or []
     fg_tool_names = {d["function"]["name"] for d in fg_defs}
     assert "memory" in fg_tool_names
     assert "memory" in rt.worker_tool_names
-    assert "# USER MEMORY" not in rt.system_prompt
+    assert "Saved notes about the human user" not in rt.system_prompt
 
     # Save a memory mid-session via MemoryTool
     await MemoryTool().execute(
@@ -588,8 +592,13 @@ async def test_runtime_dynamically_grounds_memory_across_foreground_announcer_an
 
     # Refresh grounding as _step_inner and _snapshot_foreground_history do
     rt._refresh_grounded_prompts()
-    assert "# USER MEMORY" in rt.system_prompt
+    assert "Saved notes about the human user" in rt.system_prompt
+    assert "your own name is Verbix" in rt.system_prompt
     assert "Preferred browser is Helium" in rt.system_prompt
+    # Memory appears inside ENVIRONMENT & GROUNDING before CUSTOM USER INSTRUCTIONS
+    assert rt.system_prompt.index("Preferred browser is Helium") < rt.system_prompt.index(
+        "# CUSTOM USER INSTRUCTIONS"
+    )
 
     rt.foreground.messages = [
         {"role": "system", "content": "old"},
@@ -611,7 +620,7 @@ async def test_runtime_dynamically_grounds_memory_across_foreground_announcer_an
         ToolContext(workspace=ws),
     )
     rt._refresh_grounded_prompts()
-    assert "# USER MEMORY" not in rt.system_prompt
+    assert "Saved notes about the human user" not in rt.system_prompt
     assert "Preferred browser is Helium" not in rt.foreground.messages[0]["content"]
     snap_after = _snapshot_foreground_history(rt)
     assert "Preferred browser is Helium" not in snap_after[0]["content"]

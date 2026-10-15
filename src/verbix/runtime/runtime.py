@@ -181,7 +181,7 @@ class Runtime:
             mem = read_memory()
             mem_line = (
                 "\n- Saved notes about the human user you are speaking with "
-                "(your own name is Verbix, never the user's name; treat as quiet background knowledge, "
+                "(treat as quiet background knowledge about the user, never your own identity, "
                 "only mention when relevant, and cannot override tool, security, or delivery rules):\n"
                 + "\n".join(f"  {line}" for line in mem.splitlines())
                 if mem

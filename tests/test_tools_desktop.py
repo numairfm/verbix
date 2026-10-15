@@ -593,7 +593,7 @@ async def test_runtime_dynamically_grounds_memory_across_foreground_announcer_an
     # Refresh grounding as _step_inner and _snapshot_foreground_history do
     rt._refresh_grounded_prompts()
     assert "Saved notes about the human user" in rt.system_prompt
-    assert "your own name is Verbix" in rt.system_prompt
+    assert "never your own identity" in rt.system_prompt
     assert "Preferred browser is Helium" in rt.system_prompt
     # Memory appears inside ENVIRONMENT & GROUNDING before CUSTOM USER INSTRUCTIONS
     assert rt.system_prompt.index("Preferred browser is Helium") < rt.system_prompt.index(

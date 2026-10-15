@@ -8,9 +8,8 @@ import select
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from verbix.agent.models.litellm_model import LitellmModel, LitellmModelConfig
 from verbix.auth import resolve_provider
 from verbix.config import (
     ensure_global_scaffold,
@@ -28,7 +27,9 @@ from verbix.core.events import (
 )
 from verbix.ipc.client import VerbixClient
 from verbix.ipc.server import VerbixServer
-from verbix.runtime.runtime import Runtime
+
+if TYPE_CHECKING:
+    from verbix.runtime.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def build_runtime(args: argparse.Namespace) -> Runtime:
     """Builds and initializes the Runtime from parsed command-line arguments."""
+    from verbix.agent.models.litellm_model import LitellmModel, LitellmModelConfig
+    from verbix.runtime.runtime import Runtime
+
     explicit_ws = bool(getattr(args, "_workspace_explicit", False))
     workspace = resolve_workspace(getattr(args, "workspace", None), explicit=explicit_ws)
 

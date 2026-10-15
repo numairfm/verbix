@@ -434,5 +434,22 @@ async def test_ipc_server_and_client_fallback_to_tcp_when_unix_sockets_unavailab
     assert not sock_path.exists()
 
 
+def test_importing_cli_does_not_eagerly_import_litellm():
+    import subprocess
+    import sys
+
+    res = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, verbix.cli; assert 'litellm' not in sys.modules, 'litellm eagerly imported'",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 0, res.stderr
+
+
 
 

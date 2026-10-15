@@ -65,11 +65,15 @@ def test_companion_prompt_invariants():
     assert "objective" in sys_prompt.lower()
     assert "spawn" in sys_prompt.lower()
     assert "persona" in sys_prompt.lower() or "spoken" in sys_prompt.lower()
-    # Default chill, short, no-internal-detail behavior
+    # Default chill, short, no-internal-detail behavior (no 'You say "I,"' stiffness)
     assert "chill" in sys_prompt.lower()
     assert "chill" in announcer_prompt.lower()
     assert "internal detail" in sys_prompt.lower()
     assert "internal detail" in announcer_prompt.lower()
+    assert 'you say "i,"' not in sys_prompt.lower()
+    assert 'you say "i,"' not in announcer_prompt.lower()
+    assert "contractions" in sys_prompt.lower()
+    assert "contractions" in announcer_prompt.lower()
     # Invariant: zero pre-tool announcements, single post-tool response, no redundant confirmations
     assert "begin with one short spoken sentence" not in sys_prompt.lower()
     assert "without speaking pre-tool announcements" in sys_prompt.lower()
@@ -96,6 +100,8 @@ def test_default_verbix_prompt_invariants():
     assert "spawn" in DEFAULT_VERBIX_PROMPT.lower()
     assert "chill" in DEFAULT_VERBIX_PROMPT.lower()
     assert "internal detail" in DEFAULT_VERBIX_PROMPT.lower()
+    assert 'you say "i,"' not in DEFAULT_VERBIX_PROMPT.lower()
+    assert "contractions" in DEFAULT_VERBIX_PROMPT.lower()
     # Invariant: zero pre-tool announcements, single post-tool response, no redundant confirmations
     assert "begin with one short spoken sentence" not in DEFAULT_VERBIX_PROMPT.lower()
     assert "without speaking pre-tool announcements" in DEFAULT_VERBIX_PROMPT.lower()

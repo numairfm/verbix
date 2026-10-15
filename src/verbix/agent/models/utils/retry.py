@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 
 from tenacity import (
     Retrying,
@@ -15,19 +14,11 @@ from tenacity import (
 
 
 def retry(*, logger: logging.Logger, abort_exceptions: list[type[BaseException]]) -> Retrying:
-    """Thin wrapper around tenacity.Retrying to make use of global config etc.
-
-    Args:
-        logger: Logger to use for reporting retries
-        abort_exceptions: Exceptions to abort on.
-
-    Returns:
-        A tenacity.Retrying object.
-    """
+    """Thin wrapper around tenacity.Retrying for synchronous model queries."""
     return Retrying(
         reraise=True,
-        stop=stop_after_attempt(int(os.getenv("MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT", "10"))),
-        wait=wait_exponential(multiplier=1, min=4, max=60),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=15),
         before_sleep=before_sleep_log(logger, logging.WARNING),
         retry=retry_if_not_exception_type(tuple(abort_exceptions)),
     )

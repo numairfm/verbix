@@ -17,18 +17,11 @@ logging.getLogger("LiteLLM").setLevel(logging.ERROR)
 
 from verbix.agent.exceptions import FormatError
 from verbix.agent.models import GLOBAL_MODEL_STATS
-from verbix.agent.models.utils.actions_toolcall import (
-    format_toolcall_observation_messages,
-    parse_toolcall_actions,
-)
+from verbix.agent.models.utils.actions_toolcall import parse_toolcall_actions
 from verbix.agent.models.utils.anthropic_utils import (
     _reorder_anthropic_thinking_blocks,
 )
 from verbix.agent.models.utils.cache_control import set_cache_control
-from verbix.agent.models.utils.openai_multimodal import (
-    DEFAULT_MULTIMODAL_REGEX,
-    expand_multimodal_content,
-)
 from verbix.agent.models.utils.retry import retry
 from verbix.core.events import (
     AgentEvent,
@@ -63,20 +56,10 @@ class LitellmModelConfig(BaseModel):
     """Model registry for cost tracking and model metadata."""
     set_cache_control: Literal["default_end"] | None = None
     """Set explicit cache control markers, for example for Anthropic models."""
-    cost_tracking: Literal["default", "ignore_errors"] = cast(
-        Literal["default", "ignore_errors"],
-        os.getenv("MSWEA_COST_TRACKING", "ignore_errors"),
-    )
+    cost_tracking: Literal["default", "ignore_errors"] = "ignore_errors"
     """Cost tracking mode for this model. Can be 'default' or 'ignore_errors'."""
     format_error_template: str = "{{ error }}"
     """Template used when the LM's output is not in the expected format."""
-    observation_template: str = (
-        "{% if output.exception_info %}<exception>{{output.exception_info}}</exception>\n{% endif %}"
-        "<returncode>{{output.returncode}}</returncode>\n<output>\n{{output.output}}</output>"
-    )
-    """Template used to render the observation after executing an action."""
-    multimodal_regex: str = DEFAULT_MULTIMODAL_REGEX
-    """Regex to extract multimodal content. Empty string disables multimodal processing."""
     stream_idle_timeout_s: float = 60.0
     """Max silence per stream chunk before the provider read fails loudly."""
 
@@ -313,11 +296,7 @@ class LitellmModel:
         except Exception as e:
             cost = 0.0
             if self.config.cost_tracking != "ignore_errors":
-                msg = (
-                    f"Error calculating cost for model {self.config.model_name}: {e}, perhaps it's not registered? "
-                    "You can ignore this issue from your config file with cost_tracking: 'ignore_errors' or "
-                    "globally with export MSWEA_COST_TRACKING='ignore_errors'."
-                )
+                msg = f"Error calculating cost for model {self.config.model_name}: {e}"
                 logger.critical(msg)
                 raise RuntimeError(msg) from e
         return {"cost": cost}
@@ -333,37 +312,9 @@ class LitellmModel:
             tool_calls,
             format_error_template=self.config.format_error_template,
             template_kwargs={"finish_reason": response.choices[0].finish_reason},
-            allowed_tools=allowed or None,
+            allowed_tools=allowed if tool_defs is not None else None,
             content=getattr(response.choices[0].message, "content", None),
-        )
-
-    def format_message(self, **kwargs: Any) -> dict[str, Any]:
-        return expand_multimodal_content(kwargs, pattern=self.config.multimodal_regex)
-
-    def format_observation_messages(
-        self,
-        message: dict[str, Any],
-        outputs: list[dict[str, Any]],
-        template_vars: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        actions = message.get("extra", {}).get("actions", [])
-        return format_toolcall_observation_messages(
-            actions=actions,
-            outputs=outputs,
-            observation_template=self.config.observation_template,
-            template_vars=template_vars,
-            multimodal_regex=self.config.multimodal_regex,
         )
 
     def get_template_vars(self, **kwargs: Any) -> dict[str, Any]:
         return self.config.model_dump()
-
-    def serialize(self) -> dict[str, Any]:
-        return {
-            "info": {
-                "config": {
-                    "model": self.config.model_dump(mode="json"),
-                    "model_type": f"{self.__class__.__module__}.{self.__class__.__name__}",
-                },
-            }
-        }

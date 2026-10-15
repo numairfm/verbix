@@ -344,45 +344,13 @@ def test_parser_still_rejects_unknown_tool_with_allowlist():
         parse_toolcall_actions(
             [_call("nope", '{}')], format_error_template="{{ error }}", allowed_tools={"screenshot"}
         )
-
-
-def test_images_survive_output_truncation():
-    from verbix.agent.models.utils.actions_toolcall import (
-        format_toolcall_observation_messages,
-    )
-
-    big_image = "data:image/png;base64," + "A" * 20000
-    tag = (
-        "<MSWEA_MULTIMODAL_CONTENT><CONTENT_TYPE>image_url</CONTENT_TYPE>"
-        + big_image
-        + "</MSWEA_MULTIMODAL_CONTENT>"
-    )
-    eliding_template = "{{ output.output[:10] }}"
-    msgs = format_toolcall_observation_messages(
-        actions=[{"tool_call_id": "c1"}],
-        outputs=[{"output": "seen: " + tag, "returncode": 0, "exception_info": ""}],
-        observation_template=eliding_template,
-        multimodal_regex=r"(?s)<MSWEA_MULTIMODAL_CONTENT><CONTENT_TYPE>(.+?)</CONTENT_TYPE>(.+?)</MSWEA_MULTIMODAL_CONTENT>",
-    )
-    content = msgs[0]["content"]
-    assert isinstance(content, list)
-    urls = [p["image_url"]["url"] for p in content if p.get("type") == "image_url"]
-    assert urls == [big_image]
-
-
-def test_long_plain_text_still_truncates():
-    from verbix.agent.models.utils.actions_toolcall import (
-        format_toolcall_observation_messages,
-    )
-
-    long_text = "x" * 20000
-    msgs = format_toolcall_observation_messages(
-        actions=[{"tool_call_id": "c1"}],
-        outputs=[{"output": long_text, "returncode": 0, "exception_info": ""}],
-        observation_template="{{ output.output[:10] }}",
-        multimodal_regex=r"(?s)<MSWEA_MULTIMODAL_CONTENT><CONTENT_TYPE>(.+?)</CONTENT_TYPE>(.+?)</MSWEA_MULTIMODAL_CONTENT>",
-    )
-    assert msgs[0]["content"] == [{"type": "text", "text": "xxxxxxxxxx"}]
+    # Also rejects bash when bash is not in allowed_tools (e.g. unsandboxed platform)
+    with pytest.raises(FormatError):
+        parse_toolcall_actions(
+            [_call("bash", '{"command": "ls"}')],
+            format_error_template="{{ error }}",
+            allowed_tools={"read"},
+        )
 
 
 def test_parse_toolcall_actions_accepts_unescaped_control_characters_in_strings():
@@ -445,10 +413,9 @@ def test_parse_toolcall_actions_without_content_only_has_user_message():
     assert "No tool calls found" in err.messages[0]["content"]
 
 
-def test_litellm_model_defaults_to_ignore_errors_cost_tracking(monkeypatch):
+def test_litellm_model_defaults_to_ignore_errors_cost_tracking():
     from unittest.mock import MagicMock, patch
 
-    monkeypatch.delenv("MSWEA_COST_TRACKING", raising=False)
     config = LitellmModelConfig(model_name="openrouter/google/gemini-3.5-flash-lite")
     assert config.cost_tracking == "ignore_errors"
 

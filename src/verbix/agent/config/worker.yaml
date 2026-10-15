@@ -55,23 +55,6 @@ environment:
     PIP_PROGRESS_BAR: 'off'
     TQDM_DISABLE: '1'
 model:
-  observation_template: |
-    {%- if output.output | length < 10000 -%}
-    {
-      "returncode": {{ output.returncode }},
-      "output": {{ output.output | tojson }}
-      {%- if output.exception_info %}, "exception_info": {{ output.exception_info | tojson }}{% endif %}
-    }
-    {%- else -%}
-    {
-      "returncode": {{ output.returncode }},
-      "output_head": {{ output.output[:5000] | tojson }},
-      "output_tail": {{ output.output[-5000:] | tojson }},
-      "elided_chars": {{ output.output | length - 10000 }},
-      "warning": "Output too long."
-      {%- if output.exception_info %}, "exception_info": {{ output.exception_info | tojson }}{% endif %}
-    }
-    {%- endif -%}
   format_error_template: |
     {% if finish_reason is defined and (finish_reason == "length" or (finish_reason == "tool_calls" and not has_tool_calls)) -%}
     Your previous response reached the output token limit (finish_reason={{ finish_reason }}) before you produced a tool call, so it was cut off. Respond more concisely and finish with a valid tool call. If you need to think more, do so briefly.

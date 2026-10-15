@@ -211,29 +211,6 @@ async def test_read_downscales_large_images_instead_of_refusing(tmp_path: Path):
     assert "MSWEA_MULTIMODAL" not in res.observation
 
 
-def test_multimodal_expansion_is_on_by_default():
-    from verbix.agent.models.litellm_model import LitellmModelConfig
-    from verbix.agent.models.utils.actions_toolcall import (
-        format_toolcall_observation_messages,
-    )
-
-    cfg = LitellmModelConfig(model_name="test/model")
-    assert cfg.multimodal_regex, "image expansion must be enabled by default"
-    tag = (
-        "<MSWEA_MULTIMODAL_CONTENT><CONTENT_TYPE>image_url</CONTENT_TYPE>"
-        "data:image/png;base64,AAA</MSWEA_MULTIMODAL_CONTENT>"
-    )
-    msgs = format_toolcall_observation_messages(
-        actions=[{"tool_call_id": "c1"}],
-        outputs=[{"output": tag, "returncode": 0, "exception_info": ""}],
-        observation_template="{{ output.output }}",
-        multimodal_regex=cfg.multimodal_regex,
-    )
-    parts = msgs[0]["content"]
-    assert isinstance(parts, list)
-    assert any(p.get("type") == "image_url" for p in parts)
-
-
 @pytest.mark.asyncio
 async def test_read_states_its_own_completeness(tmp_path: Path):
     workspace = tmp_path / "workspace"

@@ -126,6 +126,7 @@ def _discover_linux_apps() -> list[AppEntry]:
                     None,
                     [
                         generic_name,
+                        sec.get("Categories", ""),
                         sec.get("Keywords", ""),
                         app_id,
                         exe_name,

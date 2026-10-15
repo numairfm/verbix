@@ -32,15 +32,7 @@ def test_screenshot_tool_metadata() -> None:
     assert tool.side_effecting is False
     assert tool.parameters_schema == {
         "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": (
-                    "Optional relative path in workspace to save the screenshot image to "
-                    "(e.g. 'bug.png' or 'screenshots/')."
-                ),
-            }
-        },
+        "properties": {},
         "additionalProperties": False,
     }
     assert "screenshot" in tool.description.lower()
@@ -155,101 +147,19 @@ async def test_screenshot_prunes_old_cache_files(
 
 
 @pytest.mark.asyncio
-async def test_screenshot_saves_to_explicit_workspace_file(
-    tool_context: ToolContext, tmp_path: Path
+async def test_screenshot_never_writes_into_workspace(
+    tool_context: ToolContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
     synthetic_im = Image.new("RGB", (640, 480), color="yellow")
     with patch("PIL.ImageGrab.grab", return_value=synthetic_im):
         tool = ScreenshotTool()
-        result = await tool.execute({"path": "bug.png"}, tool_context)
+        result = await tool.execute({}, tool_context)
 
     assert not result.is_error
-    assert "[screenshot captured: 640x480 -> bug.png]" in result.observation
-    saved_file = tmp_path / "bug.png"
-    assert saved_file.is_file()
-    with Image.open(saved_file) as im:
-        assert im.format == "PNG"
-        assert im.size == (640, 480)
-
-
-@pytest.mark.asyncio
-async def test_screenshot_saves_to_directory_path(
-    tool_context: ToolContext, tmp_path: Path
-) -> None:
-    synthetic_im = Image.new("RGB", (1024, 768), color="purple")
-    with patch("PIL.ImageGrab.grab", return_value=synthetic_im):
-        tool = ScreenshotTool()
-        result = await tool.execute({"path": "screenshots/"}, tool_context)
-
-    assert not result.is_error
-    dest_dir = tmp_path / "screenshots"
-    assert dest_dir.is_dir()
-    files = list(dest_dir.glob("screenshot_*.png"))
-    assert len(files) == 1
-    assert f"-> screenshots/{files[0].name}" in result.observation
-    with Image.open(files[0]) as im:
-        assert im.format == "PNG"
-        assert im.size == (1024, 768)
-
-
-@pytest.mark.asyncio
-async def test_screenshot_rejects_escaping_path(
-    tool_context: ToolContext,
-) -> None:
-    synthetic_im = Image.new("RGB", (800, 600), color="cyan")
-    with patch("PIL.ImageGrab.grab", return_value=synthetic_im):
-        tool = ScreenshotTool()
-        result = await tool.execute({"path": "../../outside.png"}, tool_context)
-
-    assert result.is_error
-    assert "escapes configured workspace" in result.observation
-    assert len(result.attachments) == 0
-
-
-@pytest.mark.asyncio
-async def test_screenshot_saves_to_existing_directory_without_slash(
-    tool_context: ToolContext, tmp_path: Path
-) -> None:
-    dest_dir = tmp_path / "images"
-    dest_dir.mkdir()
-    synthetic_im = Image.new("RGB", (100, 100), color="pink")
-    with patch("PIL.ImageGrab.grab", return_value=synthetic_im):
-        tool = ScreenshotTool()
-        result = await tool.execute({"path": "images"}, tool_context)
-
-    assert not result.is_error
-    files = list(dest_dir.glob("screenshot_*.png"))
-    assert len(files) == 1
-    assert f"-> images/{files[0].name}" in result.observation
-    with Image.open(files[0]) as im:
-        assert im.format == "PNG"
-        assert im.size == (100, 100)
-
-
-@pytest.mark.asyncio
-async def test_screenshot_creates_nested_parent_dirs(
-    tool_context: ToolContext, tmp_path: Path
-) -> None:
-    synthetic_im = Image.new("RGB", (200, 200), color="white")
-    with patch("PIL.ImageGrab.grab", return_value=synthetic_im):
-        tool = ScreenshotTool()
-        result = await tool.execute({"path": "nested/deep/bug.png"}, tool_context)
-
-    assert not result.is_error
-    saved = tmp_path / "nested" / "deep" / "bug.png"
-    assert saved.is_file()
-    assert "-> nested/deep/bug.png" in result.observation
-
-
-@pytest.mark.asyncio
-async def test_screenshot_requires_workspace_when_path_provided() -> None:
-    synthetic_im = Image.new("RGB", (100, 100), color="white")
-    with patch("PIL.ImageGrab.grab", return_value=synthetic_im):
-        tool = ScreenshotTool()
-        result = await tool.execute({"path": "bug.png"}, None)
-
-    assert result.is_error
-    assert "workspace is required" in result.observation
+    assert list(tmp_path.glob("*.png")) == []
 
 
 @pytest.mark.asyncio

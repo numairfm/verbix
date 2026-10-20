@@ -50,6 +50,16 @@ export APPIMAGE_EXTRACT_AND_RUN=1
 export NO_STRIP=true
 cargo tauri build --bundles appimage
 
+version="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' tauri.conf.json | head -n 1)"
+appdir="$ROOT/src-tauri/target/release/bundle/appimage/Verbix.AppDir"
+artifact="$ROOT/src-tauri/target/release/bundle/appimage/Verbix_${version}_amd64.AppImage"
+
+echo "==> trimming duplicate runtime files and repacking"
+python3 "$ROOT/scripts/trim_appimage.py" --appdir "$appdir" --output "$artifact"
+
+echo "==> AppImage ready: $artifact ($(stat -c%s "$artifact") bytes)"
+sha256sum "$artifact"
+
 # Keep the resource paths present for cargo check on a clean checkout without
 # bundling these placeholders into the AppImage.
 touch "$VOICE/.gitkeep" "$RESOURCES/licenses/.gitkeep"

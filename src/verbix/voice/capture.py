@@ -83,6 +83,9 @@ class PTTCapture:
         self._is_recording = True
 
         try:
+            from verbix.voice.portaudio import ensure_loadable
+
+            ensure_loadable()
             import sounddevice as sd
         except (ImportError, OSError) as e:
             logger.warning(

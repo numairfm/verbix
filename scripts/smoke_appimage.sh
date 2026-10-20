@@ -46,6 +46,12 @@ REAL_HOME="$HOME"
 SMOKE_HOME="$WORK/home"
 mkdir -p "$SMOKE_HOME/.verbix/logs"
 export HOME="$SMOKE_HOME"
+# Headless WebKit needs software rendering; compositing can hang panel creation
+# on distributions whose WebKit build differs from the one used to build the
+# AppImage.
+export WEBKIT_DISABLE_COMPOSITING_MODE="${WEBKIT_DISABLE_COMPOSITING_MODE:-1}"
+export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
+export GDK_BACKEND="${GDK_BACKEND:-x11}"
 STT_MODEL="${VERBIX_STT_MODEL:-$REAL_HOME/.verbix/voice/stt/models/nemotron-gguf/nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf}"
 if [[ ! -f "$STT_MODEL" ]]; then
   echo "STT model not found: $STT_MODEL" >&2

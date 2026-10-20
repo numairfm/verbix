@@ -103,6 +103,93 @@ def main() -> int:
                         },
                     )
                     time.sleep(0.05)
+                    send(
+                        conn,
+                        runtime_event(
+                            "user_transcript",
+                            {"text": "what time is it in tokyo", "duration": 1.4},
+                        ),
+                    )
+                    send(conn, event("text_delta", {"text": "It is "}))
+                    send(conn, event("text_delta", {"text": "6:42 PM in Tokyo."}))
+                    send(
+                        conn,
+                        event(
+                            "turn_complete",
+                            {
+                                "final_text": "It is 6:42 PM in Tokyo.",
+                                "exit_reason": "completed",
+                                "is_error": False,
+                            },
+                        ),
+                    )
+                    send(
+                        conn,
+                        runtime_event(
+                            "task_registered",
+                            {
+                                "task_id": "task-1",
+                                "objective": "summarize this repo",
+                            },
+                        ),
+                    )
+                    send(
+                        conn,
+                        runtime_event(
+                            "task_completed",
+                            {
+                                "task_id": "task-1",
+                                "result": "The repo is a voice agent with workers.",
+                            },
+                        ),
+                    )
+                    send(conn, event("text_delta", {"text": "Task one is complete."}))
+                    send(
+                        conn,
+                        event(
+                            "turn_complete",
+                            {
+                                "final_text": "Task one is complete.",
+                                "exit_reason": "completed",
+                                "is_error": False,
+                            },
+                        ),
+                    )
+                    send(
+                        conn,
+                        runtime_event(
+                            "task_registered",
+                            {
+                                "task_id": "task-2",
+                                "objective": "read the logs",
+                            },
+                        ),
+                    )
+                    send(
+                        conn,
+                        runtime_event(
+                            "task_failed",
+                            {
+                                "task_id": "task-2",
+                                "result": "log file missing",
+                            },
+                        ),
+                    )
+                    send(
+                        conn,
+                        runtime_event(
+                            "task_registered",
+                            {
+                                "task_id": "task-3",
+                                "objective": "index the workspace",
+                            },
+                        ),
+                    )
+                    send(
+                        conn,
+                        runtime_event("task_cancelled", {"task_id": "task-3"}),
+                    )
+                    time.sleep(0.05)
                     send(conn, runtime_event("floor_state", {"state": "speaking"}))
                     time.sleep(0.05)
                     send(conn, runtime_event("floor_state", {"state": "idle"}))

@@ -7,9 +7,50 @@
     <link rel="stylesheet" href="panel.css" />
   </head>
   <body>
-    <main>
-      <h1>Verbix</h1>
-      <p>Voice-operated desktop assistant.</p>
+    <header class="panel-header">
+      <div class="identity">
+        <h1>Verbix</h1>
+        <p class="tray-state" aria-live="polite">
+          <span id="tray-dot" class="dot tray-state-idle" aria-hidden="true"></span>
+          <span id="tray-state">Idle</span>
+        </p>
+      </div>
+      <button id="hide-panel" type="button">Hide</button>
+    </header>
+
+    <main class="panel-body">
+      <section id="setup" class="setup" aria-label="First-run setup" hidden></section>
+
+      <section class="activity" aria-labelledby="activity-heading">
+        <div class="section-heading">
+          <h2 id="activity-heading">Activity</h2>
+          <p class="floor">Floor: <span id="floor-state">idle</span></p>
+        </div>
+        <div class="transcript-block">
+          <h3>You</h3>
+          <p id="transcript" class="prose" aria-live="polite"></p>
+        </div>
+        <div class="caption-block">
+          <h3>Verbix</h3>
+          <p id="caption" class="prose" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section class="tasks" aria-labelledby="tasks-heading">
+        <h2 id="tasks-heading">Tasks</h2>
+        <ul id="task-list" class="task-list"></ul>
+        <p id="no-tasks" class="empty">No tasks this session.</p>
+      </section>
     </main>
+
+    <footer class="panel-footer">
+      <p id="shortcut-hint" class="shortcut">No global shortcut is available.</p>
+      <div id="service-error" class="service-error" hidden>
+        <p id="service-error-text" class="error-text"></p>
+        <button id="retry-service" type="button">Retry</button>
+      </div>
+    </footer>
+
+    <script src="panel.js"></script>
   </body>
 </html>

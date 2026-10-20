@@ -158,10 +158,17 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
-      - name: Install Tauri CLI
-        uses: taiki-e/install-action@v2
+      - name: Cache Tauri CLI
+        uses: actions/cache@v4
         with:
-          tool: cargo-tauri@2.12.3
+          path: ~/.cargo/bin/cargo-tauri
+          key: tauri-cli-2.12.3
+
+      - name: Install Tauri CLI
+        run: |
+          if ! command -v cargo-tauri >/dev/null 2>&1; then
+            cargo install tauri-cli --version 2.12.3 --locked
+          fi
 
       - name: Cache linuxdeploy and bundled TTS weights
         uses: actions/cache@v4

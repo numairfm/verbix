@@ -198,16 +198,13 @@ STATE: IDLE
 | `ipc/` | `server`/`client`/`protocol`: JSONL over Unix socket (with loopback TCP fallback on Windows), `ping/prompt/status/cancel/toggle`, runtime event fan-out |
 | `agent/` | agent core: `voice.py` (`VoiceAgent`), `worker.py` (`WorkerAgent`), `models/litellm_model.py`, `tools/registry.py`, `config/*.yaml` |
 
-## IPC & Desktop Overlay (GPUI)
+## IPC & Desktop Shell (Tauri)
 
 `VerbixServer` (`verbix --serve --voice`) fronts the same `Runtime` and `VoicePipeline` over `~/.local/share/verbix/verbix.sock` (falling back to `127.0.0.1` loopback TCP on Windows).
 - **Actions**: `ping`, `prompt`, `status`, `cancel`, `toggle`.
 - **Streamed JSONL events**: `floor_state` (`idle` / `listening` / `speaking`), `user_transcript`, `task_registered`, `task_completed`, `task_failed`, `task_cancelled`, `wake_event`, `text_delta`, `turn_complete`.
-- **Planned Rust + GPUI Desktop Overlay**:
-  - Uses Zed's `gpui` crate (`Apache-2.0`, compatible with Verbix's closed-source commercial track) as a lightweight native GPU client connected to `verbix.sock`.
-  - **Always-on-top non-activating overlay**: `WindowKind::PopUp` (`NSPanel` with `NSWindowStyleMaskNonactivatingPanel` at `NSPopUpWindowLevel` on macOS; `WS_EX_TOOLWINDOW | WS_EX_TOPMOST` with `SW_SHOWNOACTIVATE` on Windows; `_NET_WM_WINDOW_TYPE_NOTIFICATION` on X11) and `WindowKind::LayerShell` (`zwlr_layer_shell_v1` `Layer::Overlay` with `KeyboardInteractivity::None` on Linux Wayland), paired with `WindowBackgroundAppearance::Transparent` / `Blurred`.
-  - **Click-through (mouse pass-through)**: Native `Window::set_input_region(Some(&[]))` (or per-pill interactive bounds) on Wayland, and `raw_window_handle::HasWindowHandle` hooks (`setIgnoresMouseEvents: YES` on macOS, `WS_EX_LAYERED | WS_EX_TRANSPARENT` on Windows, XShape `ShapeInput` on X11) so mouse clicks pass straight through the overlay to the active game or application underneath.
-  - Note: Pin a specific `gpui` git revision in `Cargo.toml` since `gpui` is pre-1.0 and tracks Zed `main`.
+
+The v1 desktop shell is a Tauri 2 process that owns the tray, global shortcut, autostart, single instance, panel, and voice service supervision. It runs the Python voice service unchanged as a child over this IPC protocol. The surface is tray-first; there is no overlay in v1. See [ADR-0001](docs/adr/0001-tauri-desktop-shell.md) for the shell decision, [ADR-0002](docs/adr/0002-rust-shell-owns-desktop.md) for process ownership, [ADR-0003](docs/adr/0003-tray-first-no-overlay.md) for the tray-first surface, and the [desktop shell v1 spec](docs/superpowers/specs/2026-10-20-desktop-shell-v1-design.md). GPUI is deferred, not rejected: the IPC seam lets the panel be replaced later without touching Python.
 
 ## Develop
 

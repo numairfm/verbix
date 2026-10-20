@@ -32,3 +32,7 @@ src/verbix/voice/tts/supertonic-int8/*.bin
 .worktrees/
 
 verbix-trace.jsonl
+
+# Tauri shell build output
+src-tauri/target/
+src-tauri/gen/

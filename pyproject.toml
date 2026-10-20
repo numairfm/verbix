@@ -49,4 +49,6 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+testpaths = ["tests"]
+norecursedirs = [".venv", "src-tauri", "dist", "build", "*.egg-info"]
 

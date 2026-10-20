@@ -1,0 +1,4 @@
+voice/*
+!voice/.gitkeep
+licenses/*
+!licenses/.gitkeep

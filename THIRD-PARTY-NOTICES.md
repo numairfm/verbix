@@ -120,16 +120,21 @@ linked and retain their upstream licences; their licence texts are in
   `LICENSES/system/portaudio/LICENSE.txt`. Source:
   <https://src.fedoraproject.org/rpms/portaudio> and
   <https://packages.ubuntu.com/source/libportaudio2>.
-- **PipeWire libs and JACK** — `libportaudio.so.2` links
-  `libasound.so.2`, `libpipewire-0.3.so.0`, and `libjack.so.0`; all three are
-  bundled under `usr/lib/`. The pipewire libraries are MIT AND
-  GPL-2.0-or-later AND BSD-2-Clause AND LGPL-2.0-or-later
-  (`pipewire-libs-1.6.9-1.fc44`), and the JACK audio connection kit library is
-  MIT (`pipewire-jack-audio-connection-kit-libs-1.6.9-1.fc44`). They are
-  unmodified and dynamically loaded; texts: `LICENSES/mit.md`,
-  `LICENSES/bsd-2-clause.md`, `LICENSES/lgpl-2.0-or-later.md`,
-  `LICENSES/system/pipewire/COPYING`, `LICENSES/system/pipewire/LICENSE`.
-  Source: <https://src.fedoraproject.org/rpms/pipewire>.
+- **PipeWire libs, JACK, and JACK2** — PortAudio's runtime closure is copied
+  from the build host. The Fedora release build bundles `libasound.so.2`,
+  `libpipewire-0.3.so.0`, and PipeWire's `libjack.so.0`; the Ubuntu CI build
+  bundles `libasound.so.2`, JACK2's `libjack.so.0`, and JACK2's
+  `libdb-5.3.so`. All are unmodified and dynamically loaded. The pipewire
+  libraries are MIT AND GPL-2.0-or-later AND BSD-2-Clause AND
+  LGPL-2.0-or-later (`pipewire-libs-1.6.9-1.fc44`); JACK2 is
+  LGPL-2.1-or-later; Berkeley DB 5.3 is under the Sleepycat licence. Texts:
+  `LICENSES/mit.md`, `LICENSES/bsd-2-clause.md`,
+  `LICENSES/lgpl-2.0-or-later.md`, `LICENSES/lgpl-2.1-or-later.md`,
+  `LICENSES/system/pipewire/COPYING`,
+  `LICENSES/system/pipewire/LICENSE`, `LICENSES/system/libdb/COPYING`.
+  Sources: <https://src.fedoraproject.org/rpms/pipewire> and
+  <https://packages.ubuntu.com/source/libdb>. Berkeley DB is present only in
+  the CI Ubuntu artifact, not in the Fedora release artifact.
 
 - **ONNX Runtime** (MIT) — `libonnxruntime.so` from
   `sherpa-onnx` (<https://github.com/microsoft/onnxruntime>).

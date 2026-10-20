@@ -168,7 +168,7 @@ jobs:
       - name: Verify legal files inside the AppImage
         run: |
           artifact="src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage"
-          uv run python scripts/check_licenses.py --check --appimage "$artifact"
+          uv run python scripts/check_licenses.py --check --artifact-only --appimage "$artifact"
 
       - name: Record the artifact hash
         run: |

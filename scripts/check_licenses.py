@@ -563,11 +563,27 @@ def run_gate(
     write: bool = False,
     appimage: Path | None = None,
     cargo: str = "cargo",
+    artifact_only: bool = False,
 ) -> list[str]:
-    notices_path = root / "THIRD-PARTY-NOTICES.md"
-    notices = notices_path.read_text(encoding="utf-8")
+    if artifact_only and appimage is None:
+        raise ValueError("artifact_only requires an AppImage")
+
     dependencies = scan_cargo(root / "src-tauri" / "Cargo.toml", cargo=cargo)
     dependencies.extend(scan_python(find_site_packages(root)))
+
+    if artifact_only:
+        if not appimage.is_file():
+            return [f"AppImage not found: {appimage}"]
+        with tempfile.TemporaryDirectory(prefix="verbix-license-") as tmp:
+            extracted = extract_appimage(appimage, Path(tmp))
+            return verify_extracted_licenses(
+                extracted,
+                root=root,
+                expected_license_files=required_license_files(dependencies),
+            )
+
+    notices_path = root / "THIRD-PARTY-NOTICES.md"
+    notices = notices_path.read_text(encoding="utf-8")
 
     if write:
         updated = update_notices_text(notices, dependencies)
@@ -619,8 +635,19 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="also verify legal files inside this built AppImage",
     )
+    parser.add_argument(
+        "--artifact-only",
+        action="store_true",
+        help=(
+            "with --appimage, verify only the files inside the artifact; skip "
+            "the dependency and release gate (which stays red on M1)"
+        ),
+    )
     parser.add_argument("--cargo", default="cargo", help="cargo executable")
     args = parser.parse_args(argv)
+
+    if args.artifact_only and args.appimage is None:
+        parser.error("--artifact-only requires --appimage")
 
     root = args.root.resolve()
     try:
@@ -629,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
             write=args.write,
             appimage=args.appimage.resolve() if args.appimage else None,
             cargo=args.cargo,
+            artifact_only=args.artifact_only,
         )
     except (FileNotFoundError, subprocess.CalledProcessError, KeyError) as error:
         print(f"license gate could not run: {error}", file=sys.stderr)

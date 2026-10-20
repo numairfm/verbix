@@ -19,9 +19,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 PYTHON_REMOVALS = (
@@ -155,18 +157,50 @@ def dedupe_top_level_libraries(appdir: Path, actions: list[str]) -> None:
         actions.append(f"removed duplicate {path} (kept {original})")
 
 
-PORTAUDIO_LIBRARIES = (
-    "libportaudio.so.2",
-    "libasound.so.2",
-    "libpipewire-0.3.so.0",
-    "libjack.so.0",
-)
+PORTAUDIO_ROOT_SONAME = "libportaudio.so.2"
 PORTAUDIO_SOURCE_ROOTS = (
     Path("/usr/lib64"),
     Path("/usr/lib/x86_64-linux-gnu"),
     Path("/usr/lib"),
 )
+# The host provides glibc and the loader. Everything else PortAudio links is
+# copied so the AppImage does not depend on a host PortAudio/JACK/ALSA stack.
+PORTAUDIO_HOST_SONAMES = {
+    "libc.so.6",
+    "libm.so.6",
+    "libgcc_s.so.1",
+    "libpthread.so.0",
+    "libdl.so.2",
+    "librt.so.1",
+    "libresolv.so.2",
+    "libutil.so.1",
+    "ld-linux-x86-64.so.2",
+    "linux-vdso.so.1",
+}
 PORTAUDIO_HOOK_MARKER = "# Verbix: bundled PortAudio runtime"
+LDD_LINE = re.compile(r"^\s*(\S+) => (\S+) \(0x")
+Dependency = tuple[str, Path]
+DependencyResolver = Callable[[Path], list[Dependency]]
+
+
+def ldd_dependencies(path: Path) -> list[Dependency]:
+    """Return the resolved shared-library dependencies reported by ``ldd``."""
+    result = subprocess.run(
+        ["ldd", str(path)], capture_output=True, text=True, check=True
+    )
+    dependencies: list[Dependency] = []
+    for line in result.stdout.splitlines():
+        if "not found" in line:
+            raise SystemExit(f"missing dependency for {path}: {line.strip()}")
+        match = LDD_LINE.match(line)
+        if match is None:
+            continue
+        soname, resolved = match.groups()
+        if soname in PORTAUDIO_HOST_SONAMES or "/ld-linux" in resolved:
+            continue
+        dependencies.append((soname, Path(resolved)))
+    return dependencies
+
 
 
 def portaudio_hook_exports() -> tuple[str, ...]:
@@ -187,28 +221,48 @@ def find_soname(root: Path, soname: str) -> Path | None:
 
 
 def copy_portaudio_libraries(
-    roots: tuple[Path, ...], lib_dir: Path, actions: list[str]
+    roots: tuple[Path, ...],
+    lib_dir: Path,
+    actions: list[str],
+    dependencies: DependencyResolver = ldd_dependencies,
 ) -> list[Path]:
-    """Copy PortAudio and its runtime dependencies into the AppDir."""
-    copied: list[Path] = []
-    for soname in PORTAUDIO_LIBRARIES:
-        source = next(
-            (
-                found
-                for root in roots
-                if root.is_dir() and (found := find_soname(root, soname))
-            ),
-            None,
+    """Copy PortAudio and its resolved runtime dependency closure into the AppDir.
+
+    Fedora's PortAudio links PipeWire's JACK; Ubuntu's links JACK2 and libdb.
+    Resolving ``ldd`` on the build host keeps the bundle specific to the binary
+    being shipped instead of assuming one distribution's dependency set.
+    """
+    source = next(
+        (
+            found
+            for root in roots
+            if root.is_dir() and (found := find_soname(root, PORTAUDIO_ROOT_SONAME))
+        ),
+        None,
+    )
+    if source is None:
+        raise SystemExit(
+            f"cannot bundle {PORTAUDIO_ROOT_SONAME}: not found under "
+            + ", ".join(str(root) for root in roots)
         )
-        if source is None:
-            raise SystemExit(
-                f"cannot bundle {soname}: not found under "
-                + ", ".join(str(root) for root in roots)
-            )
+
+    copied: list[Path] = []
+    pending: list[Dependency] = [(PORTAUDIO_ROOT_SONAME, source)]
+    seen: set[str] = set()
+    while pending:
+        soname, resolved = pending.pop(0)
+        if soname in seen:
+            continue
+        seen.add(soname)
         destination = lib_dir / soname
-        shutil.copy2(source, destination)
-        actions.append(f"bundled {destination} (from {source})")
+        if destination.exists():
+            actions.append(f"kept existing {destination} (PortAudio dependency)")
+            continue
+        shutil.copy2(resolved, destination)
+        actions.append(f"bundled {destination} (from {resolved})")
         copied.append(destination)
+        pending.extend(dependencies(resolved))
+
     symlink_relative(lib_dir / "libportaudio.so", "libportaudio.so.2", actions)
     return copied
 

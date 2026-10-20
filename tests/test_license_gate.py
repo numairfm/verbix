@@ -307,6 +307,33 @@ def test_uv_lock_coverage_accepts_matching_locked_packages(tmp_path):
     assert gate.check_uv_lock_coverage(lock, dependencies) == []
 
 
+def test_artifact_only_skips_the_release_gate(tmp_path, monkeypatch):
+    monkeypatch.setattr(gate, "scan_cargo", lambda *args, **kwargs: [])
+    monkeypatch.setattr(gate, "scan_python", lambda *args: [])
+    monkeypatch.setattr(gate, "find_site_packages", lambda *args: tmp_path)
+    monkeypatch.setattr(gate, "extract_appimage", lambda *args: tmp_path)
+    seen = {}
+
+    def verify(extracted, *, root, expected_license_files):
+        seen["extracted"] = extracted
+        seen["expected"] = expected_license_files
+        return []
+
+    monkeypatch.setattr(gate, "verify_extracted_licenses", verify)
+    appimage = tmp_path / "Verbix.AppImage"
+    appimage.write_bytes(b"not an appimage")
+
+    errors = gate.run_gate(tmp_path, appimage=appimage, artifact_only=True)
+
+    assert errors == []
+    assert seen == {"extracted": tmp_path, "expected": []}
+
+
+def test_artifact_only_requires_an_appimage(tmp_path):
+    with pytest.raises(ValueError, match="requires an AppImage"):
+        gate.run_gate(tmp_path, artifact_only=True)
+
+
 def test_extracted_appimage_resources_pass(tmp_path):
     (tmp_path / "THIRD-PARTY-NOTICES.md").write_text("notices\n", encoding="utf-8")
     (tmp_path / "DISTRIBUTION-TERMS.md").write_text("terms\n", encoding="utf-8")

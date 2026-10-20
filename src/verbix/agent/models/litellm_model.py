@@ -77,7 +77,7 @@ class LitellmModel:
     def __init__(self, *, config_class: Callable[..., Any] = LitellmModelConfig, **kwargs: Any) -> None:
         self.config = config_class(**kwargs)
         self.last_stream_cost = 0.0
-        self._last_warm = 0.0
+        self._last_warm = float("-inf")
         if self.config.litellm_model_registry and Path(self.config.litellm_model_registry).is_file():
             litellm.utils.register_model(json.loads(Path(self.config.litellm_model_registry).read_text()))
 

@@ -1,4 +1,5 @@
 pub mod app_state;
+pub mod autostart;
 pub mod command;
 pub mod ipc;
 pub mod logging;
@@ -49,7 +50,7 @@ fn run_gui(startup: Startup) {
                 service::spawn_supervisor(config, app_state::observer(&handle, log_path));
             app.manage(supervisor);
 
-            tray::create(app)?;
+            tray::create(app, &home)?;
             if startup == Startup::Show {
                 panel::show(&handle);
             }

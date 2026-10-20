@@ -1,10 +1,13 @@
+use std::path::{Path, PathBuf};
+
 use tauri::{
     image::Image,
-    menu::{Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, Manager, Wry,
 };
 
+use crate::autostart::{self, Status};
 use crate::panel;
 use crate::service::{Command, Supervisor};
 use crate::state::{Phase, Snapshot};
@@ -14,6 +17,8 @@ const TRAY_ID: &str = "main";
 pub struct TrayMenu {
     toggle: MenuItem<Wry>,
     restart: MenuItem<Wry>,
+    login: CheckMenuItem<Wry>,
+    home: PathBuf,
 }
 
 fn icon(name: &str) -> Image<'static> {
@@ -27,12 +32,21 @@ fn icon(name: &str) -> Image<'static> {
     Image::from_bytes(bytes).expect("valid tray icon")
 }
 
-pub fn create(app: &App) -> tauri::Result<()> {
+pub fn create(app: &App, home: &Path) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Verbix", true, None::<&str>)?;
     let toggle = MenuItem::with_id(app, "toggle", "Toggle listening", false, None::<&str>)?;
     let restart = MenuItem::with_id(app, "restart", "Restart voice service", false, None::<&str>)?;
+    let login_state = autostart::menu_state(autostart::status(home));
+    let login = CheckMenuItem::with_id(
+        app,
+        "autostart",
+        "Launch at login",
+        login_state.enabled,
+        login_state.checked,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &toggle, &restart, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &toggle, &restart, &login, &quit])?;
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon("idle"))
@@ -50,6 +64,14 @@ pub fn create(app: &App) -> tauri::Result<()> {
                 if let Some(supervisor) = app.try_state::<Supervisor>() {
                     supervisor.command(Command::Restart);
                 }
+            }
+            "autostart" => {
+                if let Some(tray) = app.try_state::<TrayMenu>() {
+                    let enabled = autostart::status(&tray.home) == Status::Enabled;
+                    let _ =
+                        autostart::set_enabled(&tray.home, !enabled, &autostart::executable_path());
+                }
+                refresh(app);
             }
             "quit" => {
                 if let Some(supervisor) = app.try_state::<Supervisor>() {
@@ -70,7 +92,12 @@ pub fn create(app: &App) -> tauri::Result<()> {
         })
         .build(app)?;
 
-    app.manage(TrayMenu { toggle, restart });
+    app.manage(TrayMenu {
+        toggle,
+        restart,
+        login,
+        home: home.to_path_buf(),
+    });
     refresh(app.handle());
     Ok(())
 }
@@ -91,6 +118,10 @@ pub fn refresh(app: &AppHandle) {
         let disconnected = matches!(snapshot.phase, Phase::Restarting | Phase::Failed);
         let _ = menu.toggle.set_enabled(snapshot.phase == Phase::Connected);
         let _ = menu.restart.set_enabled(disconnected);
+        // Re-read the entry every refresh so external edits show up.
+        let login_state = autostart::menu_state(autostart::status(&menu.home));
+        let _ = menu.login.set_enabled(login_state.enabled);
+        let _ = menu.login.set_checked(login_state.checked);
     }
 }
 

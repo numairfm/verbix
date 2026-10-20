@@ -62,7 +62,12 @@ def test_condition_handles_odd_bytes():
 @pytest.mark.asyncio
 async def test_warm_is_rate_limited_to_60s():
     model = LitellmModel(model_name="fake-model")
-    with patch("litellm.acompletion", new=AsyncMock(return_value={})) as ac:
+    # A fresh runner can have a monotonic clock below 60 seconds. The first
+    # warm must still run; only the second call is rate-limited.
+    with (
+        patch("verbix.agent.models.litellm_model.time.monotonic", return_value=10.0),
+        patch("litellm.acompletion", new=AsyncMock(return_value={})) as ac,
+    ):
         await model.warm()
         await model.warm()
         assert ac.await_count == 1

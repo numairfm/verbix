@@ -34,6 +34,36 @@ pub struct Event {
     pub payload: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PanelEvent {
+    UserTranscript {
+        text: String,
+    },
+    TextDelta {
+        text: String,
+    },
+    TurnComplete {
+        final_text: String,
+        exit_reason: Option<String>,
+        is_error: bool,
+    },
+    TaskRegistered {
+        task_id: String,
+        objective: String,
+    },
+    TaskCompleted {
+        task_id: String,
+        result: String,
+    },
+    TaskFailed {
+        task_id: String,
+        result: String,
+    },
+    TaskCancelled {
+        task_id: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Incoming {
     Response(Response),
@@ -77,4 +107,51 @@ pub fn floor_from_event(event: &Event) -> Option<Floor> {
         return None;
     }
     Floor::from_state(event.payload.get("payload")?.get("state")?.as_str()?)
+}
+
+pub fn panel_event_from_event(event: &Event) -> Option<PanelEvent> {
+    match event.kind.as_str() {
+        "text_delta" => Some(PanelEvent::TextDelta {
+            text: event.payload.get("text")?.as_str()?.to_string(),
+        }),
+        "turn_complete" => Some(PanelEvent::TurnComplete {
+            final_text: event.payload.get("final_text")?.as_str()?.to_string(),
+            exit_reason: event
+                .payload
+                .get("exit_reason")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            is_error: event
+                .payload
+                .get("is_error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        }),
+        "runtime_event" => {
+            let kind = event.payload.get("type")?.as_str()?;
+            let payload = event.payload.get("payload")?;
+            match kind {
+                "user_transcript" => Some(PanelEvent::UserTranscript {
+                    text: payload.get("text")?.as_str()?.to_string(),
+                }),
+                "task_registered" => Some(PanelEvent::TaskRegistered {
+                    task_id: payload.get("task_id")?.as_str()?.to_string(),
+                    objective: payload.get("objective")?.as_str()?.to_string(),
+                }),
+                "task_completed" => Some(PanelEvent::TaskCompleted {
+                    task_id: payload.get("task_id")?.as_str()?.to_string(),
+                    result: payload.get("result")?.as_str()?.to_string(),
+                }),
+                "task_failed" => Some(PanelEvent::TaskFailed {
+                    task_id: payload.get("task_id")?.as_str()?.to_string(),
+                    result: payload.get("result")?.as_str()?.to_string(),
+                }),
+                "task_cancelled" => Some(PanelEvent::TaskCancelled {
+                    task_id: payload.get("task_id")?.as_str()?.to_string(),
+                }),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }

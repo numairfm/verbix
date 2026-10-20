@@ -1,14 +1,16 @@
+#![cfg(unix)]
+
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
 
-use verbix_shell::ipc::Floor;
+use verbix_shell::ipc::{Floor, PanelEvent};
 use verbix_shell::service::{
     spawn_supervisor, BackoffPolicy, Command, Observation, Observer, ServiceConfig, Supervisor,
 };
-use verbix_shell::state::Phase;
+use verbix_shell::state::{Phase, Snapshot, TaskState};
 
 struct ChannelObserver(mpsc::Sender<Observation>);
 
@@ -165,6 +167,70 @@ fn ipc_toggle_follows_floor_events_and_quit_leaves_no_child() {
 
     let pid = read_pid(&pid_file);
     assert!(process_exists(pid));
+    stop(supervisor);
+    assert!(!process_exists(pid), "child {pid} survived quit");
+}
+
+fn snapshot_of(seen: &[Observation]) -> Snapshot {
+    let mut snapshot = Snapshot::new(Phase::Connected, Floor::Idle, None);
+    for observation in seen {
+        match observation {
+            Observation::Phase(phase) => snapshot.phase = *phase,
+            Observation::Floor(floor) => snapshot.floor = *floor,
+            Observation::Event(event) => snapshot.apply_panel_event(event.clone()),
+        }
+    }
+    snapshot
+}
+
+#[test]
+fn panel_events_reach_the_observer_and_tasks_become_terminal() {
+    let dir = tempdir().unwrap();
+    let config = test_config(dir.path());
+    let pid_file = dir.path().join("service.pid");
+    let (tx, rx) = mpsc::channel();
+    let supervisor = spawn_supervisor(config, Arc::new(ChannelObserver(tx)));
+    let mut seen = Vec::new();
+
+    pump_until(&rx, &mut seen, Duration::from_secs(10), |seen| {
+        connected_count(seen) == 1
+    });
+
+    supervisor.command(Command::Toggle);
+    pump_until(&rx, &mut seen, Duration::from_secs(5), |seen| {
+        let Some(cancelled) = seen.iter().position(|observation| {
+            matches!(
+                observation,
+                Observation::Event(PanelEvent::TaskCancelled { task_id }) if task_id == "task-3"
+            )
+        }) else {
+            return false;
+        };
+        seen.iter()
+            .skip(cancelled + 1)
+            .any(|observation| *observation == Observation::Floor(Floor::Idle))
+    });
+
+    let snapshot = snapshot_of(&seen);
+    assert_eq!(snapshot.activity.transcript, "what time is it in tokyo");
+    assert_eq!(
+        snapshot.activity.caption, "Task one is complete.",
+        "worker announcement should replace the previous finalized caption"
+    );
+    assert_eq!(snapshot.tasks.len(), 3, "{:?}", snapshot.tasks);
+    assert_eq!(snapshot.tasks[0].id, "task-3");
+    assert_eq!(snapshot.tasks[1].id, "task-2");
+    assert_eq!(snapshot.tasks[2].id, "task-1");
+    assert_eq!(snapshot.tasks[0].state, TaskState::Cancelled);
+    assert_eq!(snapshot.tasks[1].state, TaskState::Failed);
+    assert_eq!(snapshot.tasks[2].state, TaskState::Completed);
+    assert_eq!(
+        snapshot.tasks[2].result,
+        "The repo is a voice agent with workers."
+    );
+    assert_eq!(snapshot.floor, Floor::Idle);
+
+    let pid = read_pid(&pid_file);
     stop(supervisor);
     assert!(!process_exists(pid), "child {pid} survived quit");
 }

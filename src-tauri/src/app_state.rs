@@ -1,12 +1,17 @@
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+use std::time::Instant;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::ipc::Floor;
 use crate::logging::LogSink;
 use crate::service::{Observation, Observer};
-use crate::state::{Phase, Snapshot};
+use crate::state::{Coalescer, EmitDecision, Phase, Snapshot, EMIT_INTERVAL};
 use crate::tray;
+
+pub const STATE_EVENT: &str = "shell://state";
 
 pub struct ShellState {
     pub snapshot: Mutex<Snapshot>,
@@ -14,23 +19,35 @@ pub struct ShellState {
 
 pub struct TauriObserver {
     pub app: AppHandle,
+    changes: mpsc::Sender<()>,
+    log_path: PathBuf,
 }
 
-impl Observer for TauriObserver {
-    fn observe(&self, observation: Observation) {
+impl TauriObserver {
+    fn apply(&self, observation: Observation) {
         if let Some(state) = self.app.try_state::<ShellState>() {
             if let Ok(mut snapshot) = state.snapshot.lock() {
                 match observation {
                     Observation::Phase(phase) => {
                         snapshot.phase = phase;
-                        snapshot.detail = None;
+                        snapshot.error = (phase == Phase::Failed).then(|| {
+                            format!("Voice service failed. See {}.", self.log_path.display())
+                        });
                     }
                     Observation::Floor(floor) => {
                         snapshot.floor = floor;
                     }
+                    Observation::Event(event) => snapshot.apply_panel_event(event),
                 }
             }
         }
+        let _ = self.changes.send(());
+    }
+}
+
+impl Observer for TauriObserver {
+    fn observe(&self, observation: Observation) {
+        self.apply(observation);
         let app = self.app.clone();
         let _ = self.app.run_on_main_thread(move || tray::refresh(&app));
     }
@@ -38,6 +55,28 @@ impl Observer for TauriObserver {
     fn quit(&self) {
         let app = self.app.clone();
         let _ = self.app.run_on_main_thread(move || app.exit(0));
+    }
+}
+
+fn emit_loop(app: AppHandle, changes: mpsc::Receiver<()>) {
+    let mut coalescer = Coalescer::new(EMIT_INTERVAL);
+    while changes.recv().is_ok() {
+        loop {
+            match coalescer.changed(Instant::now()) {
+                EmitDecision::Now => break,
+                EmitDecision::Wait(delay) => match changes.recv_timeout(delay) {
+                    Ok(()) => {}
+                    Err(mpsc::RecvTimeoutError::Timeout) => break,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                },
+            }
+        }
+        if let Some(state) = app.try_state::<ShellState>() {
+            if let Ok(snapshot) = state.snapshot.lock() {
+                let _ = app.emit(STATE_EVENT, snapshot.clone());
+            }
+        }
+        coalescer.mark_emitted(Instant::now());
     }
 }
 
@@ -104,6 +143,15 @@ pub fn manage(app: &tauri::App, snapshot: Snapshot) {
     });
 }
 
-pub fn observer(app: &AppHandle) -> Arc<dyn Observer> {
-    Arc::new(TauriObserver { app: app.clone() })
+pub fn observer(app: &AppHandle, log_path: PathBuf) -> Arc<dyn Observer> {
+    let (changes, receiver) = mpsc::channel();
+    let emitter_app = app.clone();
+    let _ = thread::Builder::new()
+        .name("shell-state-emitter".to_string())
+        .spawn(move || emit_loop(emitter_app, receiver));
+    Arc::new(TauriObserver {
+        app: app.clone(),
+        changes,
+        log_path,
+    })
 }

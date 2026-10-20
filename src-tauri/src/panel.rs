@@ -2,7 +2,37 @@ use tauri::{
     App, AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 
+use crate::service::{Command, Supervisor};
+use crate::state::Snapshot;
+
 pub const PANEL_LABEL: &str = "main";
+
+#[tauri::command]
+pub fn get_state(state: tauri::State<'_, crate::ShellState>) -> Snapshot {
+    match state.snapshot.lock() {
+        Ok(snapshot) => snapshot.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+}
+
+#[tauri::command]
+pub fn hide_panel(app: AppHandle) {
+    hide(&app);
+}
+
+#[tauri::command]
+pub fn toggle(app: AppHandle) {
+    if let Some(supervisor) = app.try_state::<Supervisor>() {
+        supervisor.command(Command::Toggle);
+    }
+}
+
+#[tauri::command]
+pub fn restart_service(app: AppHandle) {
+    if let Some(supervisor) = app.try_state::<Supervisor>() {
+        supervisor.command(Command::Restart);
+    }
+}
 
 pub fn create(app: &App) -> tauri::Result<WebviewWindow> {
     let window = WebviewWindowBuilder::new(app, PANEL_LABEL, WebviewUrl::App("index.html".into()))

@@ -44,7 +44,9 @@ fn run_gui(startup: Startup) {
 
             let config =
                 app_state::production_config(&home, &resources, startup == Startup::Toggle);
-            let supervisor = service::spawn_supervisor(config, app_state::observer(&handle));
+            let log_path = config.log_path.clone();
+            let supervisor =
+                service::spawn_supervisor(config, app_state::observer(&handle, log_path));
             app.manage(supervisor);
 
             tray::create(app)?;
@@ -53,6 +55,12 @@ fn run_gui(startup: Startup) {
             }
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            panel::get_state,
+            panel::hide_panel,
+            panel::toggle,
+            panel::restart_service
+        ])
         .run(tauri::generate_context!());
 
     if let Err(error) = result {

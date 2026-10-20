@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::ipc::{floor_from_event, parse_line, request_line, Floor, Incoming};
+use crate::ipc::{
+    floor_from_event, panel_event_from_event, parse_line, request_line, Floor, Incoming, PanelEvent,
+};
 use crate::logging::{pump_reader, LogSink};
 use crate::state::Phase;
 
@@ -24,6 +26,7 @@ pub enum Command {
 pub enum Observation {
     Phase(Phase),
     Floor(Floor),
+    Event(PanelEvent),
 }
 
 pub trait Observer: Send + Sync + 'static {
@@ -299,6 +302,9 @@ fn run_with_child(
                     if let Some(floor) = floor_from_event(&event) {
                         observer.observe(Observation::Floor(floor));
                         log(config, &format!("floor {}", floor_name(floor)));
+                    }
+                    if let Some(panel_event) = panel_event_from_event(&event) {
+                        observer.observe(Observation::Event(panel_event));
                     }
                 }
                 Incoming::Response(response) => {

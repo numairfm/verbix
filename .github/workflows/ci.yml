@@ -117,8 +117,8 @@ jobs:
   appimage:
     name: appimage (Linux only)
     runs-on: ubuntu-latest
-    # The license gate is release-red on M1 by design (see #11), so the smoke
-    # job must still run to keep proving the artifact builds and launches.
+    # The license gate is release-red on M1 by design (see #11), so the build
+    # and clean-host smoke still run to prove the artifact launches.
     needs: [rust]
     steps:
       - uses: actions/checkout@v4
@@ -178,6 +178,15 @@ jobs:
             src/verbix/voice/tts/supertonic-int8
           key: appimage-assets-${{ hashFiles('scripts/fetch_voice_models.py') }}
 
+      - name: Cache the user-managed STT model
+        uses: actions/cache@v4
+        with:
+          path: ~/.verbix/voice/stt/models
+          key: stt-model-${{ hashFiles('scripts/fetch_voice_models.py') }}
+
+      - name: Fetch the STT model used by the smoke test
+        run: uv run scripts/fetch_voice_models.py
+
       - name: Build the AppImage
         run: bash scripts/build_appimage.sh
 
@@ -192,52 +201,10 @@ jobs:
           sha256sum "$artifact" | tee "$artifact.sha256"
           stat -c '%s bytes' "$artifact"
 
-      - name: Upload the AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: verbix-appimage
-          path: |
-            src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage
-            src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage.sha256
-          if-no-files-found: error
-
-  appimage-smoke:
-    name: appimage smoke (clean Fedora host)
-    runs-on: ubuntu-latest
-    needs: [appimage]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download the AppImage
-        uses: actions/download-artifact@v4
-        with:
-          name: verbix-appimage
-          path: artifact
-
-      - name: Cache the user-managed STT model
-        uses: actions/cache@v4
-        with:
-          path: ~/.verbix/voice/stt/models
-          key: stt-model-${{ hashFiles('scripts/fetch_voice_models.py') }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Set up Python 3.13
-        run: uv python install 3.13
-
-      - name: Sync dependencies
-        run: uv sync --locked
-
-      - name: Fetch the STT model used by the smoke test
-        run: uv run scripts/fetch_voice_models.py
-
       - name: Smoke test in a clean Fedora host (no system WebKit or PortAudio)
         run: |
-          chmod +x artifact/Verbix_0.1.0_amd64.AppImage
           docker run --rm \
             -v "$PWD:/work:ro" \
-            -v "$PWD/artifact:/artifact:ro" \
             -v "$HOME/.verbix/voice/stt/models:/root/.verbix/voice/stt/models:ro" \
             fedora:44 sh -lc '
               set -euo pipefail
@@ -253,5 +220,6 @@ jobs:
                 exit 1
               fi
               bash /work/scripts/smoke_appimage.sh \
-                /artifact/Verbix_0.1.0_amd64.AppImage 120
+                /work/src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage \
+                120
             '

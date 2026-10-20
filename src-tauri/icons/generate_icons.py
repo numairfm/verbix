@@ -92,6 +92,11 @@ def main() -> None:
     app_icon(128).save(HERE / "128x128.png")
     app_icon(256).save(HERE / "128x128@2x.png")
     app_icon(512).save(HERE / "icon.png")
+    app_icon(256).save(
+        HERE / "icon.ico",
+        format="ICO",
+        sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+    )
 
 
 if __name__ == "__main__":

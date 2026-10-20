@@ -27,6 +27,15 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
+      - name: Cache bundled TTS weights
+        uses: actions/cache@v4
+        with:
+          path: src/verbix/voice/tts/supertonic-int8
+          key: tts-weights-${{ hashFiles('scripts/fetch_voice_models.py') }}
+
+      - name: Fetch bundled TTS weights
+        run: uv run scripts/fetch_voice_models.py --bundle-tts
+
       - name: Lint
         run: uv run ruff check src tests
 

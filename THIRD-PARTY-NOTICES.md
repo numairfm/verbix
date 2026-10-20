@@ -110,13 +110,16 @@ linked and retain their upstream licences; their licence texts are in
 
 - **PortAudio** (MIT) — audio input/output backend loaded through
   `sounddevice` (<https://www.portaudio.com/>). The AppImage **bundles**
-  `libportaudio.so.2` (Fedora 44 `portaudio-19.7.0-3`, x86_64) under
-  `usr/lib/`, plus `libportaudio.so` for library lookup. The shell exports
-  `VERBIX_PORTAUDIO_LIB=<AppDir>/usr/lib/libportaudio.so.2` and the voice
-  service resolves PortAudio through that path before `sounddevice` imports,
-  so no system PortAudio package is required. Text:
+  `libportaudio.so.2` under `usr/lib/`, plus `libportaudio.so` for library
+  lookup. The release build uses Fedora 44 `portaudio-19.7.0-3`; the CI build
+  on Ubuntu bundles that distribution's `libportaudio2` package. Both are the
+  same MIT-licensed PortAudio, unmodified and dynamically loaded. The shell
+  exports `VERBIX_PORTAUDIO_LIB=<AppDir>/usr/lib/libportaudio.so.2` and the
+  voice service resolves PortAudio through that path before `sounddevice`
+  imports, so no system PortAudio package is required. Text:
   `LICENSES/system/portaudio/LICENSE.txt`. Source:
-  <https://src.fedoraproject.org/rpms/portaudio>.
+  <https://src.fedoraproject.org/rpms/portaudio> and
+  <https://packages.ubuntu.com/source/libportaudio2>.
 - **PipeWire libs and JACK** — `libportaudio.so.2` links
   `libasound.so.2`, `libpipewire-0.3.so.0`, and `libjack.so.0`; all three are
   bundled under `usr/lib/`. The pipewire libraries are MIT AND

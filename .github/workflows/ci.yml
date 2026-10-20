@@ -6,18 +6,13 @@ on:
   pull_request:
 
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+  python:
+    name: python (lint and test)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux system dependencies and allow unprivileged userns for bwrap
-        if: runner.os == 'Linux'
+      - name: Install Linux test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap libportaudio2
@@ -37,3 +32,168 @@ jobs:
 
       - name: Test
         run: uv run pytest -q
+
+  rust:
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux Tauri build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+          cache-on-failure: true
+
+      - name: Check all targets
+        working-directory: src-tauri
+        run: cargo check --all-targets
+
+      - name: Unit contracts
+        working-directory: src-tauri
+        run: cargo test --test unit_contracts
+
+      - name: Full Rust test suite (Linux only)
+        if: runner.os == 'Linux'
+        working-directory: src-tauri
+        run: cargo test --all-targets
+
+      - name: Rust formatting (Linux only)
+        if: runner.os == 'Linux'
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+  license:
+    name: license gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Check dependency licenses and notices
+        run: uv run python scripts/check_licenses.py --check
+
+  appimage:
+    name: appimage (Linux only)
+    runs-on: ubuntu-latest
+    # The license gate is release-red on M1 by design (see #11), so the smoke
+    # job must still run to keep proving the artifact builds and launches.
+    needs: [rust]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux Tauri and smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            pkg-config \
+            libportaudio2 \
+            xvfb \
+            xauth \
+            procps
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+          cache-on-failure: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Install Tauri CLI
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-tauri@2.12.3
+
+      - name: Cache linuxdeploy and bundled TTS weights
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/tauri
+            src/verbix/voice/tts/supertonic-int8
+          key: appimage-assets-${{ hashFiles('scripts/fetch_voice_models.py') }}
+
+      - name: Cache the user-managed STT model for the smoke test
+        uses: actions/cache@v4
+        with:
+          path: ~/.verbix/voice/stt/models
+          key: stt-model-${{ hashFiles('scripts/fetch_voice_models.py') }}
+
+      - name: Fetch the STT model used by the smoke test
+        run: uv run scripts/fetch_voice_models.py
+
+      - name: Build the AppImage
+        run: bash scripts/build_appimage.sh
+
+      - name: Verify legal files inside the AppImage
+        run: |
+          artifact="src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage"
+          uv run python scripts/check_licenses.py --check --appimage "$artifact"
+
+      - name: Headless AppImage smoke test
+        run: |
+          artifact="src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage"
+          bash scripts/smoke_appimage.sh "$artifact" 120
+
+      - name: Record the artifact hash
+        run: |
+          artifact="src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage"
+          sha256sum "$artifact" | tee "$artifact.sha256"
+          stat -c '%s bytes' "$artifact"
+
+      - name: Upload the AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: verbix-appimage
+          path: |
+            src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage
+            src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage.sha256
+          if-no-files-found: error

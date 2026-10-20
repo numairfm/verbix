@@ -45,6 +45,8 @@ REQUIRED_CURATED_RECORDS = (
     "GTK 3",
     "AppIndicator",
     "PortAudio",
+    "PipeWire",
+    "num2words",
     "Supertonic 3",
     "Nemotron 3.5 ASR",
     "dynamically linked",

@@ -54,6 +54,9 @@ class CallbackAudioSink:
     ) -> None:
         assert channels == 1, "CallbackAudioSink is mono-only"
         try:
+            from verbix.voice.portaudio import ensure_loadable
+
+            ensure_loadable()
             import sounddevice as sd
         except (ImportError, OSError) as e:
             raise RuntimeError(f"{_PORTAUDIO_HINT} ({e})") from e

@@ -167,6 +167,24 @@ wait_for "IPC connection" "$TIMEOUT" grep -q 'connected' "$HOME/.verbix/logs/she
   fail "shell did not report an IPC connection"
 echo "    IPC connected"
 
+echo "==> bundled PortAudio check"
+appdir="$(tr '\0' '\n' <"/proc/$SHELL_PID/environ" 2>/dev/null |
+  sed -n 's/^APPDIR=//p' | head -n 1)"
+if [[ -z "$appdir" || ! -f "$appdir/usr/lib/libportaudio.so.2" ]]; then
+  fail "bundled PortAudio not found in the AppImage (APPDIR='$appdir')"
+fi
+portaudio_version="$(env -u LD_LIBRARY_PATH \
+  LD_LIBRARY_PATH="$appdir/usr/lib" \
+  PYTHONPATH="$appdir/usr/lib/Verbix/voice/site-packages" \
+  VERBIX_PORTAUDIO_LIB="$appdir/usr/lib/libportaudio.so.2" \
+  "$appdir/usr/lib/Verbix/voice/python/bin/python3" \
+  -c 'from verbix.voice.portaudio import ensure_loadable; ensure_loadable(); import sounddevice; print(sounddevice.get_portaudio_version())' 2>&1)" ||
+  fail "bundled PortAudio failed to load: $portaudio_version"
+if [[ "$portaudio_version" != *"PortAudio"* ]]; then
+  fail "unexpected PortAudio version output: $portaudio_version"
+fi
+echo "    $portaudio_version (bundled, no system package)"
+
 if grep -q 'tauri-plugin-single-instance' "$ROOT/src-tauri/Cargo.toml"; then
   echo "==> single-instance forwarding"
   before_count="$(live_pids verbix-shell | wc -l)"

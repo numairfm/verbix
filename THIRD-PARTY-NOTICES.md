@@ -102,16 +102,31 @@ libraries keep their upstream licences and are redistributed by the host
 distribution, not by Verbix. They are dynamically linked, never statically
 copied into Verbix code.
 
-- **PortAudio** (MIT) — audio output backend loaded through `sounddevice`
-  (<https://www.portaudio.com/>). The AppImage does not bundle it; Linux hosts
-  need `libportaudio2` (Debian/Ubuntu) or `portaudio` (Fedora/Arch). The CI
-  smoke job installs it. Text: `LICENSES/system/portaudio/LICENSE.txt`.
-
 ### Other bundled native libraries
 
 The wheel and Linux deployment step also bundle these. They are dynamically
 linked and retain their upstream licences; their licence texts are in
 `LICENSES/` where the licence requires one.
+
+- **PortAudio** (MIT) — audio input/output backend loaded through
+  `sounddevice` (<https://www.portaudio.com/>). The AppImage **bundles**
+  `libportaudio.so.2` (Fedora 44 `portaudio-19.7.0-3`, x86_64) under
+  `usr/lib/`, plus `libportaudio.so` for library lookup. The shell exports
+  `VERBIX_PORTAUDIO_LIB=<AppDir>/usr/lib/libportaudio.so.2` and the voice
+  service resolves PortAudio through that path before `sounddevice` imports,
+  so no system PortAudio package is required. Text:
+  `LICENSES/system/portaudio/LICENSE.txt`. Source:
+  <https://src.fedoraproject.org/rpms/portaudio>.
+- **PipeWire libs and JACK** — `libportaudio.so.2` links
+  `libasound.so.2`, `libpipewire-0.3.so.0`, and `libjack.so.0`; all three are
+  bundled under `usr/lib/`. The pipewire libraries are MIT AND
+  GPL-2.0-or-later AND BSD-2-Clause AND LGPL-2.0-or-later
+  (`pipewire-libs-1.6.9-1.fc44`), and the JACK audio connection kit library is
+  MIT (`pipewire-jack-audio-connection-kit-libs-1.6.9-1.fc44`). They are
+  unmodified and dynamically loaded; texts: `LICENSES/mit.md`,
+  `LICENSES/bsd-2-clause.md`, `LICENSES/lgpl-2.0-or-later.md`,
+  `LICENSES/system/pipewire/COPYING`, `LICENSES/system/pipewire/LICENSE`.
+  Source: <https://src.fedoraproject.org/rpms/pipewire>.
 
 - **ONNX Runtime** (MIT) — `libonnxruntime.so` from
   `sherpa-onnx` (<https://github.com/microsoft/onnxruntime>).
@@ -139,8 +154,10 @@ linked and retain their upstream licences; their licence texts are in
 The exact source for each bundled system library is the matching Fedora 44
 source RPM named above, available from
 <https://src.fedoraproject.org/rpms/webkit2gtk4.1>,
-<https://src.fedoraproject.org/rpms/gtk3>, and
-<https://src.fedoraproject.org/rpms/libappindicator>. The corresponding
+<https://src.fedoraproject.org/rpms/gtk3>,
+<https://src.fedoraproject.org/rpms/libappindicator>,
+<https://src.fedoraproject.org/rpms/portaudio>, and
+<https://src.fedoraproject.org/rpms/pipewire>. The corresponding
 upstream releases are WebKitGTK 2.54.1, GTK 3.24.52, and libappindicator
 12.10.1. For the CPython runtime, the source is CPython 3.13.16 plus the
 python-build-standalone build recipe. Verbix ships these libraries unmodified.
@@ -199,6 +216,16 @@ distributed.
 - **dbus-fast** (MIT) — pure-Python async DBus library used for Linux MPRIS2 media control (<https://github.com/Bluetooth-Devices/dbus-fast>).
 - **pulsectl** (MIT) — ctypes `libpulse.so.0` client used for Linux PipeWire/PulseAudio volume control (<https://github.com/mk-fg/python-pulse-control>).
 - **pycaw** (MIT) — Python Core Audio Windows Library used for Windows volume control (<https://github.com/AndreMiras/pycaw>).
+
+## Copyleft Python Dependencies
+
+- **num2words** (0.5.14, LGPL-2.1-or-later) — number-to-words conversion used
+  by the voice pipeline (<https://github.com/savoirfairelinux/num2words>). It
+  ships as **unmodified source inside the bundled `site-packages`**; Verbix
+  imports it dynamically as a separate Python module and does not link it into
+  any binary. The LGPL-2.1-or-later obligation is met by shipping that source,
+  this notice, and the license text at `LICENSES/lgpl-2.1-or-later.md`. A
+  recipient can replace the module in `site-packages` with another version.
 
 ## Generated Dependency Inventory
 

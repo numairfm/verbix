@@ -155,6 +155,79 @@ def dedupe_top_level_libraries(appdir: Path, actions: list[str]) -> None:
         actions.append(f"removed duplicate {path} (kept {original})")
 
 
+PORTAUDIO_LIBRARIES = (
+    "libportaudio.so.2",
+    "libasound.so.2",
+    "libpipewire-0.3.so.0",
+    "libjack.so.0",
+)
+PORTAUDIO_SOURCE_ROOTS = (
+    Path("/usr/lib64"),
+    Path("/usr/lib/x86_64-linux-gnu"),
+    Path("/usr/lib"),
+)
+PORTAUDIO_HOOK_MARKER = "# Verbix: bundled PortAudio runtime"
+
+
+def portaudio_hook_exports() -> tuple[str, ...]:
+    """The AppRun hook lines that point the shell and child at bundled PortAudio."""
+    return (
+        PORTAUDIO_HOOK_MARKER,
+        'export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"',
+        'export VERBIX_PORTAUDIO_LIB="$APPDIR/usr/lib/libportaudio.so.2"',
+    )
+
+
+def find_soname(root: Path, soname: str) -> Path | None:
+    """Find a real library file for ``soname`` under ``root``."""
+    for candidate in sorted(root.rglob(f"{soname}*")):
+        if candidate.is_file() and not candidate.is_symlink():
+            return candidate
+    return None
+
+
+def copy_portaudio_libraries(
+    roots: tuple[Path, ...], lib_dir: Path, actions: list[str]
+) -> list[Path]:
+    """Copy PortAudio and its runtime dependencies into the AppDir."""
+    copied: list[Path] = []
+    for soname in PORTAUDIO_LIBRARIES:
+        source = next(
+            (
+                found
+                for root in roots
+                if root.is_dir() and (found := find_soname(root, soname))
+            ),
+            None,
+        )
+        if source is None:
+            raise SystemExit(
+                f"cannot bundle {soname}: not found under "
+                + ", ".join(str(root) for root in roots)
+            )
+        destination = lib_dir / soname
+        shutil.copy2(source, destination)
+        actions.append(f"bundled {destination} (from {source})")
+        copied.append(destination)
+    symlink_relative(lib_dir / "libportaudio.so", "libportaudio.so.2", actions)
+    return copied
+
+
+def patch_appdir_environment(appdir: Path, actions: list[str]) -> None:
+    """Export the bundled PortAudio path before AppRun.wrapped starts."""
+    hook = appdir / "apprun-hooks" / "linuxdeploy-plugin-gtk.sh"
+    if not hook.is_file():
+        raise SystemExit(f"AppRun GTK hook not found: {hook}")
+    text = hook.read_text(encoding="utf-8")
+    if PORTAUDIO_HOOK_MARKER in text:
+        return
+    if not text.endswith("\n"):
+        text += "\n"
+    text += "\n".join(portaudio_hook_exports()) + "\n"
+    hook.write_text(text, encoding="utf-8")
+    actions.append(f"exported bundled PortAudio in {hook}")
+
+
 def find_appimage_plugin(explicit: Path | None) -> Path:
     candidates: list[Path] = []
     if explicit is not None:
@@ -216,6 +289,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--plugin", type=Path, default=None)
     parser.add_argument(
+        "--portaudio-dir",
+        type=Path,
+        default=None,
+        help="directory containing libportaudio.so.2 and its runtime libraries",
+    )
+    parser.add_argument(
         "--no-repack",
         action="store_true",
         help="trim only; leave the existing AppImage untouched",
@@ -233,6 +312,17 @@ def main(argv: list[str] | None = None) -> int:
     actions: list[str] = []
     trim_python(python_dir, actions)
     dedupe_top_level_libraries(appdir, actions)
+
+    portaudio_dir = args.portaudio_dir
+    if portaudio_dir is None and os.environ.get("VERBIX_PORTAUDIO_DIR"):
+        portaudio_dir = Path(os.environ["VERBIX_PORTAUDIO_DIR"])
+    portaudio_roots = (
+        (portaudio_dir,) if portaudio_dir is not None else PORTAUDIO_SOURCE_ROOTS
+    )
+    copy_portaudio_libraries(
+        portaudio_roots, appdir / "usr" / "lib", actions
+    )
+    patch_appdir_environment(appdir, actions)
     after = tree_size(appdir)
 
     for action in actions:

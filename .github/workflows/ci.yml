@@ -72,7 +72,8 @@ jobs:
         working-directory: src-tauri
         run: cargo check --all-targets
 
-      - name: Unit contracts
+      - name: Unit contracts (Linux only)
+        if: runner.os == 'Linux'
         working-directory: src-tauri
         run: cargo test --test unit_contracts
 
@@ -113,7 +114,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux Tauri and smoke dependencies
+      - name: Install Linux Tauri build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -125,10 +126,10 @@ jobs:
             patchelf \
             libxdo-dev \
             pkg-config \
-            libportaudio2 \
-            xvfb \
-            xauth \
-            procps
+            libportaudio2
+          # libportaudio2 is a build-time source only: trim_appimage.py copies
+          # libportaudio.so.2 and its dependencies into the AppImage. The smoke
+          # test below runs in a separate Fedora container with no PortAudio.
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -161,15 +162,6 @@ jobs:
             src/verbix/voice/tts/supertonic-int8
           key: appimage-assets-${{ hashFiles('scripts/fetch_voice_models.py') }}
 
-      - name: Cache the user-managed STT model for the smoke test
-        uses: actions/cache@v4
-        with:
-          path: ~/.verbix/voice/stt/models
-          key: stt-model-${{ hashFiles('scripts/fetch_voice_models.py') }}
-
-      - name: Fetch the STT model used by the smoke test
-        run: uv run scripts/fetch_voice_models.py
-
       - name: Build the AppImage
         run: bash scripts/build_appimage.sh
 
@@ -177,11 +169,6 @@ jobs:
         run: |
           artifact="src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage"
           uv run python scripts/check_licenses.py --check --appimage "$artifact"
-
-      - name: Headless AppImage smoke test
-        run: |
-          artifact="src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage"
-          bash scripts/smoke_appimage.sh "$artifact" 120
 
       - name: Record the artifact hash
         run: |
@@ -197,3 +184,58 @@ jobs:
             src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage
             src-tauri/target/release/bundle/appimage/Verbix_0.1.0_amd64.AppImage.sha256
           if-no-files-found: error
+
+  appimage-smoke:
+    name: appimage smoke (clean Fedora host)
+    runs-on: ubuntu-latest
+    needs: [appimage]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: verbix-appimage
+          path: artifact
+
+      - name: Cache the user-managed STT model
+        uses: actions/cache@v4
+        with:
+          path: ~/.verbix/voice/stt/models
+          key: stt-model-${{ hashFiles('scripts/fetch_voice_models.py') }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Fetch the STT model used by the smoke test
+        run: uv run scripts/fetch_voice_models.py
+
+      - name: Smoke test in a clean Fedora host (no system WebKit or PortAudio)
+        run: |
+          chmod +x artifact/Verbix_0.1.0_amd64.AppImage
+          docker run --rm \
+            -v "$PWD:/work:ro" \
+            -v "$PWD/artifact:/artifact:ro" \
+            -v "$HOME/.verbix/voice/stt/models:/root/.verbix/voice/stt/models:ro" \
+            fedora:44 sh -lc '
+              set -euo pipefail
+              dnf install -y --setopt=install_weak_deps=False \
+                xorg-x11-server-Xvfb xorg-x11-xauth procps-ng findutils \
+                fribidi harfbuzz fontconfig freetype mesa-libEGL mesa-libGL
+              if ldconfig -p | grep -qi portaudio; then
+                echo "system PortAudio unexpectedly present in the smoke host" >&2
+                exit 1
+              fi
+              if ldconfig -p | grep -qi webkit2gtk; then
+                echo "system WebKit unexpectedly present in the smoke host" >&2
+                exit 1
+              fi
+              bash /work/scripts/smoke_appimage.sh \
+                /artifact/Verbix_0.1.0_amd64.AppImage 120
+            '

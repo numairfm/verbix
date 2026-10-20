@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Headless AppImage smoke test. Run on a Linux host with xvfb-run and pgrep.
+# Headless AppImage smoke test. Run on a Linux host with xvfb-run, pgrep, and
+# Mesa GLES (libGLESv2.so.2, provided by mesa-libGLES on Fedora).
 #
 # Checks:
 #   1. --version prints the configured version and exits 0.

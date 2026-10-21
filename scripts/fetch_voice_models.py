@@ -37,6 +37,9 @@ BUNDLED_TTS_SPEC: dict = {
     "id": "supertonic-int8",
     "license": "BigScience OpenRAIL-M",
     "repo": "csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11",
+    "revision": "cca5a0e6c96e1d2c720986bf7e75fcc81dee3ae4",
+    "upstream_repo": "Supertone/supertonic-3",
+    "upstream_revision": "3cadd1ee6394adea1bd021217a0e650ede09a323",
     "files": {
         "duration_predictor.int8.onnx": (
             "c3eb91414d5ff8a7a239b7fe9e34e7e2bf8a8140d8375ffb14718b1c639325db",
@@ -70,6 +73,13 @@ BUNDLED_TTS_SPEC: dict = {
             "0dfe0d0ba84416fe3879d9a34f4909d8d0137c78d1e95834177b0414ac096fa2",
             1070,
         ),
+        "LICENSE-OpenRAIL-M": {
+            "sha256": "0d944a9110fed9a9602d60e0423a272903e7bd21ab060490774efc77c2275e9f",
+            "url": (
+                "https://huggingface.co/Supertone/supertonic-3/resolve/"
+                "3cadd1ee6394adea1bd021217a0e650ede09a323/LICENSE"
+            ),
+        },
     },
 }
 
@@ -114,6 +124,7 @@ def _ensure_spec_files(spec: dict, model_target_dir: Path) -> None:
     """Ensures all files in a model spec exist in model_target_dir and match SHA256."""
     model_id = spec["id"]
     repo = spec["repo"]
+    revision = spec.get("revision", "main")
     model_target_dir.mkdir(parents=True, exist_ok=True)
 
     for filename, file_spec in spec["files"].items():
@@ -128,7 +139,7 @@ def _ensure_spec_files(spec: dict, model_target_dir: Path) -> None:
             continue  # already verified and matches checksum
 
         if url is None:
-            url = f"https://huggingface.co/{repo}/resolve/main/{filename}"
+            url = f"https://huggingface.co/{repo}/resolve/{revision}/{filename}"
         sys.stdout.write(f"Fetching {model_id}/{filename} ...\n")
         sys.stdout.flush()
         _download_file(url, file_dest)

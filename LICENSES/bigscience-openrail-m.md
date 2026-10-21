@@ -2,13 +2,21 @@
 
 License copy shipped for:
 
-- **Supertonic 3** (Supertone) — TTS voice weights, packages
-  `supertonic_3_orig` / `supertonic_3_f16`
+- **Supertonic 3** (Supertone) — TTS model weights and fixed preset voice
+  styles `M1`–`M5` and `F1`–`F5`.
+- Upstream model: `Supertone/supertonic-3`, revision
+  `3cadd1ee6394adea1bd021217a0e650ede09a323`.
+- Bundled INT8 conversion:
+  `csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11`, revision
+  `cca5a0e6c96e1d2c720986bf7e75fcc81dee3ae4`.
 
-Source: <https://huggingface.co/Supertone/supertonic-3/blob/main/LICENSE>
-(read 2026-10-09). Component provenance: `THIRD-PARTY-NOTICES.md`.
+Source: <https://huggingface.co/Supertone/supertonic-3/blob/3cadd1ee6394adea1bd021217a0e650ede09a323/LICENSE>
+(read 2026-10-21). Component provenance: `THIRD-PARTY-NOTICES.md`.
 The use restrictions in this license (paragraph 5 / Attachment A) bind this
 product's distribution as enforceable terms — see `DISTRIBUTION-TERMS.md`.
+The preset styles are part of the Model package; no separate voice license is
+published. The accepted residual risk is recorded with the Verbix source in
+`docs/legal/2026-10-21-supertonic-3-preset-risk-acceptance.md`.
 
 ---
 

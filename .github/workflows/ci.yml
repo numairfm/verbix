@@ -117,9 +117,7 @@ jobs:
   appimage:
     name: appimage (Linux only)
     runs-on: ubuntu-latest
-    # The license gate is release-red on M1 by design (see #11), so the build
-    # and clean-host smoke still run to prove the artifact launches.
-    needs: [rust]
+    needs: [rust, license]
     steps:
       - uses: actions/checkout@v4
 

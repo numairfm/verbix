@@ -704,6 +704,7 @@ fn panel_markup_is_offline_and_uses_external_script_only() {
     assert!(!html.contains("https://"), "{html}");
     assert!(html.contains(">Hide<"), "{html}");
     assert!(html.contains(">Retry<"), "{html}");
+    assert!(html.contains("Voice output is synthetic."), "{html}");
 }
 
 #[test]

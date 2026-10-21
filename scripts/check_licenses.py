@@ -4,8 +4,9 @@
 The gate has two jobs:
 
 1. Scan every Cargo and Python dependency, including transitive dependencies.
-2. Prove that ``THIRD-PARTY-NOTICES.md``, ``DISTRIBUTION-TERMS.md`` and the
-   ``LICENSES/`` directory are complete and shipped in the AppImage.
+2. Prove that ``THIRD-PARTY-NOTICES.md``, ``DISTRIBUTION-TERMS.md``, and the
+   ``LICENSES/`` directory are complete and ship in the AppImage, and that the
+   dated Supertonic preset risk acceptance is valid in the source.
 
 ``--check`` is read-only. ``--write`` regenerates the generated dependency
 inventory section in ``THIRD-PARTY-NOTICES.md`` and changes nothing else.
@@ -14,6 +15,7 @@ inventory section in ``THIRD-PARTY-NOTICES.md`` and changes nothing else.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import re
@@ -23,11 +25,30 @@ import tempfile
 import tomllib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 BEGIN_MARKER = "<!-- BEGIN GENERATED DEPENDENCY INVENTORY -->"
 END_MARKER = "<!-- END GENERATED DEPENDENCY INVENTORY -->"
-M1_MARKER = "M1 voice-likeness clearance:"
+
+# Supertonic preset voices are treated as part of the OpenRAIL-M model, not as
+# separately licensed voice assets. The product owner accepts the unpublished
+# speaker-provenance risk in a dated record. This is deliberately not a
+# clearance: there is no speaker-consent evidence to clear.
+VOICE_RISK_MARKER = "Preset voice risk acceptance:"
+VOICE_RISK_RECORD = "docs/legal/2026-10-21-supertonic-3-preset-risk-acceptance.md"
+VOICE_RISK_STATUS = "Status: ACCEPTED RESIDUAL RISK"
+VOICE_RISK_REVISIONS = (
+    "cca5a0e6c96e1d2c720986bf7e75fcc81dee3ae4",
+    "3cadd1ee6394adea1bd021217a0e650ede09a323",
+)
+BUNDLED_TTS_LICENSE = (
+    "src/verbix/voice/tts/supertonic-int8/LICENSE-OpenRAIL-M"
+)
+BUNDLED_TTS_LICENSE_SHA256 = (
+    "0d944a9110fed9a9602d60e0423a272903e7bd21ab060490774efc77c2275e9f"
+)
+ATTACHMENT_A_START = "You agree not to use the Model or Derivatives of the Model:"
 
 # The closed-source commercial track needs a human statement for these. The
 # generated inventory proves the versions and licenses; this list proves that
@@ -48,6 +69,8 @@ REQUIRED_CURATED_RECORDS = (
     "PipeWire",
     "num2words",
     "Supertonic 3",
+    "Synthetic audio disclosure",
+    "Preset identifiers are labels",
     "Nemotron 3.5 ASR",
     "dynamically linked",
     "Source offer",
@@ -311,7 +334,7 @@ def license_tokens(dependencies: Iterable[Dependency]) -> set[str]:
 
 def required_license_files(dependencies: Iterable[Dependency]) -> list[str]:
     """Returns every license text path needed by the scanned tree."""
-    files: set[str] = set()
+    files: set[str] = set(ASSET_LICENSE_FILES.values())
     for token in license_tokens(dependencies):
         filename = LICENSE_FILES.get(token)
         if filename is not None:
@@ -331,10 +354,6 @@ def _license_file_errors(root: Path, dependencies: list[Dependency]) -> list[str
         path = root / "LICENSES" / filename
         if not path.is_file() or path.stat().st_size == 0:
             errors.append(f"missing or empty licence text: {path}")
-    for filename in ASSET_LICENSE_FILES.values():
-        path = root / "LICENSES" / filename
-        if not path.is_file() or path.stat().st_size == 0:
-            errors.append(f"missing or empty asset licence text: {path}")
     return errors
 
 
@@ -347,33 +366,155 @@ def _curated_record_errors(notices: str) -> list[str]:
     ]
 
 
-def _m1_errors(notices: str) -> list[str]:
-    visible = curated_text(notices)
-    lines = [
-        line for line in visible.splitlines() if M1_MARKER in line and "M1" in line
-    ]
-    if not lines:
-        return [
-            (
-                "THIRD-PARTY-NOTICES.md is missing the release clearance line: "
-                f"{M1_MARKER}"
-            )
-        ]
-    if len(lines) > 1:
-        return [f"THIRD-PARTY-NOTICES.md has more than one {M1_MARKER} line"]
-    line = lines[0]
-    if "CLEARED" in line:
-        return []
-    reason = (
-        "UNRESOLVED" if "UNRESOLVED" in line else "not marked CLEARED"
-    )
-    return [
-        (
-            f"M1 voice-likeness clearance is {reason}. Release is blocked until a "
-            "signed clearance record exists; replace the UNRESOLVED line with CLEARED "
-            "and the evidence reference."
+def _normalise_legal_text(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _distribution_terms_errors(root: Path) -> list[str]:
+    """Checks that the terms carry the pinned license's Attachment A verbatim."""
+    terms_path = root / "DISTRIBUTION-TERMS.md"
+    license_path = root / "LICENSES" / "bigscience-openrail-m.md"
+    bundled_path = root / BUNDLED_TTS_LICENSE
+    if not terms_path.is_file():
+        return ["DISTRIBUTION-TERMS.md is missing"]
+    if not license_path.is_file():
+        return ["LICENSES/bigscience-openrail-m.md is missing"]
+    if not bundled_path.is_file():
+        return [f"{BUNDLED_TTS_LICENSE} is missing"]
+    terms = terms_path.read_text(encoding="utf-8")
+    license_text = license_path.read_text(encoding="utf-8")
+    bundled_text = bundled_path.read_text(encoding="utf-8")
+    errors: list[str] = []
+    if _normalise_legal_text(bundled_text) not in _normalise_legal_text(license_text):
+        errors.append(
+            "LICENSES/bigscience-openrail-m.md does not reproduce the pinned "
+            "upstream license text"
         )
-    ]
+    if ATTACHMENT_A_START not in bundled_text:
+        errors.append(f"{BUNDLED_TTS_LICENSE} does not contain Attachment A")
+    elif ATTACHMENT_A_START not in terms:
+        errors.append(
+            "DISTRIBUTION-TERMS.md does not include the binding Attachment A text"
+        )
+    else:
+        license_attachment = _normalise_legal_text(
+            bundled_text[bundled_text.index(ATTACHMENT_A_START) :]
+        )
+        terms_attachment = _normalise_legal_text(
+            terms[terms.index(ATTACHMENT_A_START) :]
+        )
+        if license_attachment not in terms_attachment:
+            errors.append(
+                "DISTRIBUTION-TERMS.md does not reproduce Attachment A verbatim"
+            )
+    lowered = terms.lower()
+    if "synthetic" not in lowered or "machine generated" not in lowered:
+        errors.append(
+            "DISTRIBUTION-TERMS.md must disclose synthetic machine-generated audio"
+        )
+    if "not names" not in lowered or "real people" not in lowered:
+        errors.append(
+            "DISTRIBUTION-TERMS.md must state that preset identifiers are labels, "
+            "not names of real people"
+        )
+    return errors
+
+
+def _voice_risk_errors(root: Path, notices: str) -> list[str]:
+    errors: list[str] = []
+    visible = curated_text(notices)
+    lines = [line for line in visible.splitlines() if VOICE_RISK_MARKER in line]
+    if not lines:
+        errors.append(
+            "voice risk acceptance: THIRD-PARTY-NOTICES.md is missing "
+            f"{VOICE_RISK_MARKER}"
+        )
+    elif len(lines) > 1:
+        errors.append(
+            "voice risk acceptance: THIRD-PARTY-NOTICES.md has more than one "
+            f"{VOICE_RISK_MARKER} line"
+        )
+    else:
+        line = lines[0]
+        if "**ACCEPTED**" not in line:
+            errors.append(
+                "voice risk acceptance: THIRD-PARTY-NOTICES.md does not mark the "
+                "risk accepted"
+            )
+        if VOICE_RISK_RECORD not in line:
+            errors.append(
+                "voice risk acceptance: THIRD-PARTY-NOTICES.md does not name the "
+                f"dated record {VOICE_RISK_RECORD}"
+            )
+
+    record_path = root / VOICE_RISK_RECORD
+    if not record_path.is_file() or record_path.stat().st_size == 0:
+        errors.append(f"voice risk acceptance: missing dated record {record_path}")
+    else:
+        record = record_path.read_text(encoding="utf-8")
+        if VOICE_RISK_STATUS not in record:
+            errors.append(
+                "voice risk acceptance: record Status must be "
+                f"{VOICE_RISK_STATUS!r}"
+            )
+        date_line = re.search(
+            r"^Date: (\d{4}-\d{2}-\d{2})$", record, re.MULTILINE
+        )
+        if date_line is None:
+            errors.append(
+                "voice risk acceptance: record Date must be an ISO date "
+                "(YYYY-MM-DD)"
+            )
+        else:
+            try:
+                accepted_date = date.fromisoformat(date_line.group(1))
+            except ValueError:
+                errors.append(
+                    "voice risk acceptance: record Date is not a real calendar date"
+                )
+            else:
+                if accepted_date > datetime.now(tz=UTC).astimezone().date():
+                    errors.append(
+                        "voice risk acceptance: record Date cannot be in the future"
+                    )
+        accepted = re.search(r"^Accepted by: (.+)$", record, re.MULTILINE)
+        if accepted is None or not accepted.group(1).strip():
+            errors.append("voice risk acceptance: record must record Accepted by")
+        if "OpenRAIL-M" not in record:
+            errors.append(
+                "voice risk acceptance: record must name the OpenRAIL-M grant"
+            )
+        if "not a legal clearance" not in record.lower():
+            errors.append(
+                "voice risk acceptance: record must say this is not a legal "
+                "clearance"
+            )
+        if "M1" not in record or "F5" not in record:
+            errors.append(
+                "voice risk acceptance: record must cover the preset families "
+                "M1-M5 and F1-F5"
+            )
+        for revision in VOICE_RISK_REVISIONS:
+            if revision not in record:
+                errors.append(
+                    "voice risk acceptance: record must pin revision "
+                    f"{revision}"
+                )
+
+    bundled_license = root / BUNDLED_TTS_LICENSE
+    if not bundled_license.is_file() or bundled_license.stat().st_size == 0:
+        errors.append(
+            "voice risk acceptance: missing bundled TTS license text "
+            f"{BUNDLED_TTS_LICENSE}"
+        )
+    else:
+        digest = hashlib.sha256(bundled_license.read_bytes()).hexdigest()
+        if digest != BUNDLED_TTS_LICENSE_SHA256:
+            errors.append(
+                "voice risk acceptance: bundled TTS license text "
+                f"{BUNDLED_TTS_LICENSE} does not match the pinned license"
+            )
+    return errors
 
 
 def evaluate(
@@ -386,7 +527,8 @@ def evaluate(
     errors.extend(_license_expression_errors(dependencies))
     errors.extend(_inventory_errors(notices_text, dependencies))
     errors.extend(_curated_record_errors(notices_text))
-    errors.extend(_m1_errors(notices_text))
+    errors.extend(_voice_risk_errors(root, notices_text))
+    errors.extend(_distribution_terms_errors(root))
     errors.extend(_license_file_errors(root, dependencies))
     return errors
 
@@ -640,7 +782,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "with --appimage, verify only the files inside the artifact; skip "
-            "the dependency and release gate (which stays red on M1)"
+            "the dependency and voice-risk gate"
         ),
     )
     parser.add_argument("--cargo", default="cargo", help="cargo executable")
@@ -666,10 +808,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"license gate FAILED with {len(errors)} error(s):", file=sys.stderr)
         for error in errors:
             print(f"  - {error}", file=sys.stderr)
-        if any("M1 voice-likeness clearance" in error for error in errors):
+        if any("voice risk acceptance" in error for error in errors):
             print(
-                "M1 is a release clearance, not a dependency licence. The gate "
-                "stays red until the signed decision is committed.",
+                "The voice risk acceptance record is missing or invalid. The gate "
+                "stays red until the dated record and pinned license text are "
+                "committed.",
                 file=sys.stderr,
             )
         return 1

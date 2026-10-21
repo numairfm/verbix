@@ -45,7 +45,7 @@ environment wins over file values (`cli.py:29`).
 | `VERBIX_BASE_URL` | provider default | custom endpoint |
 | `VERBIX_MAX_TOKENS` | `2048` | per-turn completion cap |
 | `VERBIX_RETENTION_DAYS` | `14` | days to retain tool logs and screenshots |
-| `VERBIX_TTS_VOICE` | `M1` | Supertonic TTS voice (`M1`–`M5`, `F1`–`F5`) |
+| `VERBIX_TTS_VOICE` | `M1` | Supertonic preset ID (`M1`–`M5`, `F1`–`F5`); labels, not person names |
 | `VERBIX_TTS_SPEED` | `1.0` | Supertonic TTS speaking speed (`0.25`–`3.0`) |
 
 Agent tuning lives in `src/verbix/agent/config/`: `voice.yaml`
@@ -107,6 +107,7 @@ Provider selection: `--provider` flag > `VERBIX_PROVIDER` env > config `provider
 Audio (`sounddevice`) and on-device voice inference are included in the default environment (`uv sync`):
 - **STT (user-managed)**: Uses Nemotron 3.5 ASR 0.6B GGUF (via `transcribe.cpp`) or another user-selected GGUF model (`--stt-model`, `VERBIX_STT_MODEL`, or `stt_model` in `config.yaml`). Models live under `~/.verbix/voice/stt/models/<model-id>/` (`VERBIX_VOICE_DIR` or `./voice-runtime` overrides the voice root). Run `uv run scripts/fetch_voice_models.py` to download and verify the default Nemotron STT model.
 - **TTS (bundled application resource)**: Uses Supertonic 3 INT8 (via `sherpa-onnx`), packaged directly with the application under `verbix/voice/tts/supertonic-int8/` rather than stored as a user-managed model in `~/.verbix`. No first-run TTS download into `~/.verbix` is required.
+- **Synthetic voice and preset labels**: Verbix speaks with a synthetic, machine-generated voice. `M1`–`M5` and `F1`–`F5` are preset identifiers, not names or identities of real people. The model and preset styles ship under the BigScience OpenRAIL-M terms in `DISTRIBUTION-TERMS.md`; the accepted speaker-provenance risk is recorded in `docs/legal/2026-10-21-supertonic-3-preset-risk-acceptance.md`.
 - **Upgrades and legacy files**: Existing Nemotron STT files at `~/.verbix/voice/models/nemotron-gguf/` are automatically migrated to `~/.verbix/voice/stt/models/nemotron-gguf/` (without overwriting any existing destination file or redownloading). Legacy TTS files under `~/.verbix/voice/models/supertonic-int8/` and `provenance.json` under `~/.verbix/voice/models/` are intentionally left untouched during upgrades; once you verify voice mode works with the new setup, you can safely delete `~/.verbix/voice/models/`. Attribution: `THIRD-PARTY-NOTICES.md`.
 
 ## Architecture

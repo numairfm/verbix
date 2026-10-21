@@ -6,6 +6,8 @@ import pytest
 
 import scripts.check_licenses as gate
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def dependency(
     ecosystem: str,
@@ -24,14 +26,16 @@ def dependency(
 def notices_for(
     dependencies: list[gate.Dependency],
     *,
-    m1: str = "CLEARED",
+    risk: str = "ACCEPTED",
     extra_curated: str = "",
 ) -> str:
     records = "\n".join(f"- {record}: recorded" for record in gate.REQUIRED_CURATED_RECORDS)
     return (
         "# Third-Party Notices\n\n"
         f"{records}\n"
-        f"- M1 voice-likeness clearance: {m1}\n"
+        f"- Preset voice risk acceptance: **{risk}** — {gate.VOICE_RISK_RECORD}\n"
+        "- Synthetic audio disclosure: Verbix speaks with a synthetic voice.\n"
+        "- Preset identifiers are labels, not names or identities of real people.\n"
         f"{extra_curated}\n\n"
         f"{gate.BEGIN_MARKER}\n"
         f"{gate.render_inventory(dependencies)}"
@@ -39,16 +43,58 @@ def notices_for(
     )
 
 
+def write_voice_risk_record(
+    root: Path,
+    *,
+    status: str = "ACCEPTED RESIDUAL RISK",
+    date: str = "2026-10-21",
+    accepted_by: str = "numairfm (product owner)",
+    scope: str = "M1–M5 and F1–F5",
+    revisions: tuple[str, str] = gate.VOICE_RISK_REVISIONS,
+) -> Path:
+    quant_revision, upstream_revision = revisions
+    path = root / gate.VOICE_RISK_RECORD
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "# Supertonic 3 preset voice risk acceptance\n\n"
+        f"Status: {status}\n"
+        f"Date: {date}\n"
+        f"Accepted by: {accepted_by}\n\n"
+        f"Scope: Supertonic 3 preset voice styles {scope}.\n"
+        "Model license: BigScience OpenRAIL-M.\n\n"
+        "This is a product risk acceptance, not a legal clearance.\n\n"
+        "Pinned revisions:\n"
+        f"- Quantized package: {quant_revision}\n"
+        f"- Upstream model: {upstream_revision}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def write_license_files(root: Path, dependencies: list[gate.Dependency]) -> None:
     licenses = root / "LICENSES"
     licenses.mkdir(parents=True, exist_ok=True)
-    for filename in [
+    for filename in {
         *gate.required_license_files(dependencies),
         *gate.ASSET_LICENSE_FILES.values(),
-    ]:
+    }:
         path = licenses / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"test text for {filename}\n", encoding="utf-8")
+
+    (licenses / "bigscience-openrail-m.md").write_text(
+        (REPO_ROOT / "LICENSES" / "bigscience-openrail-m.md").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
+    (root / "DISTRIBUTION-TERMS.md").write_text(
+        (REPO_ROOT / "DISTRIBUTION-TERMS.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    bundled = root / gate.BUNDLED_TTS_LICENSE
+    bundled.parent.mkdir(parents=True, exist_ok=True)
+    bundled.write_bytes((REPO_ROOT / gate.BUNDLED_TTS_LICENSE).read_bytes())
 
 
 def clean_fixture(tmp_path: Path) -> tuple[list[gate.Dependency], str]:
@@ -57,6 +103,7 @@ def clean_fixture(tmp_path: Path) -> tuple[list[gate.Dependency], str]:
         dependency("python", "jinja2", "3.1.6", "BSD-3-Clause"),
     ]
     write_license_files(tmp_path, dependencies)
+    write_voice_risk_record(tmp_path)
     return dependencies, notices_for(dependencies)
 
 
@@ -141,27 +188,149 @@ def test_clean_pass(tmp_path):
     assert errors == []
 
 
-def test_m1_unresolved_fails(tmp_path):
-    dependencies, _ = clean_fixture(tmp_path)
-    notices = notices_for(dependencies, m1="UNRESOLVED")
+def test_missing_voice_risk_record_fails(tmp_path):
+    dependencies, notices = clean_fixture(tmp_path)
+    (tmp_path / gate.VOICE_RISK_RECORD).unlink()
 
     errors = gate.evaluate(tmp_path, dependencies, notices)
 
-    assert any("M1 voice-likeness clearance" in error for error in errors)
-    assert any("UNRESOLVED" in error for error in errors)
+    assert any("voice risk acceptance" in error for error in errors)
 
 
-def test_missing_m1_clearance_line_fails(tmp_path):
+def test_voice_risk_record_must_be_accepted_residual_risk(tmp_path):
     dependencies, notices = clean_fixture(tmp_path)
-    notices = "\n".join(
-        line
-        for line in notices.splitlines()
-        if "M1 voice-likeness clearance" not in line
+    write_voice_risk_record(tmp_path, status="CLEARED")
+
+    errors = gate.evaluate(tmp_path, dependencies, notices)
+
+    assert any("voice risk acceptance" in error for error in errors)
+
+
+def test_voice_risk_record_must_be_dated(tmp_path):
+    dependencies, notices = clean_fixture(tmp_path)
+    write_voice_risk_record(tmp_path, date="not-a-date")
+
+    errors = gate.evaluate(tmp_path, dependencies, notices)
+
+    assert any("voice risk acceptance" in error and "Date" in error for error in errors)
+
+
+def test_voice_risk_record_date_cannot_be_in_the_future(tmp_path):
+    dependencies, notices = clean_fixture(tmp_path)
+    write_voice_risk_record(tmp_path, date="2999-01-01")
+
+    errors = gate.evaluate(tmp_path, dependencies, notices)
+
+    assert any(
+        "voice risk acceptance" in error and "future" in error for error in errors
+    )
+
+
+def test_voice_risk_record_must_be_signed(tmp_path):
+    dependencies, notices = clean_fixture(tmp_path)
+    write_voice_risk_record(tmp_path, accepted_by="")
+
+    errors = gate.evaluate(tmp_path, dependencies, notices)
+
+    assert any("voice risk acceptance" in error and "Accepted by" in error for error in errors)
+
+
+def test_voice_risk_record_must_cover_all_presets(tmp_path):
+    dependencies, notices = clean_fixture(tmp_path)
+    write_voice_risk_record(tmp_path, scope="M1–M5")
+
+    errors = gate.evaluate(tmp_path, dependencies, notices)
+
+    assert any("voice risk acceptance" in error and "preset" in error for error in errors)
+
+
+def test_voice_risk_record_must_pin_both_revisions(tmp_path):
+    dependencies, notices = clean_fixture(tmp_path)
+    write_voice_risk_record(
+        tmp_path,
+        revisions=(gate.VOICE_RISK_REVISIONS[0], "0" * 40),
     )
 
     errors = gate.evaluate(tmp_path, dependencies, notices)
 
-    assert any("M1 voice-likeness clearance" in error for error in errors)
+    assert any("voice risk acceptance" in error and "revision" in error for error in errors)
+
+
+def test_notices_must_reference_the_voice_risk_record(tmp_path):
+    dependencies, notices = clean_fixture(tmp_path)
+    notices = notices.replace(gate.VOICE_RISK_RECORD, "docs/legal/other.md")
+
+    errors = gate.evaluate(tmp_path, dependencies, notices)
+
+    assert any("voice risk acceptance" in error for error in errors)
+
+
+def test_notices_must_mark_the_voice_risk_accepted(tmp_path):
+    dependencies, _ = clean_fixture(tmp_path)
+    notices = notices_for(dependencies, risk="UNRESOLVED")
+
+    errors = gate.evaluate(tmp_path, dependencies, notices)
+
+    assert any("voice risk acceptance" in error for error in errors)
+
+
+def test_distribution_terms_must_reproduce_attachment_a(tmp_path):
+    dependencies, notices = clean_fixture(tmp_path)
+    terms_path = tmp_path / "DISTRIBUTION-TERMS.md"
+    terms = terms_path.read_text(encoding="utf-8")
+    terms_path.write_text(
+        terms.replace(
+            "To provide medical advice and medical results interpretation;",
+            "removed;",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = gate.evaluate(tmp_path, dependencies, notices)
+
+    assert any("DISTRIBUTION-TERMS.md" in error and "Attachment A" in error for error in errors)
+
+
+def test_license_copy_must_reproduce_the_pinned_upstream_text(tmp_path):
+    dependencies, notices = clean_fixture(tmp_path)
+    path = tmp_path / "LICENSES" / "bigscience-openrail-m.md"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "medical results interpretation", "removed", 1
+        ),
+        encoding="utf-8",
+    )
+
+    errors = gate.evaluate(tmp_path, dependencies, notices)
+
+    assert any(
+        "LICENSES/bigscience-openrail-m.md" in error
+        and "pinned upstream license text" in error
+        for error in errors
+    )
+
+
+def test_bundled_tts_license_text_must_ship(tmp_path):
+    dependencies, notices = clean_fixture(tmp_path)
+    (tmp_path / gate.BUNDLED_TTS_LICENSE).unlink()
+
+    errors = gate.evaluate(tmp_path, dependencies, notices)
+
+    assert any(gate.BUNDLED_TTS_LICENSE in error for error in errors)
+
+
+def test_bundled_tts_license_text_must_match_the_pinned_license(tmp_path):
+    dependencies, notices = clean_fixture(tmp_path)
+    (tmp_path / gate.BUNDLED_TTS_LICENSE).write_text(
+        "tampered license text\n", encoding="utf-8"
+    )
+
+    errors = gate.evaluate(tmp_path, dependencies, notices)
+
+    assert any(
+        gate.BUNDLED_TTS_LICENSE in error and "does not match" in error
+        for error in errors
+    )
 
 
 def test_missing_curated_record_fails(tmp_path):
@@ -326,7 +495,10 @@ def test_artifact_only_skips_the_release_gate(tmp_path, monkeypatch):
     errors = gate.run_gate(tmp_path, appimage=appimage, artifact_only=True)
 
     assert errors == []
-    assert seen == {"extracted": tmp_path, "expected": []}
+    assert seen == {
+        "extracted": tmp_path,
+        "expected": sorted(gate.ASSET_LICENSE_FILES.values()),
+    }
 
 
 def test_artifact_only_requires_an_appimage(tmp_path):

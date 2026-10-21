@@ -16,6 +16,7 @@ REQUIRED_TTS_FILES = (
     "unicode_indexer.bin",
     "voice.bin",
     "LICENSE",
+    "LICENSE-OpenRAIL-M",
 )
 
 

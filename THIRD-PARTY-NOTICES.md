@@ -18,15 +18,11 @@ below record the obligations that need a human-readable explanation.
   runtime and the Tauri CLI's Linux deployment output.
 - **tauri-build** (2.7.3, MIT OR Apache-2.0) — build-time code generator for
   Tauri (<https://github.com/tauri-apps/tauri>). Build tool only; not shipped.
-- **tauri-plugin-single-instance** (MIT OR Apache-2.0) — records the v1
+- **tauri-plugin-single-instance** (2.5.4, MIT OR Apache-2.0) — v1
   single-instance and argument-forwarding plugin
-  (<https://github.com/tauri-apps/plugins-workspace>). It is not a Cargo
-  dependency at this commit; the plugin lands with the single-instance slice.
-  The smoke test reports forwarding as deferred until the plugin is present.
-- **tauri-plugin-global-shortcut** (MIT OR Apache-2.0) — records the v1 global
-  shortcut plugin (<https://github.com/tauri-apps/plugins-workspace>). It is
-  not a Cargo dependency at this commit; the plugin lands with the shortcut
-  slice.
+  (<https://github.com/tauri-apps/plugins-workspace>).
+- **tauri-plugin-global-shortcut** (2.4.1, MIT OR Apache-2.0) — v1 global
+  shortcut plugin (<https://github.com/tauri-apps/plugins-workspace>).
 - **serde** (1.0.229, MIT OR Apache-2.0) — serialization framework
   (<https://github.com/serde-rs/serde>).
 - **serde_json** (1.0.154, MIT OR Apache-2.0) — JSON support for the shell and
@@ -182,17 +178,31 @@ distributed.
 
 - **Supertonic 3** (BigScience OpenRAIL-M) — on-device flow-matching multilingual
   TTS by Supertone Inc. (<https://huggingface.co/Supertone/supertonic-3>).
-  - Pinned checkpoint: `csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11` (INT8 dynamic quantization),
-    bundled as a fixed application resource under `verbix/voice/tts/supertonic-int8/`.
-  - Use-based restrictions of the OpenRAIL-M license apply to downstream use and distribution
-    (see `LICENSES/bigscience-openrail-m.md`, `src/verbix/voice/tts/supertonic-int8/LICENSE`, and `DISTRIBUTION-TERMS.md`).
-  - Voice preset: `M1` is the default preset and remains provisional pending
-    voice-likeness clearance for commercial release; personality rights are
-    tracked separately.
-- M1 voice-likeness clearance: **UNRESOLVED** — no signed voice-likeness
-  clearance exists in this repository as of 2026-10-20. The gate fails while
-  this line says UNRESOLVED. Replace it with `CLEARED` and the signed decision
-  reference only when that evidence is committed.
+  - Upstream model: `Supertone/supertonic-3` at revision
+    `3cadd1ee6394adea1bd021217a0e650ede09a323`, including the fixed preset
+    voice styles `M1`–`M5` and `F1`–`F5`.
+  - Pinned checkpoint: `csukuangfj2/sherpa-onnx-supertonic-3-tts-int8-2026-05-11`
+    at revision `cca5a0e6c96e1d2c720986bf7e75fcc81dee3ae4` (INT8 dynamic
+    quantization), bundled as a fixed application resource under
+    `verbix/voice/tts/supertonic-int8/`. Verbix v1 ships the `M1` style as
+    `voice.bin`.
+  - License text: `LICENSES/bigscience-openrail-m.md` and
+    `src/verbix/voice/tts/supertonic-int8/LICENSE-OpenRAIL-M` (the upstream
+    license at the pinned revision). The bundled
+    `src/verbix/voice/tts/supertonic-int8/LICENSE` is the MIT license for the
+    INT8 conversion package, not the model license.
+  - Use-based restrictions of the OpenRAIL-M license apply to downstream use
+    and distribution; Attachment A is reproduced in `DISTRIBUTION-TERMS.md`.
+  - Preset voice risk acceptance: **ACCEPTED** — internal source record `docs/legal/2026-10-21-supertonic-3-preset-risk-acceptance.md`. The presets
+    are treated as part of the Model under the same OpenRAIL-M grant; no
+    separate voice license or speaker-consent record is published. This is a
+    known, accepted residual risk, not a legal clearance.
+  - Preset identifiers are labels: `M1`–`M5` and `F1`–`F5` are not names,
+    identities, or portrayals of real people, and Verbix does not present them
+    as real people.
+  - Synthetic audio disclosure: Verbix speaks with a synthetic, machine-generated
+    voice. The panel and `DISTRIBUTION-TERMS.md` disclose this; recipients of
+    generated audio must disclose it too.
 
 ## STT Speech Recognition (User-Managed Models)
 

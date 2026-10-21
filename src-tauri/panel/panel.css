@@ -272,6 +272,12 @@ button:focus-visible {
   margin-top: 0.25rem;
 }
 
+.synthetic-disclosure {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-top: 0.35rem;
+}
+
 .service-error {
   display: flex;
   align-items: center;

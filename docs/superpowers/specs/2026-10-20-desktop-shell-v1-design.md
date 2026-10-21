@@ -530,7 +530,8 @@ Platform-specific code lives behind `platform.rs` and `autostart.rs`. No `target
   - `serde`, `serde_json`, `tokio`, `libc`: permissive; record.
   - Bundled CPython and its runtime libraries: PSF and permissive; record.
   - WebKitGTK, GTK, and AppIndicator libraries: verify dynamic-link and notice obligations for the AppImage. If unclear, mark `UNRESOLVED` and block release; do not assume allowed.
-  - Existing voice assets stay recorded: Supertonic 3 TTS (BigScience OpenRAIL-M, `DISTRIBUTION-TERMS.md`, `LICENSES/`) and Nemotron 3.5 ASR (OpenMDW-1.1). The M1 voice preset's voice-likeness clearance must close before release; if not, mark `UNRESOLVED` and block release.
+  - Existing voice assets stay recorded: Supertonic 3 TTS (BigScience OpenRAIL-M, `DISTRIBUTION-TERMS.md`, `LICENSES/`) and Nemotron 3.5 ASR (OpenMDW-1.1). The preset voice styles are treated as part of the Model under the same OpenRAIL-M grant; the dated record `docs/legal/2026-10-21-supertonic-3-preset-risk-acceptance.md` accepts the unpublished speaker-provenance risk. This is not a clearance. The gate reads the record and stays red if it is missing, unresolved, or inconsistent.
+  - The product and terms disclose synthetic machine-generated audio, and preset identifiers are presented only as labels, never as real people.
   - No new third-party model, voice, font, icon, or audio asset. Tray and panel icons are original work.
   - `THIRD-PARTY-NOTICES.md`, `DISTRIBUTION-TERMS.md`, and `LICENSES/` ship inside the AppImage resources.
 
@@ -651,4 +652,4 @@ Acceptance: full v1 checklist below.
 - Quit stops the child and leaves no orphan. A second launch is forwarded to the running shell.
 - macOS and Windows compile in CI; only the Linux AppImage ships.
 - Python tests and `ruff check` stay green.
-- License review is complete, with `THIRD-PARTY-NOTICES.md`, `DISTRIBUTION-TERMS.md`, and `LICENSES/` shipped, no `UNRESOLVED` dependency, and the M1 voice-likeness clearance closed.
+- License review is complete, with `THIRD-PARTY-NOTICES.md`, `DISTRIBUTION-TERMS.md`, and `LICENSES/` shipped, no `UNRESOLVED` dependency, and the dated Supertonic preset risk acceptance valid. The app and terms disclose synthetic audio, and preset identifiers are not presented as real people.

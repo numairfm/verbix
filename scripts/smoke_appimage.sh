@@ -46,6 +46,12 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/verbix-smoke.XXXXXX")"
 REAL_HOME="$HOME"
 SMOKE_HOME="$WORK/home"
 mkdir -p "$SMOKE_HOME/.verbix/logs"
+# The setup is complete for the service checks: the marker, a placeholder key,
+# and the model path. The placeholder is never sent to a provider.
+printf '{"setup_complete": true}\n' >"$SMOKE_HOME/.verbix/shell.json"
+printf '{"openrouter":{"type":"api","key":"sk-smoke-placeholder"}}\n' \
+  >"$SMOKE_HOME/.verbix/auth.json"
+chmod 600 "$SMOKE_HOME/.verbix/shell.json" "$SMOKE_HOME/.verbix/auth.json"
 export HOME="$SMOKE_HOME"
 # Headless WebKit needs software rendering; compositing can hang panel creation
 # on distributions whose WebKit build differs from the one used to build the
@@ -156,6 +162,40 @@ if [[ "$version_output" != "Verbix $VERSION" ]]; then
   fail "--version printed '$version_output', expected 'Verbix $VERSION'"
 fi
 echo "    $version_output"
+
+echo "==> fresh home opens the setup and starts no service"
+FRESH_HOME="$WORK/fresh-home"
+mkdir -p "$FRESH_HOME"
+HOME="$FRESH_HOME" APPIMAGE_EXTRACT_AND_RUN=1 setsid xvfb-run -a "$APP" --show \
+  >"$WORK/fresh.log" 2>&1 &
+FRESH_RUNNER=$!
+if ! wait_for "fresh-home shell" "$TIMEOUT" shell_running; then
+  fail "the shell did not start with a fresh home"
+fi
+sleep 5
+if [[ -n "$(live_matches 'verbix.cli --serve --voice')" ]]; then
+  fail "the voice service started with an incomplete setup"
+fi
+if ! grep -q 'setup required' "$FRESH_HOME/.verbix/logs/shell.log" 2>/dev/null; then
+  cat "$FRESH_HOME/.verbix/logs/shell.log" >&2 || true
+  fail "the fresh home did not report an incomplete setup"
+fi
+for pid in $(live_pids verbix-shell); do
+  kill -TERM "$pid" 2>/dev/null || true
+done
+for _ in $(seq 1 40); do
+  if [[ -z "$(live_pids verbix-shell)" ]]; then
+    break
+  fi
+  sleep 0.25
+done
+for pid in $(live_pids verbix-shell); do
+  kill -KILL "$pid" 2>/dev/null || true
+done
+if [[ -n "$FRESH_RUNNER" ]] && kill -0 "$FRESH_RUNNER" 2>/dev/null; then
+  kill -TERM "$FRESH_RUNNER" 2>/dev/null || true
+fi
+echo "    fresh home: setup required, no voice service"
 
 echo "==> launching the GUI headless"
 APPIMAGE_EXTRACT_AND_RUN=1 setsid xvfb-run -a "$APP" --show >"$WORK/app.log" 2>&1 &

@@ -278,6 +278,33 @@ fn snapshot_serializes_the_full_contract_with_inert_setup_defaults() {
 }
 
 #[test]
+fn the_setup_snapshot_has_the_documented_fields_and_never_a_key() {
+    let value = serde_json::to_value(connected_snapshot()).unwrap();
+    let setup = value["setup"].as_object().unwrap();
+    assert_eq!(setup.len(), 10, "{value}");
+
+    for key in [
+        "required",
+        "key_ready",
+        "key_editable",
+        "model_ready",
+        "model_path",
+        "model_downloadable",
+        "autostart",
+        "autostart_supported",
+        "download",
+        "error",
+    ] {
+        assert!(setup.contains_key(key), "missing {key}: {value}");
+    }
+
+    let text = value.to_string();
+    for secret in ["api_key", "provider_key", "sk-", "secret"] {
+        assert!(!text.contains(secret), "{text}");
+    }
+}
+
+#[test]
 fn tray_state_precedence_follows_the_contract() {
     let starting = Snapshot::new(Phase::Starting, Floor::Idle, None);
     assert_eq!(starting.tray_state(), TrayState::Idle);
@@ -625,6 +652,27 @@ fn panel_script_renders_with_text_content_only() {
 }
 
 #[test]
+fn panel_script_drives_the_setup_surface_and_forgets_the_key() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("panel/panel.js");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+
+    for command in [
+        "save_provider_key",
+        "start_model_download",
+        "set_autostart",
+        "finish_setup",
+    ] {
+        assert!(script.contains(command), "{command} missing: {script}");
+    }
+    assert!(
+        script.contains("elements.keyField.value = \"\""),
+        "the key field is not cleared after saving: {script}"
+    );
+    assert!(!script.contains("console.log"), "{script}");
+}
+
+#[test]
 fn panel_markup_is_offline_and_uses_external_script_only() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("panel/index.html");
     let html = fs::read_to_string(&path)
@@ -635,11 +683,26 @@ fn panel_markup_is_offline_and_uses_external_script_only() {
         "{html}"
     );
     assert!(!html.contains("<script>"), "{html}");
-    assert!(!html.contains("<input"), "{html}");
     assert!(!html.contains("http://"), "{html}");
     assert!(!html.contains("https://"), "{html}");
     assert!(html.contains(">Hide<"), "{html}");
     assert!(html.contains(">Retry<"), "{html}");
+}
+
+#[test]
+fn panel_markup_has_one_password_field_for_the_provider_key() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("panel/index.html");
+    let html = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+
+    assert_eq!(
+        html.matches(r#"type="password""#).count(),
+        1,
+        "the setup needs exactly one password field: {html}"
+    );
+    assert!(!html.contains(r#"type="text""#), "{html}");
+    assert!(html.contains(r#"id="finish-setup""#), "{html}");
+    assert!(html.contains(r#"id="autostart-choice""#), "{html}");
 }
 
 #[test]

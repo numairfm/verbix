@@ -1,18 +1,21 @@
 pub mod app_state;
 pub mod autostart;
 pub mod command;
+pub mod download;
 pub mod ipc;
 pub mod logging;
 pub mod panel;
 pub mod platform;
 pub mod provider;
 pub mod service;
+pub mod setup;
 pub mod state;
 pub mod tray;
 
 pub use app_state::ShellState;
 
 use command::{Forwarded, ParsedCommand, Startup};
+use state::Phase;
 
 pub fn run() {
     match command::parse(std::env::args().skip(1)) {
@@ -49,18 +52,35 @@ fn run_gui(startup: Startup) {
             let home = platform::home_dir();
             let resources = app.path().resource_dir()?;
 
-            app_state::manage(app, app_state::default_snapshot());
+            let detection = app_state::detect_setup(&home);
+            let plan = app_state::startup_plan(&detection, startup);
+            let autostart_enabled = autostart::status(&home) == autostart::Status::Enabled;
+            let mut snapshot = app_state::default_snapshot();
+            snapshot.setup = app_state::setup_fields(&detection, None, None);
+            snapshot.setup.autostart = autostart_enabled;
+            snapshot.setup.required = !detection.complete();
+            snapshot.phase = if plan.start_service {
+                Phase::Starting
+            } else {
+                Phase::SetupRequired
+            };
+
+            app_state::manage(
+                app,
+                snapshot,
+                app_state::SetupContext::new(home.clone(), resources.clone()),
+            );
             panel::create(app)?;
-
-            let config =
-                app_state::production_config(&home, &resources, startup == Startup::Toggle);
-            let log_path = config.log_path.clone();
-            let supervisor =
-                service::spawn_supervisor(config, app_state::observer(&handle, log_path));
-            app.manage(supervisor);
-
             tray::create(app, &home)?;
-            if startup == Startup::Show {
+
+            if plan.start_service {
+                app_state::start_service(&handle, plan.startup_toggle)?;
+                app_state::log_shell(&handle, "setup complete");
+            } else {
+                // An incomplete setup opens the panel, even for a hidden launch.
+                app_state::log_shell(&handle, "setup required");
+            }
+            if plan.show_panel {
                 panel::show(&handle);
             }
             Ok(())
@@ -69,7 +89,11 @@ fn run_gui(startup: Startup) {
             panel::get_state,
             panel::hide_panel,
             panel::toggle,
-            panel::restart_service
+            panel::restart_service,
+            panel::save_provider_key,
+            panel::start_model_download,
+            panel::set_autostart,
+            panel::finish_setup
         ])
         .run(tauri::generate_context!());
 

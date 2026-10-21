@@ -45,8 +45,9 @@ pub fn create(app: &App, home: &Path) -> tauri::Result<()> {
         login_state.checked,
         None::<&str>,
     )?;
+    let setup = MenuItem::with_id(app, "setup", "Setup…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &toggle, &restart, &login, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &toggle, &restart, &login, &setup, &quit])?;
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon("idle"))
@@ -69,11 +70,8 @@ pub fn create(app: &App, home: &Path) -> tauri::Result<()> {
                 }
                 refresh(app);
             }
-            "quit" => {
-                if let Some(supervisor) = app.try_state::<Supervisor>() {
-                    supervisor.command(Command::Quit);
-                }
-            }
+            "setup" => panel::show_setup(app),
+            "quit" => crate::app_state::quit(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -102,7 +100,7 @@ pub fn refresh(app: &AppHandle) {
     let Some(state) = app.try_state::<crate::ShellState>() else {
         return;
     };
-    let Ok(snapshot) = state.snapshot.lock().map(|guard| guard.clone()) else {
+    let Ok(mut snapshot) = state.snapshot.lock() else {
         return;
     };
 
@@ -110,6 +108,7 @@ pub fn refresh(app: &AppHandle) {
         let _ = tray.set_icon(Some(icon(snapshot.tray_icon())));
         let _ = tray.set_tooltip(Some(snapshot.tooltip()));
     }
+    let mut autostart_changed = false;
     if let Some(menu) = app.try_state::<TrayMenu>() {
         let disconnected = matches!(snapshot.phase, Phase::Restarting | Phase::Failed);
         let _ = menu.toggle.set_enabled(snapshot.phase == Phase::Connected);
@@ -118,6 +117,14 @@ pub fn refresh(app: &AppHandle) {
         let login_state = autostart::menu_state(autostart::status(&menu.home));
         let _ = menu.login.set_enabled(login_state.enabled);
         let _ = menu.login.set_checked(login_state.checked);
+        if snapshot.setup.autostart != login_state.checked {
+            snapshot.setup.autostart = login_state.checked;
+            autostart_changed = true;
+        }
+    }
+    drop(snapshot);
+    if autostart_changed {
+        crate::app_state::notify(app);
     }
 }
 

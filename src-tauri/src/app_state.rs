@@ -317,6 +317,18 @@ pub fn start_service(app: &AppHandle, startup_toggle: bool) -> Result<(), String
         return Err("Setup is not complete.".to_string());
     }
 
+    // The service is supervised once. A second request asks the running
+    // supervisor to restart instead of starting a second service.
+    if state
+        .supervisor
+        .lock()
+        .map(|slot| slot.is_some())
+        .unwrap_or(false)
+    {
+        send(app, Command::Restart);
+        return Ok(());
+    }
+
     let config = production_config(
         &state.setup.home,
         &state.setup.resources,

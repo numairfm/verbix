@@ -358,6 +358,13 @@ input[type="password"]:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.license-notice {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  margin: 0;
+}
+
 .step-progress {
   display: flex;
   align-items: center;

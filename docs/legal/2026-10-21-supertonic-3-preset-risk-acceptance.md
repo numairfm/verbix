@@ -73,11 +73,14 @@ voice-likeness right.
   prepend a spoken disclaimer to every answer; anyone who exports or
   redistributes generated audio must carry the disclosure required by
   Attachment A(e).
-- **Medical advice.** Verbix is a general assistant, so a user can ask health
-  questions. Attachment A(l) forbids using the Model to provide medical advice
-  or interpret medical results. `DISTRIBUTION-TERMS.md` passes that restriction
-  to users. This slice does not add a model-level medical guardrail; a health
-  feature needs a separate product and legal decision before it ships.
+- **Medical advice (terms-only, decided 2026-10-21).** Verbix is a general
+  assistant, so a user can ask health questions. Attachment A(l) forbids using
+  the Model to provide medical advice or interpret medical results. The TTS
+  model only vocalizes text; the assistant LLM generates the content. Verbix
+  keeps the restriction in `DISTRIBUTION-TERMS.md` and shows a short notice on
+  the first-run/voice-enable setup surface. No refusal behavior is added to the
+  prompts. Revisit if Verbix targets healthcare use or the license wording
+  changes.
 - **Impersonation.** Verbix ships fixed preset styles only. It has no voice
   cloning and accepts no user-supplied voice styles. The preset identifiers are
   labels, not people.
@@ -92,6 +95,8 @@ voice-likeness right.
 - Keep the upstream and quantized revisions pinned; do not fetch `main`.
 - Disclose that all speech is synthetic and machine generated, in the product
   and in the distribution terms.
+- Show a short Attachment A restrictions notice on the first-run/voice-enable
+  setup surface.
 - Present `M1`–`M5` and `F1`–`F5` only as preset identifiers. Do not present
   them as names, identities, or portrayals of real people.
 - Do not use the Model for medical advice or medical-results interpretation,

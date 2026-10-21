@@ -53,6 +53,9 @@ All speech produced by Verbix is synthetic and machine generated. You must
 expressly and intelligibly disclose that audio is machine generated whenever
 you distribute it, as required by Attachment A(e).
 
+Verbix shows a short notice of these restrictions on the first-run/voice-enable
+setup surface before voice is enabled.
+
 ## Use restrictions (license Attachment A, binding in full)
 
 You agree not to use the Model or Derivatives of the Model:

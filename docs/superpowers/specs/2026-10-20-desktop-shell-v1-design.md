@@ -532,6 +532,7 @@ Platform-specific code lives behind `platform.rs` and `autostart.rs`. No `target
   - WebKitGTK, GTK, and AppIndicator libraries: verify dynamic-link and notice obligations for the AppImage. If unclear, mark `UNRESOLVED` and block release; do not assume allowed.
   - Existing voice assets stay recorded: Supertonic 3 TTS (BigScience OpenRAIL-M, `DISTRIBUTION-TERMS.md`, `LICENSES/`) and Nemotron 3.5 ASR (OpenMDW-1.1). The preset voice styles are treated as part of the Model under the same OpenRAIL-M grant; the dated record `docs/legal/2026-10-21-supertonic-3-preset-risk-acceptance.md` accepts the unpublished speaker-provenance risk. This is not a clearance. The gate reads the record and stays red if it is missing, unresolved, or inconsistent.
   - The product and terms disclose synthetic machine-generated audio, and preset identifiers are presented only as labels, never as real people.
+  - The first-run setup shows a short Attachment A restrictions notice before voice is enabled. The TTS model only vocalizes text; the assistant LLM generates the content. No prompt-level refusal behavior is added for the general assistant.
   - No new third-party model, voice, font, icon, or audio asset. Tray and panel icons are original work.
   - `THIRD-PARTY-NOTICES.md`, `DISTRIBUTION-TERMS.md`, and `LICENSES/` ship inside the AppImage resources.
 

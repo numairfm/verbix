@@ -201,7 +201,8 @@ distributed.
     identities, or portrayals of real people, and Verbix does not present them
     as real people.
   - Synthetic audio disclosure: Verbix speaks with a synthetic, machine-generated
-    voice. The panel and `DISTRIBUTION-TERMS.md` disclose this; recipients of
+    voice. The panel and `DISTRIBUTION-TERMS.md` disclose this; the first-run
+    setup shows a short Attachment A restrictions notice. Recipients of
     generated audio must disclose it too.
 
 ## STT Speech Recognition (User-Managed Models)

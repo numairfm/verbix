@@ -55,11 +55,7 @@ pub fn create(app: &App, home: &Path) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => panel::show(app),
-            "toggle" => {
-                if let Some(supervisor) = app.try_state::<Supervisor>() {
-                    supervisor.command(Command::Toggle);
-                }
-            }
+            "toggle" => panel::request_toggle(app),
             "restart" => {
                 if let Some(supervisor) = app.try_state::<Supervisor>() {
                     supervisor.command(Command::Restart);

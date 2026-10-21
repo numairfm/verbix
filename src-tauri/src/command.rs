@@ -15,6 +15,14 @@ pub enum ParsedCommand {
     Invalid(String),
 }
 
+/// What an already-running shell should do with a forwarded launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Forwarded {
+    Show,
+    Nothing,
+    Toggle,
+}
+
 impl fmt::Display for ParsedCommand {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -42,6 +50,23 @@ where
         "--version" | "-V" => ParsedCommand::Version,
         "--help" | "-h" => ParsedCommand::Help,
         other => ParsedCommand::Invalid(format!("unknown argument: {other}")),
+    }
+}
+
+/// A launch forwarded by the single-instance plugin. Parsing version, help,
+/// and invalid arguments happens before Tauri starts, so they never reach
+/// this table.
+pub fn forward<I>(arguments: I) -> Forwarded
+where
+    I: IntoIterator<Item = String>,
+{
+    let arguments: Vec<String> = arguments.into_iter().collect();
+    match arguments.as_slice() {
+        [] => Forwarded::Show,
+        [argument] if argument == "--show" => Forwarded::Show,
+        [argument] if argument == "--hidden" => Forwarded::Nothing,
+        [argument] if argument == "--toggle" => Forwarded::Toggle,
+        _ => Forwarded::Nothing,
     }
 }
 

@@ -210,6 +210,7 @@ jobs:
               set -euo pipefail
               dnf install -y --setopt=install_weak_deps=False \
                 xorg-x11-server-Xvfb xorg-x11-xauth procps-ng findutils \
+                dbus-daemon \
                 fribidi harfbuzz fontconfig freetype mesa-libEGL mesa-libGL mesa-libGLES
               if ldconfig -p | grep -qi portaudio; then
                 echo "system PortAudio unexpectedly present in the smoke host" >&2

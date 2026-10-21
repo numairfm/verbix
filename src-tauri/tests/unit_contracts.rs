@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 use tempfile::tempdir;
 
-use verbix_shell::command::{parse, ParsedCommand, Startup};
+use verbix_shell::command::{forward, parse, Forwarded, ParsedCommand, Startup};
 use verbix_shell::ipc::{
     floor_from_event, panel_event_from_event, parse_line, request_line, Event, Floor, Incoming,
     PanelEvent,
@@ -53,6 +53,45 @@ fn command_rejects_unknown_and_repeated_arguments() {
         parse(["--show".to_string(), "--toggle".to_string()]),
         ParsedCommand::Invalid(_)
     ));
+}
+
+#[test]
+fn forwarded_arguments_follow_the_single_instance_table() {
+    assert_eq!(forward(Vec::<String>::new()), Forwarded::Show);
+    assert_eq!(forward(["--show".to_string()]), Forwarded::Show);
+    assert_eq!(forward(["--hidden".to_string()]), Forwarded::Nothing);
+    assert_eq!(forward(["--toggle".to_string()]), Forwarded::Toggle);
+}
+
+#[test]
+fn forwarded_startup_flags_are_not_handled_as_gui_commands() {
+    for argument in ["--version", "--help", "-V", "-h", "--nope"] {
+        assert_eq!(
+            forward([argument.to_string()]),
+            Forwarded::Nothing,
+            "{argument}"
+        );
+    }
+    assert_eq!(
+        forward(["--show".to_string(), "--toggle".to_string()]),
+        Forwarded::Nothing
+    );
+}
+
+#[test]
+fn the_single_instance_plugin_is_the_first_plugin_registered() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+    let source = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+
+    let first = source
+        .find(".plugin(")
+        .unwrap_or_else(|| panic!("no plugin registered in {}", path.display()));
+    let registration = &source[first..source[first..].find('\n').unwrap_or(0) + first];
+    assert!(
+        registration.contains("tauri_plugin_single_instance::init"),
+        "the first registered plugin is not the single-instance plugin: {registration}"
+    );
 }
 
 #[test]

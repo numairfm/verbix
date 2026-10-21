@@ -263,6 +263,7 @@ pub fn create(app: &App) -> tauri::Result<WebviewWindow> {
 }
 
 pub fn show(app: &AppHandle) {
+    crate::app_state::refresh_shortcut(app);
     if let Some(window) = app.get_webview_window(PANEL_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();

@@ -1,5 +1,5 @@
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 pub const ENTRY_FILE: &str = "verbix.desktop";
 
@@ -54,25 +54,11 @@ pub fn entry_path_with(home: &Path, xdg_config_home: Option<&Path>) -> PathBuf {
 /// otherwise the running executable. A mounted AppImage runtime (`.../.mount_*`)
 /// is never preferred over the resolved AppImage path.
 pub fn executable_path() -> PathBuf {
-    let appimage = std::env::var_os("APPIMAGE");
-    let current = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("verbix-shell"));
-    executable_path_with(appimage.as_deref().map(Path::new), current)
+    crate::platform::executable_path()
 }
 
 pub fn executable_path_with(appimage: Option<&Path>, current_exe: PathBuf) -> PathBuf {
-    match appimage {
-        Some(path) if !path.as_os_str().is_empty() && !is_mounted_runtime(path) => {
-            path.to_path_buf()
-        }
-        _ => current_exe,
-    }
-}
-
-fn is_mounted_runtime(path: &Path) -> bool {
-    path.components().any(|component| match component {
-        Component::Normal(name) => name.to_string_lossy().starts_with(".mount_"),
-        _ => false,
-    })
+    crate::platform::executable_path_with(appimage, current_exe)
 }
 
 /// Render the XDG desktop entry. Quotes the executable, escapes the characters

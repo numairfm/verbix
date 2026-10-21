@@ -171,6 +171,28 @@ pub fn default_snapshot() -> Snapshot {
     Snapshot::new(Phase::Starting, Floor::Idle, None)
 }
 
+/// Refresh the fallback command before the panel shows it, so a moved
+/// AppImage shows the current path.
+pub fn refresh_shortcut(app: &AppHandle) {
+    let Some(state) = app.try_state::<ShellState>() else {
+        return;
+    };
+    let active = state
+        .snapshot
+        .lock()
+        .map(|snapshot| snapshot.shortcut.accelerator.is_none())
+        .unwrap_or(false);
+    if !active {
+        return;
+    }
+    let command = crate::shortcut::fallback_command(&crate::platform::executable_path());
+    update(app, |snapshot| {
+        if snapshot.shortcut.fallback.as_deref() != Some(command.as_str()) {
+            snapshot.shortcut.fallback = Some(command);
+        }
+    });
+}
+
 pub fn manage(app: &tauri::App, snapshot: Snapshot, context: SetupContext) {
     let (changes, receiver) = mpsc::channel();
     let logs = crate::platform::logs_dir(&context.home);

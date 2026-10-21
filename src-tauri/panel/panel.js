@@ -28,6 +28,10 @@ const elements = {
   finishSetup: document.getElementById("finish-setup"),
   setupError: document.getElementById("setup-error"),
   shortcutHint: document.getElementById("shortcut-hint"),
+  copyCommand: document.getElementById("copy-command"),
+  copyStatus: document.getElementById("copy-status"),
+  setupShortcutHint: document.getElementById("setup-shortcut-hint"),
+  setupCopyCommand: document.getElementById("setup-copy-command"),
   serviceError: document.getElementById("service-error"),
   serviceErrorText: document.getElementById("service-error-text"),
   retryService: document.getElementById("retry-service"),
@@ -131,10 +135,19 @@ function render(snapshot) {
 
   if (snapshot.shortcut.accelerator) {
     elements.shortcutHint.textContent = `Shortcut: ${snapshot.shortcut.accelerator}`;
+    elements.copyCommand.hidden = true;
+    elements.setupShortcutHint.textContent = `Shortcut: ${snapshot.shortcut.accelerator}`;
+    elements.setupCopyCommand.hidden = true;
   } else if (snapshot.shortcut.fallback) {
     elements.shortcutHint.textContent = `Toggle command: ${snapshot.shortcut.fallback}`;
+    elements.copyCommand.hidden = false;
+    elements.setupShortcutHint.textContent = `Toggle command: ${snapshot.shortcut.fallback}`;
+    elements.setupCopyCommand.hidden = false;
   } else {
     elements.shortcutHint.textContent = "No global shortcut is available.";
+    elements.copyCommand.hidden = true;
+    elements.setupShortcutHint.textContent = "No global shortcut is available.";
+    elements.setupCopyCommand.hidden = true;
   }
 
   if (snapshot.error) {
@@ -204,6 +217,48 @@ elements.finishSetup.addEventListener("click", async () => {
   } catch (error) {
     showSetupError(error);
   }
+});
+
+function showCopyStatus(message) {
+  elements.copyStatus.textContent = message || "";
+  elements.copyStatus.hidden = !message;
+}
+
+function selectText(element) {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+// The clipboard API needs permission the webview may refuse. The command
+// stays selectable text, so it can always be copied by hand.
+function copyCommand(text, source) {
+  const clipboard = navigator.clipboard;
+  if (!clipboard || typeof clipboard.writeText !== "function") {
+    selectText(source);
+    showCopyStatus("Clipboard access is not available. Select the command and copy it.");
+    return;
+  }
+  clipboard.writeText(text).then(
+    () => showCopyStatus("Command copied."),
+    () => {
+      selectText(source);
+      showCopyStatus("Clipboard access was denied. Select the command and copy it.");
+    },
+  );
+}
+
+elements.copyCommand.addEventListener("click", () => {
+  copyCommand(elements.shortcutHint.textContent.replace(/^Toggle command:\s*/, ""), elements.shortcutHint);
+});
+
+elements.setupCopyCommand.addEventListener("click", () => {
+  copyCommand(
+    elements.setupShortcutHint.textContent.replace(/^Toggle command:\s*/, ""),
+    elements.setupShortcutHint,
+  );
 });
 
 document.addEventListener("keydown", (event) => {

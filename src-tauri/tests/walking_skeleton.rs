@@ -1,6 +1,7 @@
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
@@ -57,6 +58,7 @@ fn test_config(dir: &Path) -> ServiceConfig {
             max_restarts: 5,
         },
         shell_log: None,
+        setup_gate: None,
     }
 }
 
@@ -233,6 +235,39 @@ fn panel_events_reach_the_observer_and_tasks_become_terminal() {
     let pid = read_pid(&pid_file);
     stop(supervisor);
     assert!(!process_exists(pid), "child {pid} survived quit");
+}
+
+#[test]
+fn an_incomplete_setup_keeps_the_service_away_until_it_is_repaired() {
+    let dir = tempdir().unwrap();
+    let mut config = test_config(dir.path());
+    let pid_file = dir.path().join("service.pid");
+    let ready = Arc::new(AtomicBool::new(false));
+    let gate = Arc::clone(&ready);
+    config.setup_gate = Some(Arc::new(move || gate.load(Ordering::SeqCst)));
+    let (tx, rx) = mpsc::channel();
+    let supervisor = spawn_supervisor(config, Arc::new(ChannelObserver(tx)));
+    let mut seen = Vec::new();
+
+    pump_until(&rx, &mut seen, Duration::from_secs(5), |seen| {
+        seen.contains(&Observation::Phase(Phase::SetupRequired))
+    });
+    assert!(
+        !pid_file.exists(),
+        "the voice service started with an incomplete setup"
+    );
+
+    ready.store(true, Ordering::SeqCst);
+    supervisor.command(Command::Restart);
+    pump_until(&rx, &mut seen, Duration::from_secs(10), |seen| {
+        connected_count(seen) == 1
+    });
+    assert!(
+        pid_file.exists(),
+        "the repaired setup did not start the service"
+    );
+
+    stop(supervisor);
 }
 
 #[test]

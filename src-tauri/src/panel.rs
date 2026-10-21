@@ -158,9 +158,15 @@ pub fn finish_setup(app: AppHandle) -> Result<Snapshot, String> {
         .lock()
         .map(|slot| slot.is_some())
         .unwrap_or(false);
+    let phase = app_state::snapshot_of(&app).phase;
     refresh_setup(&app, false);
     if !running {
         app_state::start_service(&app, false)?;
+    } else if phase == crate::state::Phase::SetupRequired {
+        // The supervisor is waiting for a repaired setup: let it try again.
+        if let Some(supervisor) = app.try_state::<Supervisor>() {
+            supervisor.command(Command::Restart);
+        }
     }
     Ok(app_state::snapshot_of(&app))
 }

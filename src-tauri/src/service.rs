@@ -68,7 +68,7 @@ impl BackoffPolicy {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ServiceConfig {
     pub program: PathBuf,
     pub args: Vec<String>,
@@ -83,6 +83,9 @@ pub struct ServiceConfig {
     pub connected_reset: Duration,
     pub backoff: BackoffPolicy,
     pub shell_log: Option<LogSink>,
+    /// Before every spawn the shell checks that the setup is still complete.
+    /// A missing key or model is a setup failure, not a crash loop.
+    pub setup_gate: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 
 pub struct Supervisor {
@@ -133,6 +136,21 @@ fn run_loop(config: ServiceConfig, observer: Arc<dyn Observer>, rx: Receiver<Com
             Outcome::Restart => {
                 restarts = 0;
                 log(&config, "manual restart requested");
+            }
+            Outcome::SetupRequired => {
+                observer.observe(Observation::Phase(Phase::SetupRequired));
+                log(&config, "setup is incomplete; the voice service stays away");
+                match wait_for_manual(&rx) {
+                    Manual::Quit => {
+                        observer.observe(Observation::Phase(Phase::Stopping));
+                        observer.quit();
+                        return;
+                    }
+                    Manual::Restart => {
+                        restarts = 0;
+                        continue;
+                    }
+                }
             }
             Outcome::Failure { detail, stable } => {
                 if stable {
@@ -213,6 +231,7 @@ fn sleep_with_commands(delay: Duration, rx: &Receiver<Command>) -> SleepResult {
 enum Outcome {
     Quit,
     Restart,
+    SetupRequired,
     Failure { detail: String, stable: bool },
 }
 
@@ -221,6 +240,11 @@ fn run_once(
     observer: &Arc<dyn Observer>,
     rx: &Receiver<Command>,
 ) -> Outcome {
+    if let Some(gate) = &config.setup_gate {
+        if !gate() {
+            return Outcome::SetupRequired;
+        }
+    }
     let mut child = match ManagedChild::spawn(config) {
         Ok(child) => child,
         Err(error) => {

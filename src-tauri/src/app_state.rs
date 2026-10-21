@@ -116,6 +116,7 @@ pub fn production_config(
     let socket = crate::platform::socket_path(home);
     let work_dir = setup::work_dir(home);
     let logs = crate::platform::logs_dir(home);
+    let gate_home = home.to_path_buf();
 
     crate::service::ServiceConfig {
         program: voice_root.join("python/bin/python3"),
@@ -136,6 +137,9 @@ pub fn production_config(
         connected_reset: std::time::Duration::from_secs(60),
         backoff: Default::default(),
         shell_log,
+        // A missing key or model is a setup failure, not a crash loop: the
+        // service is only spawned while the setup is complete.
+        setup_gate: Some(Arc::new(move || detect_setup(&gate_home).complete())),
     }
 }
 

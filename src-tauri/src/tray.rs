@@ -9,7 +9,7 @@ use tauri::{
 
 use crate::autostart::{self, Status};
 use crate::panel;
-use crate::service::{Command, Supervisor};
+use crate::service::Command;
 use crate::state::{Phase, Snapshot};
 
 const TRAY_ID: &str = "main";
@@ -57,11 +57,7 @@ pub fn create(app: &App, home: &Path) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => panel::show(app),
             "toggle" => panel::request_toggle(app),
-            "restart" => {
-                if let Some(supervisor) = app.try_state::<Supervisor>() {
-                    supervisor.command(Command::Restart);
-                }
-            }
+            "restart" => crate::app_state::send(app, Command::Restart),
             "autostart" => {
                 if let Some(tray) = app.try_state::<TrayMenu>() {
                     let enabled = autostart::status(&tray.home) == Status::Enabled;

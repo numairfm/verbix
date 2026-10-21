@@ -5,7 +5,7 @@ use tauri::{
 };
 
 use crate::app_state::{self, ShellState};
-use crate::service::{Command, Supervisor};
+use crate::service::Command;
 use crate::setup;
 use crate::state::{DownloadState, Snapshot};
 
@@ -36,16 +36,12 @@ pub fn request_toggle(app: &AppHandle) {
         show(app);
         return;
     }
-    if let Some(supervisor) = app.try_state::<Supervisor>() {
-        supervisor.command(Command::Toggle);
-    }
+    app_state::send(app, Command::Toggle);
 }
 
 #[tauri::command]
 pub fn restart_service(app: AppHandle) {
-    if let Some(supervisor) = app.try_state::<Supervisor>() {
-        supervisor.command(Command::Restart);
-    }
+    app_state::send(&app, Command::Restart);
 }
 
 /// Write the OpenRouter key. The key is never echoed back to the panel.
@@ -164,9 +160,7 @@ pub fn finish_setup(app: AppHandle) -> Result<Snapshot, String> {
         app_state::start_service(&app, false)?;
     } else if phase == crate::state::Phase::SetupRequired {
         // The supervisor is waiting for a repaired setup: let it try again.
-        if let Some(supervisor) = app.try_state::<Supervisor>() {
-            supervisor.command(Command::Restart);
-        }
+        app_state::send(&app, Command::Restart);
     }
     Ok(app_state::snapshot_of(&app))
 }

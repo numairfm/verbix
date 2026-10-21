@@ -250,6 +250,19 @@ pub fn update(app: &AppHandle, change: impl FnOnce(&mut Snapshot)) {
     notify(app);
 }
 
+/// Send a command to the voice service, if it is running.
+pub fn send(app: &AppHandle, command: Command) {
+    let Some(state) = app.try_state::<ShellState>() else {
+        return;
+    };
+    let Ok(slot) = state.supervisor.lock() else {
+        return;
+    };
+    if let Some(supervisor) = slot.as_ref() {
+        supervisor.command(command);
+    }
+}
+
 /// Inspect the setup surface of the current home.
 pub fn detect_setup(home: &std::path::Path) -> Detection {
     setup::detect(home, &|name| std::env::var(name).ok())

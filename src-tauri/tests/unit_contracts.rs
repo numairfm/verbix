@@ -79,6 +79,23 @@ fn forwarded_startup_flags_are_not_handled_as_gui_commands() {
 }
 
 #[test]
+fn the_panel_and_the_tray_reach_the_service_through_the_shell_state() {
+    for file in ["src/panel.rs", "src/tray.rs"] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        assert!(
+            !source.contains("try_state::<Supervisor>"),
+            "{file} looks for a supervisor that the shell state owns: {source}"
+        );
+    }
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app_state.rs");
+    let source = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    assert!(source.contains("pub fn send("), "{source}");
+}
+
+#[test]
 fn the_single_instance_plugin_is_the_first_plugin_registered() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
     let source = fs::read_to_string(&path)

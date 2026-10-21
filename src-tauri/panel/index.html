@@ -19,9 +19,49 @@
     </header>
 
     <main class="panel-body">
-      <section id="setup" class="setup" aria-label="First-run setup" hidden></section>
+      <section id="setup" class="setup" aria-label="First-run setup" hidden>
+        <h2>Set up Verbix</h2>
 
-      <section class="activity" aria-labelledby="activity-heading">
+        <section class="setup-step" aria-labelledby="setup-key-heading">
+          <h3 id="setup-key-heading">1. Provider key</h3>
+          <p id="key-status" class="step-status"></p>
+          <label class="field" for="provider-key">OpenRouter API key</label>
+          <input
+            id="provider-key"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="key-status"
+          />
+          <button id="save-key" type="button">Save key</button>
+          <p id="key-error" class="step-error" hidden></p>
+        </section>
+
+        <section class="setup-step" aria-labelledby="setup-model-heading">
+          <h3 id="setup-model-heading">2. Speech model</h3>
+          <p id="model-status" class="step-status"></p>
+          <p id="model-path" class="step-path"></p>
+          <button id="download-model" type="button">Download model</button>
+          <p id="download-progress" class="step-progress" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <span id="download-line"></span>
+          </p>
+          <p id="model-error" class="step-error" hidden></p>
+        </section>
+
+        <section class="setup-step" aria-labelledby="setup-autostart-heading">
+          <h3 id="setup-autostart-heading">3. Launch at login</h3>
+          <label class="checkbox" for="autostart-choice">
+            <input id="autostart-choice" type="checkbox" />
+            Launch at login
+          </label>
+        </section>
+
+        <button id="finish-setup" class="primary" type="button">Finish</button>
+        <p id="setup-error" class="step-error" hidden></p>
+      </section>
+
+      <section id="activity" class="activity" aria-labelledby="activity-heading">
         <div class="section-heading">
           <h2 id="activity-heading">Activity</h2>
           <p class="floor">Floor: <span id="floor-state">idle</span></p>
@@ -36,7 +76,7 @@
         </div>
       </section>
 
-      <section class="tasks" aria-labelledby="tasks-heading">
+      <section id="tasks" class="tasks" aria-labelledby="tasks-heading">
         <h2 id="tasks-heading">Tasks</h2>
         <ul id="task-list" class="task-list"></ul>
         <p id="no-tasks" class="empty">No tasks this session.</p>

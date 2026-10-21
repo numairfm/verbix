@@ -449,18 +449,7 @@ impl ManagedChild {
             }
         }
 
-        #[cfg(unix)]
-        unsafe {
-            use std::os::unix::process::CommandExt;
-            command.pre_exec(|| {
-                libc::setpgid(0, 0);
-                #[cfg(target_os = "linux")]
-                {
-                    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                }
-                Ok(())
-            });
-        }
+        crate::platform::configure_child(&mut command);
 
         let mut child = command.spawn()?;
         let pgid = child.id() as i32;

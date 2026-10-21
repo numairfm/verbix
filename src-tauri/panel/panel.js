@@ -12,6 +12,21 @@ const elements = {
   taskList: document.getElementById("task-list"),
   noTasks: document.getElementById("no-tasks"),
   setup: document.getElementById("setup"),
+  activity: document.getElementById("activity"),
+  tasks: document.getElementById("tasks"),
+  keyStatus: document.getElementById("key-status"),
+  keyField: document.getElementById("provider-key"),
+  keyError: document.getElementById("key-error"),
+  saveKey: document.getElementById("save-key"),
+  modelStatus: document.getElementById("model-status"),
+  modelPath: document.getElementById("model-path"),
+  modelError: document.getElementById("model-error"),
+  downloadModel: document.getElementById("download-model"),
+  downloadProgress: document.getElementById("download-progress"),
+  downloadLine: document.getElementById("download-line"),
+  autostartChoice: document.getElementById("autostart-choice"),
+  finishSetup: document.getElementById("finish-setup"),
+  setupError: document.getElementById("setup-error"),
   shortcutHint: document.getElementById("shortcut-hint"),
   serviceError: document.getElementById("service-error"),
   serviceErrorText: document.getElementById("service-error-text"),
@@ -55,6 +70,42 @@ function taskRow(task) {
   return row;
 }
 
+function showMessage(element, message) {
+  element.textContent = message || "";
+  element.hidden = !message;
+}
+
+function renderSetup(setup) {
+  const running = Boolean(setup.download && setup.download.running);
+
+  elements.keyStatus.textContent = setup.key_ready
+    ? "A provider key is ready."
+    : "No provider key yet.";
+  elements.keyField.disabled = !setup.key_editable;
+  elements.saveKey.disabled = !setup.key_editable;
+  showMessage(elements.keyError, "");
+
+  elements.modelStatus.textContent = setup.model_ready
+    ? "The speech model is ready."
+    : "The speech model is not downloaded yet.";
+  elements.modelPath.textContent = setup.model_path || "";
+  elements.downloadModel.hidden = !setup.model_downloadable;
+  elements.downloadModel.textContent = setup.model_ready
+    ? "Re-download model"
+    : "Download model";
+  elements.downloadModel.disabled = running;
+  elements.downloadProgress.hidden = !running;
+  elements.downloadLine.textContent = setup.download ? setup.download.last_line : "";
+  showMessage(elements.modelError, "");
+
+  elements.autostartChoice.checked = Boolean(setup.autostart);
+  elements.autostartChoice.disabled = !setup.autostart_supported;
+
+  elements.finishSetup.disabled =
+    !setup.key_ready || !setup.model_ready || running;
+  showMessage(elements.setupError, setup.error);
+}
+
 function render(snapshot) {
   if (!snapshot) {
     return;
@@ -70,7 +121,13 @@ function render(snapshot) {
   elements.taskList.replaceChildren(...tasks.map(taskRow));
   elements.noTasks.hidden = tasks.length > 0;
 
-  elements.setup.hidden = !snapshot.setup.required;
+  const inSetup = Boolean(snapshot.setup.required);
+  elements.setup.hidden = !inSetup;
+  elements.activity.hidden = inSetup;
+  elements.tasks.hidden = inSetup;
+  if (inSetup) {
+    renderSetup(snapshot.setup);
+  }
 
   if (snapshot.shortcut.accelerator) {
     elements.shortcutHint.textContent = `Shortcut: ${snapshot.shortcut.accelerator}`;
@@ -96,12 +153,57 @@ function showError(error) {
   elements.serviceError.hidden = false;
 }
 
+function showSetupError(error) {
+  elements.setupError.textContent = `Setup error: ${error}`;
+  elements.setupError.hidden = false;
+}
+
 elements.hidePanel.addEventListener("click", () => {
   invoke("hide_panel");
 });
 
 elements.retryService.addEventListener("click", () => {
   invoke("restart_service");
+});
+
+elements.saveKey.addEventListener("click", async () => {
+  const key = elements.keyField.value;
+  if (!key) {
+    showSetupError("Enter the provider key first.");
+    return;
+  }
+  try {
+    const snapshot = await invoke("save_provider_key", { key });
+    // The key is never shown again after it is saved.
+    elements.keyField.value = "";
+    render(snapshot);
+  } catch (error) {
+    showSetupError(error);
+  }
+});
+
+elements.downloadModel.addEventListener("click", async () => {
+  try {
+    render(await invoke("start_model_download"));
+  } catch (error) {
+    showSetupError(error);
+  }
+});
+
+elements.autostartChoice.addEventListener("change", async () => {
+  try {
+    render(await invoke("set_autostart", { enabled: elements.autostartChoice.checked }));
+  } catch (error) {
+    showSetupError(error);
+  }
+});
+
+elements.finishSetup.addEventListener("click", async () => {
+  try {
+    render(await invoke("finish_setup"));
+  } catch (error) {
+    showSetupError(error);
+  }
 });
 
 document.addEventListener("keydown", (event) => {

@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use tauri::{
     App, AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
@@ -274,9 +272,4 @@ pub fn hide(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(PANEL_LABEL) {
         let _ = window.hide();
     }
-}
-
-/// The path of the credential file, for the setup surface.
-pub fn auth_path(home: &Path) -> std::path::PathBuf {
-    setup::auth_path(home)
 }

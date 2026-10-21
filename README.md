@@ -206,6 +206,10 @@ STATE: IDLE
 
 The v1 desktop shell is a Tauri 2 process that owns the tray, global shortcut, autostart, single instance, panel, and voice service supervision. It runs the Python voice service unchanged as a child over this IPC protocol. The surface is tray-first; there is no overlay in v1. See [ADR-0001](docs/adr/0001-tauri-desktop-shell.md) for the shell decision, [ADR-0002](docs/adr/0002-rust-shell-owns-desktop.md) for process ownership, [ADR-0003](docs/adr/0003-tray-first-no-overlay.md) for the tray-first surface, and the [desktop shell v1 spec](docs/superpowers/specs/2026-10-20-desktop-shell-v1-design.md). GPUI is deferred, not rejected: the IPC seam lets the panel be replaced later without touching Python.
 
+- **First-run setup**: the panel opens the setup when the provider key, the speech model, or the setup marker is missing. It writes the OpenRouter key to `~/.verbix/auth.json` (mode `0600`), downloads the speech model with the bundled downloader, and offers the autostart entry. The voice service starts only after the setup is complete. Tray **Setup…** reopens the same surface for repair.
+- **Global shortcut**: `Ctrl+Alt+Space` toggles listening. X11 and XWayland register it natively; a native Wayland session (or a refused grab) shows the desktop-level fallback command, `"<path to the AppImage>" --toggle`, in the panel with a Copy button.
+- **Single instance**: one shell per user. A second launch forwards its arguments (`--show`, `--hidden`, `--toggle`) to the running shell and exits; `--version` and `--help` print before the GUI, and an unknown argument exits 2.
+
 ## Develop
 
 ```bash

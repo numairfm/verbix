@@ -248,6 +248,16 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:alloc-stdlib@0.3.0` — BSD-3-Clause
 - `cargo:android_system_properties@0.1.6` — MIT OR Apache-2.0
 - `cargo:anyhow@1.0.104` — MIT OR Apache-2.0
+- `cargo:async-broadcast@0.7.2` — MIT OR Apache-2.0
+- `cargo:async-channel@2.5.0` — Apache-2.0 OR MIT
+- `cargo:async-executor@1.14.0` — Apache-2.0 OR MIT
+- `cargo:async-io@2.6.0` — Apache-2.0 OR MIT
+- `cargo:async-lock@3.4.2` — Apache-2.0 OR MIT
+- `cargo:async-process@2.5.0` — Apache-2.0 OR MIT
+- `cargo:async-recursion@1.2.0` — MIT OR Apache-2.0
+- `cargo:async-signal@0.2.14` — Apache-2.0 OR MIT
+- `cargo:async-task@4.7.1` — Apache-2.0 OR MIT
+- `cargo:async-trait@0.1.92` — MIT OR Apache-2.0
 - `cargo:atk@0.18.2` — MIT
 - `cargo:atk-sys@0.18.2` — MIT
 - `cargo:atomic-waker@1.1.2` — Apache-2.0 OR MIT
@@ -261,6 +271,7 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:bitflags@2.13.2` — MIT OR Apache-2.0
 - `cargo:block-buffer@0.10.4` — MIT OR Apache-2.0
 - `cargo:block2@0.6.2` — MIT
+- `cargo:blocking@1.7.0` — Apache-2.0 OR MIT
 - `cargo:brotli@9.0.0` — BSD-3-Clause AND MIT
 - `cargo:brotli-decompressor@6.0.1` — BSD-3-Clause OR MIT
 - `cargo:bs58@0.5.1` — MIT OR Apache-2.0
@@ -282,6 +293,7 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:cfg-if@1.0.5` — MIT OR Apache-2.0
 - `cargo:chrono@0.4.45` — MIT OR Apache-2.0
 - `cargo:combine@4.6.9` — MIT
+- `cargo:concurrent-queue@2.5.0` — Apache-2.0 OR MIT
 - `cargo:cookie@0.18.2` — MIT OR Apache-2.0
 - `cargo:core-foundation@0.10.1` — MIT OR Apache-2.0
 - `cargo:core-foundation-sys@0.8.7` — MIT OR Apache-2.0
@@ -320,9 +332,14 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:dyn-clone@1.0.20` — MIT OR Apache-2.0
 - `cargo:embed-resource@3.0.12` — MIT
 - `cargo:embed_plist@1.2.2` — MIT OR Apache-2.0
+- `cargo:endi@1.1.1` — MIT
+- `cargo:enumflags2@0.7.12` — MIT OR Apache-2.0
+- `cargo:enumflags2_derive@0.7.12` — MIT OR Apache-2.0
 - `cargo:equivalent@1.0.3` — Apache-2.0 OR MIT
 - `cargo:erased-serde@0.4.10` — MIT OR Apache-2.0
 - `cargo:errno@0.3.14` — MIT OR Apache-2.0
+- `cargo:event-listener@5.4.2` — Apache-2.0 OR MIT
+- `cargo:event-listener-strategy@0.5.4` — Apache-2.0 OR MIT
 - `cargo:fastrand@2.5.0` — Apache-2.0 OR MIT
 - `cargo:fdeflate@0.3.7` — MIT OR Apache-2.0
 - `cargo:field-offset@0.3.6` — MIT OR Apache-2.0
@@ -338,6 +355,7 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:futures-core@0.3.34` — MIT OR Apache-2.0
 - `cargo:futures-executor@0.3.34` — MIT OR Apache-2.0
 - `cargo:futures-io@0.3.34` — MIT OR Apache-2.0
+- `cargo:futures-lite@2.6.1` — Apache-2.0 OR MIT
 - `cargo:futures-macro@0.3.34` — MIT OR Apache-2.0
 - `cargo:futures-sink@0.3.34` — MIT OR Apache-2.0
 - `cargo:futures-task@0.3.34` — MIT OR Apache-2.0
@@ -350,6 +368,7 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:gdkx11@0.18.2` — MIT
 - `cargo:gdkx11-sys@0.18.2` — MIT
 - `cargo:generic-array@0.14.7` — MIT
+- `cargo:gethostname@1.1.0` — Apache-2.0
 - `cargo:getrandom@0.3.4` — MIT OR Apache-2.0
 - `cargo:getrandom@0.4.3` — MIT OR Apache-2.0
 - `cargo:gio@0.18.4` — MIT
@@ -358,6 +377,7 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:glib-macros@0.18.5` — MIT
 - `cargo:glib-sys@0.18.1` — MIT
 - `cargo:glob@0.3.4` — MIT OR Apache-2.0
+- `cargo:global-hotkey@0.8.0` — Apache-2.0 OR MIT
 - `cargo:gobject-sys@0.18.0` — MIT
 - `cargo:gtk@0.18.2` — MIT
 - `cargo:gtk-sys@0.18.2` — MIT
@@ -366,6 +386,7 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:hashbrown@0.17.1` — MIT OR Apache-2.0
 - `cargo:heck@0.4.1` — MIT OR Apache-2.0
 - `cargo:heck@0.5.0` — MIT OR Apache-2.0
+- `cargo:hermit-abi@0.5.3` — MIT OR Apache-2.0
 - `cargo:hex@0.4.3` — MIT OR Apache-2.0
 - `cargo:html5ever@0.39.0` — MIT OR Apache-2.0
 - `cargo:http@1.5.0` — MIT OR Apache-2.0
@@ -407,6 +428,7 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:js-sys@0.3.106` — MIT OR Apache-2.0
 - `cargo:json-patch@4.2.0` — MIT OR Apache-2.0
 - `cargo:jsonptr@0.7.1` — MIT OR Apache-2.0
+- `cargo:keyboard-types@0.7.0` — MIT OR Apache-2.0
 - `cargo:keyboard-types@0.8.3` — MIT OR Apache-2.0
 - `cargo:libappindicator@0.9.0` — Apache-2.0 OR MIT
 - `cargo:libappindicator-sys@0.9.0` — Apache-2.0 OR MIT
@@ -454,8 +476,10 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:objc2-web-kit@0.3.2` — Zlib OR Apache-2.0 OR MIT
 - `cargo:once_cell@1.21.4` — MIT OR Apache-2.0
 - `cargo:option-ext@0.2.0` — MPL-2.0
+- `cargo:ordered-stream@0.2.0` — MIT OR Apache-2.0
 - `cargo:pango@0.18.3` — MIT
 - `cargo:pango-sys@0.18.0` — MIT
+- `cargo:parking@2.2.1` — Apache-2.0 OR MIT
 - `cargo:parking_lot@0.12.5` — MIT OR Apache-2.0
 - `cargo:parking_lot_core@0.9.12` — MIT OR Apache-2.0
 - `cargo:percent-encoding@2.3.2` — MIT OR Apache-2.0
@@ -465,10 +489,12 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:phf_macros@0.13.1` — MIT
 - `cargo:phf_shared@0.13.1` — MIT
 - `cargo:pin-project-lite@0.2.17` — Apache-2.0 OR MIT
+- `cargo:piper@0.2.5` — MIT OR Apache-2.0
 - `cargo:pkg-config@0.3.34` — MIT OR Apache-2.0
 - `cargo:plist@1.10.2` — MIT
 - `cargo:png@0.17.16` — MIT OR Apache-2.0
 - `cargo:png@0.18.1` — MIT OR Apache-2.0
+- `cargo:polling@3.11.0` — Apache-2.0 OR MIT
 - `cargo:portable-atomic@1.15.0` — Apache-2.0 OR MIT
 - `cargo:portable-atomic-util@0.2.8` — Apache-2.0 OR MIT
 - `cargo:potential_utf@0.1.6` — Unicode-3.0
@@ -522,6 +548,7 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:servo_arc@0.4.3` — MIT OR Apache-2.0
 - `cargo:sha2@0.10.9` — MIT OR Apache-2.0
 - `cargo:shlex@2.0.1` — MIT OR Apache-2.0
+- `cargo:signal-hook-registry@1.4.8` — MIT OR Apache-2.0
 - `cargo:simd-adler32@0.3.10` — MIT
 - `cargo:siphasher@1.0.4` — MIT OR Apache-2.0
 - `cargo:slab@0.4.12` — MIT
@@ -549,6 +576,9 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:tauri-build@2.7.3` — Apache-2.0 OR MIT
 - `cargo:tauri-codegen@2.7.3` — Apache-2.0 OR MIT
 - `cargo:tauri-macros@2.7.3` — Apache-2.0 OR MIT
+- `cargo:tauri-plugin@2.7.2` — Apache-2.0 OR MIT
+- `cargo:tauri-plugin-global-shortcut@2.4.1` — Apache-2.0 OR MIT
+- `cargo:tauri-plugin-single-instance@2.5.4` — Apache-2.0 OR MIT
 - `cargo:tauri-runtime@2.12.2` — Apache-2.0 OR MIT
 - `cargo:tauri-runtime-wry@2.12.2` — Apache-2.0 OR MIT
 - `cargo:tauri-utils@2.10.2` — Apache-2.0 OR MIT
@@ -580,11 +610,13 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:tower-layer@0.3.3` — MIT
 - `cargo:tower-service@0.3.3` — MIT
 - `cargo:tracing@0.1.44` — MIT
+- `cargo:tracing-attributes@0.1.31` — MIT
 - `cargo:tracing-core@0.1.36` — MIT
 - `cargo:tray-icon@0.25.1` — MIT OR Apache-2.0
 - `cargo:try-lock@0.2.5` — MIT
 - `cargo:typeid@1.0.3` — MIT OR Apache-2.0
 - `cargo:typenum@1.20.1` — MIT OR Apache-2.0
+- `cargo:uds_windows@1.2.1` — MIT
 - `cargo:unicode-ident@1.0.27` — (MIT OR Apache-2.0) AND Unicode-3.0
 - `cargo:unicode-segmentation@1.13.3` — MIT OR Apache-2.0
 - `cargo:url@2.5.8` — MIT OR Apache-2.0
@@ -629,17 +661,27 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:windows-result@0.4.1` — MIT OR Apache-2.0
 - `cargo:windows-strings@0.5.1` — MIT OR Apache-2.0
 - `cargo:windows-sys@0.45.0` — MIT OR Apache-2.0
+- `cargo:windows-sys@0.59.0` — MIT OR Apache-2.0
 - `cargo:windows-sys@0.61.2` — MIT OR Apache-2.0
 - `cargo:windows-targets@0.42.2` — MIT OR Apache-2.0
+- `cargo:windows-targets@0.52.6` — MIT OR Apache-2.0
 - `cargo:windows-threading@0.2.1` — MIT OR Apache-2.0
 - `cargo:windows-version@0.1.7` — MIT OR Apache-2.0
 - `cargo:windows_aarch64_gnullvm@0.42.2` — MIT OR Apache-2.0
+- `cargo:windows_aarch64_gnullvm@0.52.6` — MIT OR Apache-2.0
 - `cargo:windows_aarch64_msvc@0.42.2` — MIT OR Apache-2.0
+- `cargo:windows_aarch64_msvc@0.52.6` — MIT OR Apache-2.0
 - `cargo:windows_i686_gnu@0.42.2` — MIT OR Apache-2.0
+- `cargo:windows_i686_gnu@0.52.6` — MIT OR Apache-2.0
+- `cargo:windows_i686_gnullvm@0.52.6` — MIT OR Apache-2.0
 - `cargo:windows_i686_msvc@0.42.2` — MIT OR Apache-2.0
+- `cargo:windows_i686_msvc@0.52.6` — MIT OR Apache-2.0
 - `cargo:windows_x86_64_gnu@0.42.2` — MIT OR Apache-2.0
+- `cargo:windows_x86_64_gnu@0.52.6` — MIT OR Apache-2.0
 - `cargo:windows_x86_64_gnullvm@0.42.2` — MIT OR Apache-2.0
+- `cargo:windows_x86_64_gnullvm@0.52.6` — MIT OR Apache-2.0
 - `cargo:windows_x86_64_msvc@0.42.2` — MIT OR Apache-2.0
+- `cargo:windows_x86_64_msvc@0.52.6` — MIT OR Apache-2.0
 - `cargo:winnow@0.5.40` — MIT
 - `cargo:winnow@1.0.4` — MIT
 - `cargo:winreg@0.56.0` — MIT
@@ -648,8 +690,15 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:wry@0.57.0` — Apache-2.0 OR MIT
 - `cargo:x11@2.21.0` — MIT
 - `cargo:x11-dl@2.21.0` — MIT
+- `cargo:x11rb@0.13.2` — MIT OR Apache-2.0
+- `cargo:x11rb-protocol@0.13.2` — MIT OR Apache-2.0
+- `cargo:xkeysym@0.2.1` — MIT OR Apache-2.0 OR Zlib
 - `cargo:yoke@0.8.3` — Unicode-3.0
 - `cargo:yoke-derive@0.8.4` — Unicode-3.0
+- `cargo:zbus@5.19.0` — MIT
+- `cargo:zbus_macros@5.19.0` — MIT
+- `cargo:zbus_names@4.3.5` — MIT
+- `cargo:zcheapstr@1.1.0` — MIT
 - `cargo:zerofrom@0.1.8` — Unicode-3.0
 - `cargo:zerofrom-derive@0.1.8` — Unicode-3.0
 - `cargo:zerotrie@0.2.5` — Unicode-3.0
@@ -657,6 +706,9 @@ edit it by hand. `--check` fails if it drifts from the scanned tree.
 - `cargo:zerovec-derive@0.11.6` — Unicode-3.0
 - `cargo:zlib-rs@0.6.8` — Zlib
 - `cargo:zmij@1.0.23` — MIT
+- `cargo:zvariant@5.15.1` — MIT
+- `cargo:zvariant_derive@5.15.1` — MIT
+- `cargo:zvariant_utils@4.2.0` — MIT
 - `python:Jinja2@3.1.6` — BSD-3-Clause
 - `python:MarkupSafe@3.0.4` — BSD-3-Clause
 - `python:PyYAML@6.0.3` — MIT

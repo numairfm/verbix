@@ -22,6 +22,24 @@ pub fn hide_panel(app: AppHandle) {
 
 #[tauri::command]
 pub fn toggle(app: AppHandle) {
+    request_toggle(&app);
+}
+
+/// One toggle entry point for the panel, tray, shortcut, and forwarded launch.
+/// A toggle is never queued while the service is unavailable: the panel opens
+/// with the current state instead.
+pub fn request_toggle(app: &AppHandle) {
+    let snapshot = app
+        .try_state::<crate::ShellState>()
+        .and_then(|state| state.snapshot.lock().ok().map(|snapshot| snapshot.clone()));
+    if snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.phase != crate::state::Phase::Connected)
+        .unwrap_or(true)
+    {
+        show(app);
+        return;
+    }
     if let Some(supervisor) = app.try_state::<Supervisor>() {
         supervisor.command(Command::Toggle);
     }
@@ -55,6 +73,7 @@ pub fn create(app: &App) -> tauri::Result<WebviewWindow> {
 }
 
 pub fn show(app: &AppHandle) {
+    crate::app_state::refresh_shortcut(app);
     if let Some(window) = app.get_webview_window(PANEL_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();

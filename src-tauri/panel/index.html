@@ -44,7 +44,11 @@
     </main>
 
     <footer class="panel-footer">
-      <p id="shortcut-hint" class="shortcut">No global shortcut is available.</p>
+      <div class="shortcut-row">
+        <p id="shortcut-hint" class="shortcut">No global shortcut is available.</p>
+        <button id="copy-command" type="button" hidden>Copy</button>
+      </div>
+      <p id="copy-status" class="copy-status" hidden></p>
       <div id="service-error" class="service-error" hidden>
         <p id="service-error-text" class="error-text"></p>
         <button id="retry-service" type="button">Retry</button>

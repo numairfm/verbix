@@ -13,6 +13,8 @@ const elements = {
   noTasks: document.getElementById("no-tasks"),
   setup: document.getElementById("setup"),
   shortcutHint: document.getElementById("shortcut-hint"),
+  copyCommand: document.getElementById("copy-command"),
+  copyStatus: document.getElementById("copy-status"),
   serviceError: document.getElementById("service-error"),
   serviceErrorText: document.getElementById("service-error-text"),
   retryService: document.getElementById("retry-service"),
@@ -74,10 +76,13 @@ function render(snapshot) {
 
   if (snapshot.shortcut.accelerator) {
     elements.shortcutHint.textContent = `Shortcut: ${snapshot.shortcut.accelerator}`;
+    elements.copyCommand.hidden = true;
   } else if (snapshot.shortcut.fallback) {
     elements.shortcutHint.textContent = `Toggle command: ${snapshot.shortcut.fallback}`;
+    elements.copyCommand.hidden = false;
   } else {
     elements.shortcutHint.textContent = "No global shortcut is available.";
+    elements.copyCommand.hidden = true;
   }
 
   if (snapshot.error) {
@@ -103,6 +108,40 @@ elements.hidePanel.addEventListener("click", () => {
 elements.retryService.addEventListener("click", () => {
   invoke("restart_service");
 });
+
+function showCopyStatus(message) {
+  elements.copyStatus.textContent = message || "";
+  elements.copyStatus.hidden = !message;
+}
+
+function selectText(element) {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+// The clipboard API needs permission the webview may refuse. The command
+// stays selectable text, so it can always be copied by hand.
+function copyFallback() {
+  const command = elements.shortcutHint.textContent.replace(/^Toggle command:\s*/, "");
+  const clipboard = navigator.clipboard;
+  if (!clipboard || typeof clipboard.writeText !== "function") {
+    selectText(elements.shortcutHint);
+    showCopyStatus("Clipboard access is not available. Select the command and copy it.");
+    return;
+  }
+  clipboard.writeText(command).then(
+    () => showCopyStatus("Command copied."),
+    () => {
+      selectText(elements.shortcutHint);
+      showCopyStatus("Clipboard access was denied. Select the command and copy it.");
+    },
+  );
+}
+
+elements.copyCommand.addEventListener("click", copyFallback);
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {

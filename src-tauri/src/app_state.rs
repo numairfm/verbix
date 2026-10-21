@@ -15,6 +15,8 @@ pub const STATE_EVENT: &str = "shell://state";
 
 pub struct ShellState {
     pub snapshot: Mutex<Snapshot>,
+    pub log: Option<LogSink>,
+    changes: mpsc::Sender<()>,
 }
 
 pub struct TauriObserver {
@@ -84,13 +86,13 @@ pub fn production_config(
     home: &std::path::Path,
     resources: &std::path::Path,
     startup_toggle: bool,
+    shell_log: Option<LogSink>,
 ) -> crate::service::ServiceConfig {
     let voice_root = resources.join("voice");
     let voice_dir = crate::platform::voice_dir(home);
     let socket = crate::platform::socket_path(home);
     let work_dir = crate::platform::work_dir(home);
     let logs = crate::platform::logs_dir(home);
-    let shell_log = LogSink::open(&logs.join("shell.log")).ok();
 
     let mut env = vec![
         (
@@ -137,18 +139,74 @@ pub fn default_snapshot() -> Snapshot {
     Snapshot::new(Phase::Starting, Floor::Idle, None)
 }
 
-pub fn manage(app: &tauri::App, snapshot: Snapshot) {
-    app.manage(ShellState {
-        snapshot: Mutex::new(snapshot),
+/// Refresh the fallback command before the panel shows it, so a moved
+/// AppImage shows the current path.
+pub fn refresh_shortcut(app: &AppHandle) {
+    let Some(state) = app.try_state::<ShellState>() else {
+        return;
+    };
+    let active = state
+        .snapshot
+        .lock()
+        .map(|snapshot| snapshot.shortcut.accelerator.is_none())
+        .unwrap_or(false);
+    if !active {
+        return;
+    }
+    let command = crate::shortcut::fallback_command(&crate::platform::executable_path());
+    update(app, |snapshot| {
+        if snapshot.shortcut.fallback.as_deref() != Some(command.as_str()) {
+            snapshot.shortcut.fallback = Some(command);
+        }
     });
 }
 
-pub fn observer(app: &AppHandle, log_path: PathBuf) -> Arc<dyn Observer> {
+pub fn manage(app: &tauri::App, snapshot: Snapshot, home: &std::path::Path) {
     let (changes, receiver) = mpsc::channel();
-    let emitter_app = app.clone();
+    let logs = crate::platform::logs_dir(home);
+    let log = LogSink::open(&logs.join("shell.log")).ok();
+    app.manage(ShellState {
+        snapshot: Mutex::new(snapshot),
+        log,
+        changes: changes.clone(),
+    });
+    let emitter_app = app.handle().clone();
     let _ = thread::Builder::new()
         .name("shell-state-emitter".to_string())
         .spawn(move || emit_loop(emitter_app, receiver));
+}
+
+/// Write one line to the shell log.
+pub fn log_shell(app: &AppHandle, message: &str) {
+    if let Some(state) = app.try_state::<ShellState>() {
+        if let Some(sink) = &state.log {
+            sink.line(message);
+        }
+    }
+}
+
+/// Ask the panel to re-render after a state change.
+pub fn notify(app: &AppHandle) {
+    if let Some(state) = app.try_state::<ShellState>() {
+        let _ = state.changes.send(());
+    }
+}
+
+/// Change the snapshot and let the panel know.
+pub fn update(app: &AppHandle, change: impl FnOnce(&mut Snapshot)) {
+    if let Some(state) = app.try_state::<ShellState>() {
+        if let Ok(mut snapshot) = state.snapshot.lock() {
+            change(&mut snapshot);
+        }
+    }
+    notify(app);
+}
+
+pub fn observer(app: &AppHandle, log_path: PathBuf) -> Arc<dyn Observer> {
+    let changes = app
+        .try_state::<ShellState>()
+        .map(|state| state.changes.clone())
+        .unwrap_or_else(|| mpsc::channel().0);
     Arc::new(TauriObserver {
         app: app.clone(),
         changes,

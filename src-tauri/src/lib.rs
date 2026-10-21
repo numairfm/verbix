@@ -7,6 +7,7 @@ pub mod panel;
 pub mod platform;
 pub mod provider;
 pub mod service;
+pub mod shortcut;
 pub mod state;
 pub mod tray;
 
@@ -32,7 +33,23 @@ pub fn run() {
 }
 
 fn run_gui(startup: Startup) {
-    let result = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    // The global shortcut plugin needs an X11 display. On a native Wayland
+    // session the desktop-level fallback is the supported path, so the plugin
+    // is not loaded at all.
+    if shortcut::session_kind(&|name| std::env::var(name).ok()) == shortcut::SessionKind::X11 {
+        builder = builder.plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if shortcut::is_pressed(event.state()) {
+                        shortcut::on_pressed(app);
+                    }
+                })
+                .build(),
+        );
+    }
+
+    let result = builder
         .setup(move |app| {
             use tauri::Manager;
 
@@ -40,11 +57,29 @@ fn run_gui(startup: Startup) {
             let home = platform::home_dir();
             let resources = app.path().resource_dir()?;
 
-            app_state::manage(app, app_state::default_snapshot());
+            let shortcut_state = shortcut::register(&handle);
+            let mut snapshot = app_state::default_snapshot();
+            snapshot.shortcut = shortcut_state.clone();
+            app_state::manage(app, snapshot, &home);
             panel::create(app)?;
 
-            let config =
-                app_state::production_config(&home, &resources, startup == Startup::Toggle);
+            let shell_log = app
+                .try_state::<ShellState>()
+                .and_then(|state| state.log.clone());
+            let config = app_state::production_config(
+                &home,
+                &resources,
+                startup == Startup::Toggle,
+                shell_log,
+            );
+            app_state::log_shell(
+                &handle,
+                if shortcut_state.accelerator.is_some() {
+                    "global shortcut registered"
+                } else {
+                    "global shortcut fallback"
+                },
+            );
             let log_path = config.log_path.clone();
             let supervisor =
                 service::spawn_supervisor(config, app_state::observer(&handle, log_path));

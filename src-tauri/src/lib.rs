@@ -12,7 +12,7 @@ pub mod tray;
 
 pub use app_state::ShellState;
 
-use command::{ParsedCommand, Startup};
+use command::{Forwarded, ParsedCommand, Startup};
 
 pub fn run() {
     match command::parse(std::env::args().skip(1)) {
@@ -33,6 +33,15 @@ pub fn run() {
 
 fn run_gui(startup: Startup) {
     let result = tauri::Builder::default()
+        // Must be the first plugin: the second process forwards its launch and
+        // exits before any GUI, service, or tray can be created.
+        .plugin(tauri_plugin_single_instance::init(
+            |app, argv, _cwd| match command::forward(argv.into_iter().skip(1)) {
+                Forwarded::Show => panel::show(app),
+                Forwarded::Nothing => {}
+                Forwarded::Toggle => panel::request_toggle(app),
+            },
+        ))
         .setup(move |app| {
             use tauri::Manager;
 

@@ -25,6 +25,17 @@ APP="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 TIMEOUT="${2:-45}"
 VERSION="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$ROOT/src-tauri/tauri.conf.json" | head -n 1)"
 
+# The single-instance plugin finds the running shell over the D-Bus session
+# bus. A headless host has none, so run the whole smoke inside one.
+if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+  if ! command -v dbus-run-session >/dev/null 2>&1; then
+    echo "dbus-run-session is required for the single-instance check" >&2
+    exit 2
+  fi
+  SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  exec dbus-run-session -- "$SCRIPT" "$@"
+fi
+
 if [[ ! -f "$APP" ]]; then
   echo "AppImage not found: $APP" >&2
   exit 2
@@ -43,6 +54,10 @@ if ! command -v pgrep >/dev/null 2>&1; then
 fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/verbix-smoke.XXXXXX")"
+# Exercise the AppImage from a path containing spaces on every run, including
+# CI where the artifact path itself has none.
+APP_RUN="$WORK/Verbix AppImage with spaces.AppImage"
+cp --reflink=auto "$APP" "$APP_RUN" 2>/dev/null || cp "$APP" "$APP_RUN"
 REAL_HOME="$HOME"
 SMOKE_HOME="$WORK/home"
 mkdir -p "$SMOKE_HOME/.verbix/logs"
@@ -148,7 +163,7 @@ voice_running() {
 }
 
 echo "==> version check"
-version_output="$(APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a "$APP" --version 2>"$WORK/version.err")" || {
+version_output="$(APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a "$APP_RUN" --version 2>"$WORK/version.err")" || {
   cat "$WORK/version.err" >&2
   fail "--version exited non-zero"
 }
@@ -158,7 +173,7 @@ fi
 echo "    $version_output"
 
 echo "==> launching the GUI headless"
-APPIMAGE_EXTRACT_AND_RUN=1 setsid xvfb-run -a "$APP" --show >"$WORK/app.log" 2>&1 &
+APPIMAGE_EXTRACT_AND_RUN=1 setsid xvfb-run -a "$APP_RUN" --show >"$WORK/app.log" 2>&1 &
 RUNNER_PID=$!
 
 wait_for "verbix-shell" "$TIMEOUT" shell_running || fail "shell process did not start"
@@ -192,23 +207,91 @@ if [[ "$portaudio_version" != *"PortAudio"* ]]; then
 fi
 echo "    $portaudio_version (bundled, no system package)"
 
-if grep -q 'tauri-plugin-single-instance' "$ROOT/src-tauri/Cargo.toml"; then
-  echo "==> single-instance forwarding"
-  before_count="$(live_pids verbix-shell | wc -l)"
-  if timeout 30 env APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a "$APP" --show >"$WORK/second.log" 2>&1; then
-    after_count="$(live_pids verbix-shell | wc -l)"
-    if [[ "$before_count" -ne 1 || "$after_count" -ne 1 ]]; then
-      fail "second launch did not forward (shell count $before_count -> $after_count)"
-    fi
-    echo "    second launch forwarded and exited; one shell remains"
-  else
-    fail "second launch did not exit with forwarding"
-  fi
-else
-  echo "==> single-instance forwarding: DEFERRED to #8"
-  echo "    tauri-plugin-single-instance is not in src-tauri/Cargo.toml."
-  echo "    Forwarding was not tested and is not claimed as passing."
+if ! grep -q 'tauri-plugin-single-instance' "$ROOT/src-tauri/Cargo.toml"; then
+  fail "tauri-plugin-single-instance is missing from src-tauri/Cargo.toml"
 fi
+
+second_launch() {
+  local label="$1"
+  shift
+  timeout 30 env APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a "$APP_RUN" "$@" \
+    >"$WORK/second.log" 2>&1
+}
+
+echo "==> single-instance forwarding"
+before_count="$(live_pids verbix-shell | wc -l)"
+if [[ "$before_count" -ne 1 ]]; then
+  fail "expected one shell before the second launch, found $before_count"
+fi
+if ! second_launch "no arguments"; then
+  cat "$WORK/second.log" >&2
+  fail "second launch without arguments did not exit 0"
+fi
+if [[ "$(live_pids verbix-shell | wc -l)" -ne 1 ]]; then
+  fail "second launch without arguments started a second shell"
+fi
+echo "    a launch without arguments forwarded and exited; one shell remains"
+
+if ! second_launch "hidden" --hidden; then
+  cat "$WORK/second.log" >&2
+  fail "second launch with --hidden did not exit 0"
+fi
+if [[ "$(live_pids verbix-shell | wc -l)" -ne 1 ]]; then
+  fail "second launch with --hidden started a second shell"
+fi
+echo "    --hidden forwarded and did nothing; one shell remains"
+
+toggle_count() {
+  local count
+  count="$(grep -c 'toggle sent' "$HOME/.verbix/logs/shell.log" 2>/dev/null || true)"
+  echo "${count:-0}"
+}
+
+toggle_before="$(toggle_count)"
+if ! second_launch "toggle" --toggle; then
+  cat "$WORK/second.log" >&2
+  fail "second launch with --toggle did not exit 0"
+fi
+forwarded_toggle=0
+for _ in $(seq 1 80); do
+  if [[ "$(toggle_count)" -gt "$toggle_before" ]]; then
+    forwarded_toggle=1
+    break
+  fi
+  sleep 0.25
+done
+if [[ "$forwarded_toggle" -ne 1 ]]; then
+  fail "the forwarded --toggle did not reach the voice service"
+fi
+if [[ "$(live_pids verbix-shell | wc -l)" -ne 1 ]]; then
+  fail "the forwarded --toggle started a second shell"
+fi
+if [[ "$(live_matches 'verbix.cli --serve --voice' | wc -l)" -ne 1 ]]; then
+  fail "the forwarded --toggle started a second voice service"
+fi
+echo "    --toggle forwarded to the running shell; one shell and one voice service remain"
+
+echo "==> argument handling before the GUI"
+set +e
+APPIMAGE_EXTRACT_AND_RUN=1 "$APP_RUN" --wat >"$WORK/invalid.out" 2>"$WORK/invalid.err"
+invalid_status=$?
+set -e
+if [[ "$invalid_status" -ne 2 ]]; then
+  fail "an unknown argument exited with $invalid_status, expected 2"
+fi
+if ! grep -q 'Usage: verbix' "$WORK/invalid.err"; then
+  fail "an unknown argument did not print the usage on stderr"
+fi
+if [[ "$(live_pids verbix-shell | wc -l)" -ne 1 ]]; then
+  fail "an unknown argument started a second shell"
+fi
+help_output="$(APPIMAGE_EXTRACT_AND_RUN=1 "$APP_RUN" --help 2>/dev/null)" || {
+  fail "--help exited non-zero"
+}
+if [[ "$help_output" != *"Usage: verbix"* ]]; then
+  fail "--help did not print the usage"
+fi
+echo "    unknown arguments exit 2 with usage; --help prints usage"
 
 echo "==> quitting the shell"
 kill -TERM "$SHELL_PID"

@@ -45,7 +45,7 @@ environment wins over file values (`cli.py:29`).
 | `VERBIX_BASE_URL` | provider default | custom endpoint |
 | `VERBIX_MAX_TOKENS` | `2048` | per-turn completion cap |
 | `VERBIX_RETENTION_DAYS` | `14` | days to retain tool logs and screenshots |
-| `VERBIX_TTS_VOICE` | `M1` | Supertonic TTS voice (`M1`–`M5`, `F1`–`F5`) |
+| `VERBIX_TTS_VOICE` | `M1` | Supertonic preset ID (`M1`–`M5`, `F1`–`F5`); labels, not person names |
 | `VERBIX_TTS_SPEED` | `1.0` | Supertonic TTS speaking speed (`0.25`–`3.0`) |
 
 Agent tuning lives in `src/verbix/agent/config/`: `voice.yaml`
@@ -107,6 +107,7 @@ Provider selection: `--provider` flag > `VERBIX_PROVIDER` env > config `provider
 Audio (`sounddevice`) and on-device voice inference are included in the default environment (`uv sync`):
 - **STT (user-managed)**: Uses Nemotron 3.5 ASR 0.6B GGUF (via `transcribe.cpp`) or another user-selected GGUF model (`--stt-model`, `VERBIX_STT_MODEL`, or `stt_model` in `config.yaml`). Models live under `~/.verbix/voice/stt/models/<model-id>/` (`VERBIX_VOICE_DIR` or `./voice-runtime` overrides the voice root). Run `uv run scripts/fetch_voice_models.py` to download and verify the default Nemotron STT model.
 - **TTS (bundled application resource)**: Uses Supertonic 3 INT8 (via `sherpa-onnx`), packaged directly with the application under `verbix/voice/tts/supertonic-int8/` rather than stored as a user-managed model in `~/.verbix`. No first-run TTS download into `~/.verbix` is required.
+- **Synthetic voice and preset labels**: Verbix speaks with a synthetic, machine-generated voice. `M1`–`M5` and `F1`–`F5` are preset identifiers, not names or identities of real people. The model and preset styles ship under the BigScience OpenRAIL-M terms in `DISTRIBUTION-TERMS.md`; the accepted speaker-provenance risk is recorded in `docs/legal/2026-10-21-supertonic-3-preset-risk-acceptance.md`. The first-run setup shows a short Attachment A restrictions notice before voice is enabled.
 - **Upgrades and legacy files**: Existing Nemotron STT files at `~/.verbix/voice/models/nemotron-gguf/` are automatically migrated to `~/.verbix/voice/stt/models/nemotron-gguf/` (without overwriting any existing destination file or redownloading). Legacy TTS files under `~/.verbix/voice/models/supertonic-int8/` and `provenance.json` under `~/.verbix/voice/models/` are intentionally left untouched during upgrades; once you verify voice mode works with the new setup, you can safely delete `~/.verbix/voice/models/`. Attribution: `THIRD-PARTY-NOTICES.md`.
 
 ## Architecture
@@ -198,16 +199,17 @@ STATE: IDLE
 | `ipc/` | `server`/`client`/`protocol`: JSONL over Unix socket (with loopback TCP fallback on Windows), `ping/prompt/status/cancel/toggle`, runtime event fan-out |
 | `agent/` | agent core: `voice.py` (`VoiceAgent`), `worker.py` (`WorkerAgent`), `models/litellm_model.py`, `tools/registry.py`, `config/*.yaml` |
 
-## IPC & Desktop Overlay (GPUI)
+## IPC & Desktop Shell (Tauri)
 
 `VerbixServer` (`verbix --serve --voice`) fronts the same `Runtime` and `VoicePipeline` over `~/.local/share/verbix/verbix.sock` (falling back to `127.0.0.1` loopback TCP on Windows).
 - **Actions**: `ping`, `prompt`, `status`, `cancel`, `toggle`.
 - **Streamed JSONL events**: `floor_state` (`idle` / `listening` / `speaking`), `user_transcript`, `task_registered`, `task_completed`, `task_failed`, `task_cancelled`, `wake_event`, `text_delta`, `turn_complete`.
-- **Planned Rust + GPUI Desktop Overlay**:
-  - Uses Zed's `gpui` crate (`Apache-2.0`, compatible with Verbix's closed-source commercial track) as a lightweight native GPU client connected to `verbix.sock`.
-  - **Always-on-top non-activating overlay**: `WindowKind::PopUp` (`NSPanel` with `NSWindowStyleMaskNonactivatingPanel` at `NSPopUpWindowLevel` on macOS; `WS_EX_TOOLWINDOW | WS_EX_TOPMOST` with `SW_SHOWNOACTIVATE` on Windows; `_NET_WM_WINDOW_TYPE_NOTIFICATION` on X11) and `WindowKind::LayerShell` (`zwlr_layer_shell_v1` `Layer::Overlay` with `KeyboardInteractivity::None` on Linux Wayland), paired with `WindowBackgroundAppearance::Transparent` / `Blurred`.
-  - **Click-through (mouse pass-through)**: Native `Window::set_input_region(Some(&[]))` (or per-pill interactive bounds) on Wayland, and `raw_window_handle::HasWindowHandle` hooks (`setIgnoresMouseEvents: YES` on macOS, `WS_EX_LAYERED | WS_EX_TRANSPARENT` on Windows, XShape `ShapeInput` on X11) so mouse clicks pass straight through the overlay to the active game or application underneath.
-  - Note: Pin a specific `gpui` git revision in `Cargo.toml` since `gpui` is pre-1.0 and tracks Zed `main`.
+
+The v1 desktop shell is a Tauri 2 process that owns the tray, global shortcut, autostart, single instance, panel, and voice service supervision. It runs the Python voice service unchanged as a child over this IPC protocol. The surface is tray-first; there is no overlay in v1. See [ADR-0001](docs/adr/0001-tauri-desktop-shell.md) for the shell decision, [ADR-0002](docs/adr/0002-rust-shell-owns-desktop.md) for process ownership, [ADR-0003](docs/adr/0003-tray-first-no-overlay.md) for the tray-first surface, and the [desktop shell v1 spec](docs/superpowers/specs/2026-10-20-desktop-shell-v1-design.md). GPUI is deferred, not rejected: the IPC seam lets the panel be replaced later without touching Python.
+
+- **First-run setup**: the panel opens the setup when the provider key, the speech model, or the setup marker is missing. It writes the OpenRouter key to `~/.verbix/auth.json` (mode `0600`), downloads the speech model with the bundled downloader, and offers the autostart entry. The voice service starts only after the setup is complete. Tray **Setup…** reopens the same surface for repair.
+- **Global shortcut**: `Ctrl+Alt+Space` toggles listening. X11 and XWayland register it natively; a native Wayland session (or a refused grab) shows the desktop-level fallback command, `"<path to the AppImage>" --toggle`, in the panel with a Copy button.
+- **Single instance**: one shell per user. A second launch forwards its arguments (`--show`, `--hidden`, `--toggle`) to the running shell and exits; `--version` and `--help` print before the GUI, and an unknown argument exits 2.
 
 ## Develop
 

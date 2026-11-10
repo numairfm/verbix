@@ -40,7 +40,7 @@ correct it.
   `uv run scripts/fetch_voice_models.py`). Helpers and weights fetch automatically.
   Never require manual copy into app folders.
 - Commercial: per-change license review for any new dependency, model, voice,
-  font, icon, or audio. `THIRD_PARTY_NOTICES.md` is canonical and ships with
+  font, icon, or audio. `THIRD-PARTY-NOTICES.md` is canonical and ships with
   the app. Unclear licensing is `UNRESOLVED`, never assumed allowed.
 - Cross-platform: behavior is identical on macOS, Windows, Linux. No OS-only
   behavior without a same-behavior fallback. Keep platform code behind a narrow
@@ -60,3 +60,17 @@ correct it.
 - Full test suite plus `ruff check` green before any completion claim.
   Bare-pipe `| tail` is forbidden; use `set -o pipefail`.
 - Closed-source commercial track.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues (`numairfm/verbix`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.

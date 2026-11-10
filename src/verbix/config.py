@@ -58,7 +58,7 @@ _CONFIG_TEMPLATE = """\
 # --- Voice (STT & TTS) ---
 # Path to a custom GGUF speech-to-text model (default: auto-discover under ~/.verbix/voice/stt/models/):
 # stt_model: /path/to/model.gguf
-# Supertonic TTS voice ID (M1-M5 male, F1-F5 female; default: M1):
+# Supertonic TTS preset ID (M1-M5 or F1-F5; default: M1; labels, not person names):
 # tts_voice: M1
 # Supertonic TTS speaking speed multiplier (0.25-3.0; default: 1.0):
 # tts_speed: 1.0

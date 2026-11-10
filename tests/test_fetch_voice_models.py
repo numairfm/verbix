@@ -140,6 +140,45 @@ def test_fetch_raises_on_checksum_mismatch(tmp_path):
         mod.fetch_models(root=tmp_path)
 
 
+def test_bundled_tts_spec_pins_revisions_and_license_text():
+    import scripts.fetch_voice_models as mod
+
+    spec = mod.BUNDLED_TTS_SPEC
+    assert spec["revision"] == "cca5a0e6c96e1d2c720986bf7e75fcc81dee3ae4"
+    assert spec["upstream_revision"] == "3cadd1ee6394adea1bd021217a0e650ede09a323"
+    assert spec["files"]["LICENSE-OpenRAIL-M"]["sha256"] == (
+        "0d944a9110fed9a9602d60e0423a272903e7bd21ab060490774efc77c2275e9f"
+    )
+
+
+def test_fetch_bundled_tts_uses_the_pinned_revision(tmp_path, monkeypatch):
+    import scripts.fetch_voice_models as mod
+
+    content = b"bundled tts asset"
+    digest = hashlib.sha256(content).hexdigest()
+    urls = []
+
+    def fake_download(url, dest_path):
+        urls.append(url)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(content)
+
+    spec = {
+        "id": "supertonic-int8",
+        "license": "BigScience OpenRAIL-M",
+        "repo": "example/tts",
+        "revision": "abc123",
+        "files": {"voice.bin": (digest, len(content))},
+    }
+
+    with patch.object(mod, "BUNDLED_TTS_SPEC", spec), patch.object(
+        mod, "_download_file", side_effect=fake_download
+    ):
+        mod.fetch_bundled_tts(dest_dir=tmp_path / "pkg_tts")
+
+    assert urls == ["https://huggingface.co/example/tts/resolve/abc123/voice.bin"]
+
+
 def test_fetch_bundled_tts_provisions_package_dir_only(tmp_path, monkeypatch):
     import scripts.fetch_voice_models as mod
 

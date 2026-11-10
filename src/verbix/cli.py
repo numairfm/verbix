@@ -171,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--tts-voice",
         type=str,
         default=None,
-        help="Supertonic TTS voice ID (M1-M5 or F1-F5; default: M1).",
+        help="Supertonic TTS preset ID (M1-M5 or F1-F5; default: M1; labels, not person names).",
     )
     parser.add_argument(
         "--tts-speed",
